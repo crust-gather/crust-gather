@@ -1,243 +1,87 @@
+use std::fs::File;
+use std::path::Path;
+
 use anyhow;
-use async_trait::async_trait;
-use k8s_openapi::api::core::v1::Pod;
-use kube::{discovery, Api, Client};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use k8s_openapi::api::core::v1::{Event, Pod};
+use kube::{discovery, Client};
 use kube_core::discovery::verbs::LIST;
-use kube_core::discovery::{ApiCapabilities, Scope};
-use kube_core::params::ListParams;
-use kube_core::subresource::LogParams;
-use kube_core::{ApiResource, DynamicObject};
-use serde_yaml;
-use std::{fs, path};
+use kube_core::ApiResource;
+use tar::Builder;
 
-#[derive(Debug)]
-pub struct Namespaced {
-    api: Api<DynamicObject>,
-    resource: ApiResource,
+use crate::filter::NamespaceInclude;
+use crate::scanners::events::Events;
+use crate::scanners::generic::Collectable;
+use crate::scanners::interface::Collect;
+use crate::scanners::logs::{LogGroup, Logs};
+
+enum Group {
+    Logs(ApiResource),
+    Events(ApiResource),
+    DynamicObject(ApiResource),
 }
 
-#[derive(Debug)]
-pub struct ClusterScoped {
-    api: Api<DynamicObject>,
-    resource: ApiResource,
-}
-
-#[derive(Debug)]
-pub struct Pods {
-    api: Api<Pod>,
-    namespaced: Namespaced,
-}
-
-struct Collector {
-    client: Client,
-    namespace: String,
-    capabilities: ApiCapabilities,
-    resource: ApiResource,
-}
-
-#[async_trait]
-trait Processable: Sync + Send {
-    fn path(&self, obj: &DynamicObject) -> String;
-
-    fn repr(&self, obj: &DynamicObject) -> anyhow::Result<String> {
-        Ok(serde_yaml::to_string(&obj)?)
-    }
-
-    fn write(&self, obj: &DynamicObject) -> anyhow::Result<()> {
-        let path = self.path(&obj);
-        let path = path::Path::new(&path);
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, self.repr(&obj)?)?;
-        Ok(())
-    }
-
-    fn get_api(&self) -> Api<DynamicObject>;
-
-    async fn list(&mut self) -> anyhow::Result<Vec<DynamicObject>> {
-        let data = self.get_api().list(&ListParams::default()).await?;
-        Ok(data.items)
-    }
-
-    async fn process(self: &mut Self) -> anyhow::Result<()> {
-        for obj in self.list().await? {
-            self.write(&obj)?;
-        }
-
-        Ok(())
-    }
-}
-
-impl Namespaced {
-    fn new(api: Api<DynamicObject>, resource: ApiResource) -> Namespaced {
-        Namespaced {
-            resource: resource.clone(),
-            api: api,
+impl Into<Group> for ApiResource {
+    fn into(self) -> Group {
+        match self {
+            r if r == ApiResource::erase::<Event>(&()) => Group::Events(r),
+            r if r == ApiResource::erase::<Pod>(&()) => Group::Logs(r),
+            r => Group::DynamicObject(r),
         }
     }
 }
 
-impl ClusterScoped {
-    fn new(api: Api<DynamicObject>, resource: ApiResource) -> ClusterScoped {
-        ClusterScoped {
-            resource: resource.clone(),
-            api: api,
+#[derive(Clone)]
+pub struct Config {
+    pub client: Client,
+    pub filter: NamespaceInclude,
+}
+
+impl Group {
+    fn to_collectable(self, config: Config) -> Vec<Box<dyn Collect>> {
+        let (client, filter) = (config.client, config.filter);
+        match self {
+            Group::Logs(resource) => vec![
+                Logs::new(client.clone(), filter.clone().into(), LogGroup::Current).into(),
+                Logs::new(client.clone(), filter.clone().into(), LogGroup::Previous).into(),
+                Collectable::new(client, resource, filter.into()).into(),
+            ],
+            Group::Events(resource) => vec![
+                Events::new(client.clone(), filter.clone().into()).into(),
+                Collectable::new(client, resource, filter.into()).into(),
+            ],
+            Group::DynamicObject(resource) => {
+                vec![Collectable::new(client, resource, filter.into()).into()]
+            }
         }
     }
 }
 
-impl Pods {
-    fn new(api: Api<Pod>, resource: ApiResource, namespace: String) -> Pods {
-        Pods {
-            api: api.clone(),
-            namespaced: Namespaced::new(
-                Api::namespaced_with(
-                    api.into_client(),
-                    &namespace,
-                    &resource,
-                ),
-                resource,
-            ),
-        }
-    }
-}
+impl Config {
+    pub async fn collect(self) -> anyhow::Result<()> {
+        let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
 
-#[async_trait]
-impl Processable for ClusterScoped {
-    fn path(self: &Self, obj: &DynamicObject) -> String {
-        format!(
-            "./cluster/{}/{}.yaml",
-            self.resource.kind,
-            obj.metadata.name.clone().unwrap()
-        )
-    }
+        let groups: Vec<Box<dyn Collect>> = discovery
+            .groups()
+            .map(|g| g.recommended_resources())
+            .flatten()
+            .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
+            .map(|group: Group| group.to_collectable(self.clone()))
+            .flatten()
+            .collect();
 
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.api.clone()
-    }
-}
+        let path = Path::new("./crust-gather.tar.gz");
+        let file = File::create(&path).unwrap();
+        let enc = GzEncoder::new(file, Compression::default());
+        let ar = &mut Builder::new(enc);
 
-#[async_trait]
-impl Processable for Namespaced {
-    fn path(self: &Self, obj: &DynamicObject) -> String {
-        format!(
-            "./{}/{}/{}.yaml",
-            obj.metadata.namespace.clone().unwrap(),
-            self.resource.kind,
-            obj.metadata.name.clone().unwrap()
-        )
-    }
-
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.api.clone()
-    }
-}
-
-#[async_trait]
-impl Processable for Pods {
-    fn path(self: &Self, obj: &DynamicObject) -> String {
-        format!(
-            "./{}/{}/{}.log",
-            obj.metadata.namespace.clone().unwrap(),
-            self.namespaced.resource.kind,
-            obj.metadata.name.clone().unwrap()
-        )
-    }
-
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.namespaced.get_api()
-    }
-
-    async fn process(self: &mut Self) -> anyhow::Result<()> {
-        self.namespaced.process().await?;
-
-        for obj in self.list().await? {
-            let pod: Pod = obj.clone().try_parse()?;
-            for container in pod.spec.unwrap().containers {
-                let logs = self
-                    .api
-                    .logs(
-                        pod.metadata.name.clone().unwrap().as_str(),
-                        &LogParams {
-                            container: Some(container.name.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                let path = self.path(&obj);
-                let path = path::Path::new(&path);
-                fs::create_dir_all(path.parent().unwrap())?;
-                fs::write(path, logs)?;
-
-                let previous = match self
-                    .api
-                    .logs(
-                        pod.metadata.name.clone().unwrap().as_str(),
-                        &LogParams {
-                            container: Some(container.name),
-                            previous: true,
-                            ..Default::default()
-                        },
-                    )
-                    .await {
-                        Ok(previous) => previous,
-                        Err(_) => return Ok(()),
-                    };
-                let path = self.path(&obj);
-                let path = path::Path::new(&path);
-                fs::create_dir_all(path.parent().unwrap())?;
-                fs::write(path, previous)?;
+        for mut group in groups {
+            for repr in group.collect().await? {
+                repr.write(ar)?;
             }
         }
 
         Ok(())
     }
-}
-
-impl From<Collector> for Box<dyn Processable> {
-    fn from(c: Collector) -> Self {
-        match c.resource.kind.as_str() {
-            "Pod" => Box::new(Pods::new(
-                Api::namespaced(c.client.clone(), c.namespace.clone().as_str()),
-                c.resource,
-                c.namespace,
-            )),
-            _ => match c.capabilities.scope {
-                Scope::Namespaced => Box::new(Namespaced::new(
-                    Api::namespaced_with(c.client.clone(), c.namespace.as_str(), &c.resource),
-                    c.resource,
-                )),
-                Scope::Cluster => Box::new(ClusterScoped::new(
-                    Api::all_with(c.client.clone(), &c.resource),
-                    c.resource,
-                )),
-            },
-        }
-    }
-}
-
-pub async fn collect(namespace: &String) -> anyhow::Result<()> {
-    let client = Client::try_default().await?;
-    let discovery = discovery::Discovery::new(client.clone()).run().await?;
-    let groups = discovery.groups();
-
-    let groups: Vec<Box<dyn Processable>> = groups
-        .map(|g| g.recommended_resources())
-        .flatten()
-        .filter_map(|r| r.1.supports_operation(LIST).then_some(r))
-        .map(|(resouce, capabilities)| {
-            Collector {
-                namespace: namespace.clone(),
-                client: client.clone(),
-                capabilities: capabilities,
-                resource: resouce,
-            }
-            .into()
-        })
-        .collect();
-
-    for mut group in groups {
-        group.process().await?;
-    }
-
-    Ok(())
 }

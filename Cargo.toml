@@ -1,13 +1,11 @@
 [package]
-name = "rust-gather"
+name = "crust-gather"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-kube = { path = "kube/kube", features = ["runtime", "derive"] }
-kube-core = { path = "kube/kube-core" }
+kube = { version = "0.87.2", features = ["runtime", "derive"] }
+kube-core = "0.87.2"
 k8s-openapi = { version = "0.20.0", features = ["latest"] }
 tokio = { version = "1.35.1", features = ["full"] }
 futures = "0.3.29"
@@ -15,3 +13,9 @@ serde_yaml = "0.9.28"
 clap = { version = "4.4.11", features = ["cargo"] }
 anyhow = "1.0.76"
 async-trait = "0.1.75"
+tar = "0.4.40"
+flate2 = "1.0.28"
+build_html = "2.4.0"
+
+[dev-dependencies]
+xid = "1.0.0"
