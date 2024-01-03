@@ -1,0 +1,39 @@
+builds:
+  - main: hack/goreleaser.go
+    id: kubectl-crust-gather
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    binary: kubectl-crust-gather
+    ignore:
+      - goos: windows
+        goarch: arm64
+    hooks:
+      post: ./.goreleaser_hook.sh {{ .Arch }} {{ .Os }} kubectl-{{ .ProjectName }}
+
+archives:
+- id: kubectl-crust-gather
+  builds:
+  - kubectl-crust-gather
+  name_template: "kubectl-{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+release:
+  prerelease: auto
+  mode: keep-existing
+
+krews:
+- name: crust-gather
+  ids:
+  - kubectl-crust-gather
+  repository:
+    owner: crust-gather
+    name: crust-gather
+    token: "{{ .Env.GITHUB_TOKEN }}"
+  description: |
+    Provides functionality similar to os adm inspect, by collecting all resources for debugging purposes.
+  short_description: "Provides functionality similar to os adm inspect, by collecting all resources for debugging purposes."
+  skip_upload: auto
