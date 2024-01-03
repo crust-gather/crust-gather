@@ -15,7 +15,7 @@ use super::{
     interface::{Collect, Representation},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum LogGroup {
     Current,
     Previous,
@@ -23,7 +23,10 @@ pub enum LogGroup {
 
 impl fmt::Display for LogGroup {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}.log", format!("{:?}", self).to_lowercase())
+        match self {
+            LogGroup::Current => write!(formatter, "current.log"),
+            LogGroup::Previous => write!(formatter, "previous.log"),
+        }
     }
 }
 

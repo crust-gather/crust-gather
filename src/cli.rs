@@ -27,7 +27,7 @@ pub struct Cli {
     verbosity: log::LevelFilter,
 
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Commands,
 }
 
 impl Cli {
