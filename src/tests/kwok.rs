@@ -4,10 +4,10 @@ use std::{convert::TryFrom, env, fs, path::PathBuf, process::Command, sync::Mute
 use kube::{config::Kubeconfig, Client, Config};
 
 // Mutex to secure port selection for the cluster
-static CLUSTER_MUTEX : Mutex<i32> = Mutex::new(1);
+static CLUSTER_MUTEX: Mutex<i32> = Mutex::new(1);
 
 /// Struct to manage a temporary kwok cluster.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct TestEnv {
     // The name of the temporary cluster.
     name: String,
@@ -15,6 +15,10 @@ pub struct TestEnv {
     kubeconfig: Kubeconfig,
 }
 
+/// TestEnv manages a temporary Kwok test cluster.
+///
+/// It provides methods to create, delete and interact with the minimal test cluster.
+/// The cluster is automatically deleted when this struct is dropped.
 impl TestEnv {
     /// Builder for configuring the test environemnt.
     pub fn builder() -> TestEnvBuilder {
@@ -26,6 +30,10 @@ impl TestEnv {
         Self::builder().build()
     }
 
+    /// Deletes the temporary Kwok cluster and removes the kubeconfig file.
+    ///
+    /// Runs `kwokctl delete` to delete the cluster and removes the generated
+    /// kubeconfig file for this cluster.
     fn delete(&mut self) {
         let status = Command::new("kwokctl")
             .args(&["delete", "cluster", "--name", &self.name])
@@ -37,8 +45,7 @@ impl TestEnv {
             self.name
         );
 
-        fs::remove_file(temp_kubeconfig(self.name.clone()))
-            .expect("remove temporary kubeconfig location");
+        fs::remove_file(self.kubeconfig_path()).expect("remove temporary kubeconfig location");
     }
 
     /// Create a new `Client` configured for the temporary server.
@@ -54,6 +61,16 @@ impl TestEnv {
             .expect("valid kubeconfig");
         Client::try_from(config).expect("client")
     }
+
+    /// Returns the Kubeconfig for this TestEnv.
+    pub fn kubeconfig(&self) -> Kubeconfig {
+        self.kubeconfig.clone()
+    }
+
+    /// Returns the path to the Kubeconfig file for this TestEnv.
+    pub fn kubeconfig_path(&self) -> PathBuf {
+        temp_kubeconfig(&self.name)
+    }
 }
 
 impl Drop for TestEnv {
@@ -63,7 +80,6 @@ impl Drop for TestEnv {
 }
 
 /// Builder for [`TestEnv`] to customize the environment.
-#[derive(Debug)]
 pub struct TestEnvBuilder {
     verbose: u8,
     wait: String,
@@ -90,14 +106,14 @@ impl TestEnvBuilder {
     }
 
     /// Set duration for `wait` flag.
-    pub fn wait(&mut self, v: String) -> &mut Self {
-        self.wait = v;
+    pub fn wait(&mut self, v: &str) -> &mut Self {
+        self.wait = v.into();
         self
     }
 
     /// Set kubeconfig path flag.
-    pub fn kubeconfig(&mut self, v: String) -> &mut Self {
-        self.kubeconfig = v;
+    pub fn kubeconfig(&mut self, v: &str) -> &mut Self {
+        self.kubeconfig = v.into();
         self
     }
 
@@ -128,7 +144,7 @@ impl TestEnvBuilder {
         }
 
         let kubeconfig = match self.kubeconfig.as_str() {
-            "" => temp_kubeconfig(cluster),
+            "" => temp_kubeconfig(cluster.as_str()),
             kubeconfig => kubeconfig.into(),
         };
 
@@ -161,7 +177,7 @@ impl TestEnvBuilder {
     }
 }
 
-fn temp_kubeconfig(cluster: String) -> PathBuf {
+fn temp_kubeconfig(cluster: &str) -> PathBuf {
     let mut dir = env::temp_dir();
     dir.push(cluster);
     dir

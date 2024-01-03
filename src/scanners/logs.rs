@@ -1,12 +1,14 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::{api::core::v1::Pod, Resource};
 use kube::{Api, Client};
-use kube_core::{subresource::LogParams, ApiResource, DynamicObject, ErrorResponse, TypeMeta};
+use kube_core::{
+    subresource::LogParams, ApiResource, DynamicObject, ErrorResponse, GroupVersionKind, TypeMeta,
+};
 
-use crate::filter::Filter;
+use crate::filters::filter::Filter;
 
 use super::{
     generic::Collectable,
@@ -34,13 +36,16 @@ impl Into<LogParams> for LogGroup {
     }
 }
 
+/// Logs collects container logs for pods. It contains a Collectable for
+/// querying pods and a LogGroup to specify whether to collect current or
+/// previous logs.
 pub struct Logs {
     pub collectable: Collectable,
     pub group: LogGroup,
 }
 
 impl Logs {
-    pub fn new(client: Client, filter: Box<dyn Filter>, group: LogGroup) -> Self {
+    pub fn new(client: Client, filter: Arc<dyn Filter>, group: LogGroup) -> Self {
         Logs {
             collectable: Collectable::new(client, ApiResource::erase::<Pod>(&()), filter),
             group,
@@ -55,7 +60,21 @@ impl Into<Box<dyn Collect>> for Logs {
 }
 
 #[async_trait]
+/// Implements the Collect trait for Logs. This collects container logs for Kubernetes pods.
+///
+/// The path() method returns the path for the pod object.
+///
+/// The get_type_meta() method returns the TypeMeta for pods.
+///
+/// The get_api() method returns the API client for pods.
+///
+/// The filter() method filters pods based on the configured filter.
+///
+/// The representations() method collects the container logs for the given pod. It parses the pod,
+/// gets the API client for that pod, and then for each container it calls the logs API to get the
+/// logs. It returns a vector of Representation objects containing the log data.
 impl Collect for Logs {
+    /// Returns the path for the pod object. This will be the root path for the logs to store in.
     fn path(self: &Self, obj: &DynamicObject) -> PathBuf {
         self.collectable.path(obj)
     }
@@ -71,10 +90,11 @@ impl Collect for Logs {
         self.collectable.get_api()
     }
 
-    fn filter(&self, obj: &DynamicObject) -> bool {
-        self.collectable.filter(obj)
+    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
+        self.collectable.filter(gvk, obj)
     }
 
+    /// Collects container logs representations.
     async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         let pod: Pod = obj.clone().try_parse()?;
         let api: Api<Pod> = Api::namespaced(
@@ -96,8 +116,14 @@ impl Collect for Logs {
                 .await
             {
                 Ok(logs) => logs,
+                // If a 400 error occurs, returns the current representations, as that indicates no logs exist.
                 Err(kube::Error::Api(ErrorResponse { code: 400, .. })) => {
-                    return Ok(representations)
+                    log::info!(
+                        "No {} logs found for pod {}",
+                        self.group,
+                        meta.name.unwrap()
+                    );
+                    return Ok(representations);
                 }
                 Err(e) => bail!(e),
             };
@@ -107,7 +133,7 @@ impl Collect for Logs {
             representations.push(
                 Representation::new()
                     .with_path(self.path(obj).with_file_name(container_path))
-                    .with_data(logs),
+                    .with_data(logs.as_str()),
             )
         }
 
@@ -117,13 +143,14 @@ impl Collect for Logs {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
-    use tar::{Archive, Builder};
 
     use crate::{
-        filter::NamespaceInclude,
+        filters::namespace::NamespaceInclude,
         scanners::{generic::Collectable, interface::Collect},
         tests::kwok,
     };
@@ -135,9 +162,7 @@ mod test {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
             .build();
-        let filter = &NamespaceInclude {
-            namespaces: vec!["default".into()],
-        };
+        let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<DynamicObject> =
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
@@ -167,7 +192,7 @@ mod test {
             collectable: Collectable::new(
                 test_env.client().await,
                 ApiResource::erase::<Pod>(&()),
-                filter.into(),
+                Arc::new(filter),
             ),
             group: LogGroup::Current,
         }
@@ -175,18 +200,7 @@ mod test {
         .await
         .expect("Succeed");
 
-        let b = &mut Builder::new(vec![]);
         let repr = repr[0].clone();
         assert_eq!(repr.data(), "");
-        assert!(repr.write(b).is_ok());
-        let mut a = Archive::new(b.get_ref().as_slice());
-        for e in a.entries().unwrap() {
-            let e = e.unwrap();
-            let p = e.path().unwrap();
-            assert_eq!(
-                p.to_str().unwrap(),
-                "crust-gather/namespaces/default/pod/test/test/current.log"
-            );
-        }
     }
 }

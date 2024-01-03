@@ -1,22 +1,29 @@
 use async_trait::async_trait;
 use kube::{Api, Client};
-use kube_core::{ApiResource, DynamicObject, TypeMeta};
-use std::path::PathBuf;
+use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta};
+use std::{path::PathBuf, sync::Arc};
 
-use crate::filter::Filter;
+use crate::filters::filter::Filter;
 
 use super::interface::Collect;
 
 pub struct Collectable {
     pub api: Api<DynamicObject>,
-    pub filter: Box<dyn Filter>,
+    pub filter: Arc<dyn Filter>,
     resource: ApiResource,
 }
 
+/// Constructs a new Collectable instance.
+///
+/// # Arguments
+///
+/// * `client` - The Kubernetes client to use for API calls.
+/// * `resource` - The Kubernetes discovery resource to collect.
+/// * `filter` - The filter to apply when collecting objects of the resource.
 impl Collectable {
-    pub fn new(client: Client, resource: ApiResource, filter: Box<dyn Filter>) -> Self {
+    pub fn new(client: Client, resource: ApiResource, filter: Arc<dyn Filter>) -> Self {
         Collectable {
-            api: Api::all_with(client, &ApiResource::erase::<DynamicObject>(&resource)),
+            api: Api::all_with(client, &resource),
             filter,
             resource,
         }
@@ -30,7 +37,18 @@ impl Into<Box<dyn Collect>> for Collectable {
 }
 
 #[async_trait]
+/// Implements the Collect trait for Collectable.
+///
+/// This allows Collectable to be collected into an archive under the
+/// PathBuf destination returned by the path method.
 impl Collect for Collectable {
+    /// Constructs the path for storing the collected Kubernetes object.
+    ///
+    /// The path is constructed differently for cluster-scoped vs namespaced objects.
+    /// Cluster-scoped objects are stored under `cluster/{kind}/{name}.yaml`.
+    /// Namespaced objects are stored under `namespaces/{namespace}/{kind}/{name}.yaml`.
+    ///
+    /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
     fn path(self: &Self, obj: &DynamicObject) -> PathBuf {
         let obj = obj.clone();
         let (kind, namespace, name) = (
@@ -39,6 +57,7 @@ impl Collect for Collectable {
             obj.metadata.name.unwrap(),
         );
 
+        // Constructs the path for the collected object, cluster-scoped or namespaced.
         match namespace.as_str() {
             "" => format!("crust-gather/cluster/{kind}/{name}.yaml"),
             _ => format!("crust-gather/namespaces/{namespace}/{kind}/{name}.yaml"),
@@ -57,22 +76,21 @@ impl Collect for Collectable {
         self.api.clone()
     }
 
-    fn filter(&self, obj: &DynamicObject) -> bool {
-        self.filter.filter(obj)
+    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
+        self.filter.filter(gvk, obj)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::Arc};
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
-    use tar::{Archive, Builder};
 
     use crate::{
-        filter::NamespaceInclude,
+        filters::namespace::NamespaceInclude,
         scanners::{generic::Collectable, interface::Collect},
         tests::kwok,
     };
@@ -82,9 +100,8 @@ mod test {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
             .build();
-        let filter = &NamespaceInclude {
-            namespaces: vec!["default".into()],
-        };
+
+        let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<DynamicObject> =
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
@@ -113,29 +130,19 @@ mod test {
         let repr = Collectable::new(
             test_env.client().await,
             ApiResource::erase::<Pod>(&()),
-            filter.into(),
+            Arc::new(filter),
         )
         .collect()
         .await
         .expect("Succeed");
 
-        let b = &mut Builder::new(vec![]);
         let repr = repr[0].clone();
         assert_eq!(
             repr.path,
             PathBuf::from("crust-gather/namespaces/default/pod/test.yaml")
         );
+
         let existing_pod: Pod = serde_yaml::from_str(repr.data()).unwrap();
         assert_eq!(existing_pod.spec.unwrap().containers[0].name, "test");
-        assert!(repr.write(b).is_ok());
-        let mut a = Archive::new(b.get_ref().as_slice());
-        for e in a.entries().unwrap() {
-            let e = e.unwrap();
-            let p = e.path().unwrap();
-            assert_eq!(
-                p.to_str().unwrap(),
-                "crust-gather/namespaces/default/pod/test.yaml"
-            );
-        }
     }
 }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use build_html::{Html, HtmlContainer, TableCell, TableRow};
@@ -9,9 +9,9 @@ use k8s_openapi::{
     Resource,
 };
 use kube::{Api, Client};
-use kube_core::{ApiResource, DynamicObject, TypeMeta};
+use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta};
 
-use crate::filter::Filter;
+use crate::filters::filter::Filter;
 
 use super::{
     generic::Collectable,
@@ -23,7 +23,7 @@ pub struct Events {
 }
 
 impl Events {
-    pub fn new(client: Client, filter: Box<dyn Filter>) -> Self {
+    pub fn new(client: Client, filter: Arc<dyn Filter>) -> Self {
         Events {
             collectable: Collectable::new(client, ApiResource::erase::<Event>(&()), filter),
         }
@@ -52,10 +52,11 @@ impl Collect for Events {
         self.collectable.get_api()
     }
 
-    fn filter(&self, obj: &DynamicObject) -> bool {
-        self.collectable.filter(obj)
+    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
+        self.collectable.filter(gvk, obj)
     }
 
+    /// Generates an HTML table representations for an Event object.
     async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         let event: Event = obj.clone().try_parse()?;
         let mut representations: Vec<Representation> = vec![];
@@ -117,7 +118,7 @@ impl Collect for Events {
         representations.push(
             Representation::new()
                 .with_path(self.path(obj))
-                .with_data(row.to_html_string()),
+                .with_data(row.to_html_string().as_str()),
         );
 
         Ok(representations)
@@ -133,9 +134,8 @@ impl Collect for Events {
 
         Ok(vec![Representation::new()
             .with_path(self.path(&DynamicObject::new("", &ApiResource::erase::<Event>(&()))))
-            .with_data(format!(
-                include_str!("templates/event-filter.html"),
-                data
-            ))])
+            .with_data(
+                format!(include_str!("templates/event-filter.html"), data).as_str(),
+            )])
     }
 }
