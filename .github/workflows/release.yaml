@@ -1,7 +1,7 @@
 on:
   # Indicates I want to run this workflow on all branches, PR, and tags
   push:
-    branches: ["**"]
+    branches: ["main"]
     tags: ["*"]
   pull_request:
     branches: ["main"]
@@ -12,7 +12,10 @@ env:
   # Rust build arguments
   BUILD_ARGS: "--release"
   # The binary name
-  BIN_NAME: "crust-gather"
+  BIN_NAME: "kubectl-crust-gather"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -91,20 +94,20 @@ jobs:
       - name: Checkout Git repo
         uses: actions/checkout@v3
 
+      # Goreleaser
+      - name: Set up Go
+        uses: actions/setup-go@v4
+
       # Download all artifacts
       - uses: actions/download-artifact@v3
         with:
           path: artifacts
-
-      # Goreleaser
-      - name: Set up Go
-        uses: actions/setup-go@v4
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
           distribution: goreleaser
           version: latest
           # Run goreleaser and ignore non-committed files (downloaded artifacts)
-          args: release --clean --skip=validate
+          args: release --skip=validate --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
