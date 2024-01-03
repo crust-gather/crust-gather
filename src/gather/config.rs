@@ -98,13 +98,13 @@ mod tests {
             .build();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
-        let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
+        let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let mut config = GatherConfig {
             client: test_env.client().await,
             filter: Arc::new(List(vec![NamespaceInclude::try_from("default".to_string())
                 .unwrap()
                 .into()])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
+            writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder"),
             secrets: vec![],
         };
@@ -120,11 +120,11 @@ mod tests {
             .build();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
-        let file_path = tmp_dir.path().join("crust-gather-test.zip");
+        let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
         let mut config = GatherConfig {
             client: test_env.client().await,
             filter: Arc::new(List(vec![])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
+            writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
                 .expect("failed to create builder"),
             secrets: vec![],
         };
