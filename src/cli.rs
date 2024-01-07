@@ -12,7 +12,7 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        config::GatherConfig,
+        gather::GatherConfig,
         writer::{Archive, Encoding, KubeconfigFile, Writer},
     },
 };
@@ -181,16 +181,16 @@ pub struct GatherCommands {
     file: Archive,
 
     /// Encoding for the output file.
-    /// The default encoding is GZip.
+    /// By default there is no encoding and data is written to the filesystem.
     /// The available options are:
     /// - gzip: GZip encoded tar.
     /// - zip: ZIP encoded.
     ///
     /// Example:
     ///     --encoding=zip
-    #[arg(short, long)]
+    #[arg(short, long, value_enum)]
     #[serde(default)]
-    encoding: Encoding,
+    encoding: Option<Encoding>,
 
     /// Secret environment variable name with data to exclude in the collected artifacts.
     /// Can be specified multiple times to exclude multiple values.
@@ -236,6 +236,7 @@ impl GatherCommands {
         self.secrets
             .iter()
             .map(|s| env::var(s).unwrap_or_default())
+            .filter(|s| !s.is_empty())
             .collect()
     }
 
@@ -257,7 +258,13 @@ impl TryInto<Writer> for &GatherCommands {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<Writer, Self::Error> {
-        Writer::new(&self.file, &self.encoding)
+        Writer::new(
+            &self.file,
+            match &self.encoding {
+                Some(encoding) => encoding,
+                None => &Encoding::Path,
+            },
+        )
     }
 }
 
@@ -334,7 +341,7 @@ mod tests {
         env::set_var("BAR", "bar");
 
         let commands = GatherCommands {
-            secrets: vec!["FOO".into(), "BAR".into()],
+            secrets: vec!["FOO".into(), "BAR".into(), "OTHER".into()],
             ..Default::default()
         };
 

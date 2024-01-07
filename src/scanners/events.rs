@@ -6,45 +6,36 @@ use k8s_openapi::{
     api::core::v1::Event,
     apimachinery::pkg::apis::meta::v1::Time,
     chrono::{DateTime, Utc},
-    Resource,
 };
 use kube::{Api, Client};
-use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta};
+use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta, Resource};
 
-use crate::filters::filter::Filter;
+use crate::{filters::filter::Filter, gather::writer::Representation};
 
-use super::{
-    generic::Collectable,
-    interface::{Collect, Representation},
-};
+use super::{generic::Object, interface::Collect};
 
 pub struct Events {
-    pub collectable: Collectable,
+    pub collectable: Object,
 }
 
 impl Events {
     pub fn new(client: Client, filter: Arc<dyn Filter>) -> Self {
         Events {
-            collectable: Collectable::new(client, ApiResource::erase::<Event>(&()), filter),
+            collectable: Object::new(client, ApiResource::erase::<Event>(&()), filter),
         }
-    }
-}
-impl Into<Box<dyn Collect>> for Events {
-    fn into(self) -> Box<dyn Collect> {
-        Box::new(self)
     }
 }
 
 #[async_trait]
 impl Collect for Events {
     fn path(self: &Self, _: &DynamicObject) -> PathBuf {
-        "crust-gather/event-filter.html".into()
+        "event-filter.html".into()
     }
 
     fn get_type_meta(&self) -> TypeMeta {
         TypeMeta {
-            api_version: Event::API_VERSION.into(),
-            kind: Event::KIND.into(),
+            api_version: Event::api_version(&()).into(),
+            kind: Event::kind(&()).into(),
         }
     }
 
@@ -59,7 +50,7 @@ impl Collect for Events {
     /// Generates an HTML table representations for an Event object.
     async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         let event: Event = obj.clone().try_parse()?;
-        let mut representations: Vec<Representation> = vec![];
+        let mut representations = vec![];
         let row = TableRow::new()
             .with_cell(TableCell::default().with_raw({
                 let (creation, first, last) = (
@@ -67,7 +58,7 @@ impl Collect for Events {
                     event.first_timestamp.unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
                     event.last_timestamp.unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0
                 );
-                let count = event.count.ok_or(0).unwrap().to_string();
+                let count = event.count.unwrap_or(1).to_string();
                 format!("<time datetime=\"{creation}\" title=\"First Seen: {first}\">{last}</time> <small>(x{count})</small>")}))
             .with_cell(TableCell::default().with_paragraph_attr(
                 event.metadata.namespace.unwrap_or_default(),
@@ -124,7 +115,7 @@ impl Collect for Events {
         Ok(representations)
     }
 
-    async fn collect(self: &mut Self) -> anyhow::Result<Vec<Representation>> {
+    async fn collect(&self) -> anyhow::Result<Vec<Representation>> {
         let mut data = String::from("");
         for obj in self.list().await? {
             for repr in &mut self.representations(&obj).await? {

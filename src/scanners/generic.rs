@@ -7,7 +7,7 @@ use crate::filters::filter::Filter;
 
 use super::interface::Collect;
 
-pub struct Collectable {
+pub struct Object {
     pub api: Api<DynamicObject>,
     pub filter: Arc<dyn Filter>,
     resource: ApiResource,
@@ -20,19 +20,13 @@ pub struct Collectable {
 /// * `client` - The Kubernetes client to use for API calls.
 /// * `resource` - The Kubernetes discovery resource to collect.
 /// * `filter` - The filter to apply when collecting objects of the resource.
-impl Collectable {
+impl Object {
     pub fn new(client: Client, resource: ApiResource, filter: Arc<dyn Filter>) -> Self {
-        Collectable {
+        Object {
             api: Api::all_with(client, &resource),
             filter,
             resource,
         }
-    }
-}
-
-impl Into<Box<dyn Collect>> for Collectable {
-    fn into(self) -> Box<dyn Collect> {
-        Box::new(self)
     }
 }
 
@@ -41,7 +35,7 @@ impl Into<Box<dyn Collect>> for Collectable {
 ///
 /// This allows Collectable to be collected into an archive under the
 /// PathBuf destination returned by the path method.
-impl Collect for Collectable {
+impl Collect for Object {
     /// Constructs the path for storing the collected Kubernetes object.
     ///
     /// The path is constructed differently for cluster-scoped vs namespaced objects.
@@ -59,8 +53,8 @@ impl Collect for Collectable {
 
         // Constructs the path for the collected object, cluster-scoped or namespaced.
         match namespace.as_str() {
-            "" => format!("crust-gather/cluster/{kind}/{name}.yaml"),
-            _ => format!("crust-gather/namespaces/{namespace}/{kind}/{name}.yaml"),
+            "" => format!("cluster/{kind}/{name}.yaml"),
+            _ => format!("namespaces/{namespace}/{kind}/{name}.yaml"),
         }
         .into()
     }
@@ -85,13 +79,16 @@ impl Collect for Collectable {
 mod test {
     use std::{path::PathBuf, sync::Arc};
 
-    use k8s_openapi::{api::core::v1::Pod, serde_json};
+    use k8s_openapi::{
+        api::core::v1::{Namespace, Pod},
+        serde_json,
+    };
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
 
     use crate::{
-        filters::namespace::NamespaceInclude,
-        scanners::{generic::Collectable, interface::Collect},
+        filters::{filter::List, namespace::NamespaceInclude},
+        scanners::{generic::Object, interface::Collect},
         tests::kwok,
     };
 
@@ -103,8 +100,7 @@ mod test {
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<DynamicObject> =
-            Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
+        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().await);
 
         pod_api
             .create(
@@ -122,12 +118,12 @@ mod test {
                         }],
                     }
                 }))
-                .expect("Serialized pod"),
+                .unwrap(),
             )
             .await
             .expect("Pod to be created");
 
-        let repr = Collectable::new(
+        let repr = Object::new(
             test_env.client().await,
             ApiResource::erase::<Pod>(&()),
             Arc::new(filter),
@@ -136,13 +132,48 @@ mod test {
         .await
         .expect("Succeed");
 
-        let repr = repr[0].clone();
-        assert_eq!(
-            repr.path,
-            PathBuf::from("crust-gather/namespaces/default/pod/test.yaml")
-        );
+        let repr = &repr[0];
 
         let existing_pod: Pod = serde_yaml::from_str(repr.data()).unwrap();
         assert_eq!(existing_pod.spec.unwrap().containers[0].name, "test");
+    }
+
+    #[tokio::test]
+    async fn test_path_cluster_scoped() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .insecure_skip_tls_verify(true)
+            .build();
+
+        let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
+
+        let collectable = Object::new(
+            test_env.client().await,
+            ApiResource::erase::<Namespace>(&()),
+            Arc::new(List(vec![])),
+        );
+
+        let expected = PathBuf::from("cluster/namespace/test.yaml");
+        let actual = collectable.path(&obj);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn test_path_namespaced() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .insecure_skip_tls_verify(true)
+            .build();
+        let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
+
+        let collectable = Object::new(
+            test_env.client().await,
+            ApiResource::erase::<Pod>(&()),
+            Arc::new(List(vec![])),
+        );
+
+        let expected = PathBuf::from("namespaces/default/pod/test.yaml");
+        let actual = collectable.path(&obj);
+
+        assert_eq!(expected, actual);
     }
 }

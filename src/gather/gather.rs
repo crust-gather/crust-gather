@@ -8,7 +8,7 @@ use kube_core::ApiResource;
 
 use crate::filters::filter::{Filter, List};
 use crate::scanners::events::Events;
-use crate::scanners::generic::Collectable;
+use crate::scanners::generic::Object;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogGroup, Logs};
 
@@ -26,19 +26,15 @@ impl GatherConfig {
     pub async fn collect(&mut self) -> anyhow::Result<()> {
         let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
 
-        let groups: Vec<Box<dyn Collect>> = discovery
+        let groups: Vec<_> = discovery
             .groups()
-            .map(|g| g.recommended_resources())
-            .flatten()
+            .flat_map(|g| g.recommended_resources())
             .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
-            .map(|group: Group| group.to_collectable(self.client.clone(), self.filter.clone()))
-            .flatten()
+            .flat_map(|group: Group| group.to_collectable(self.client.clone(), self.filter.clone()))
             .collect();
 
-        for mut group in groups {
-            for repr in group.collect().await? {
-                self.writer.add(repr, &self.secrets)?;
-            }
+        for group in groups {
+            group.collect(&mut self.writer, &self.secrets).await?
         }
 
         Ok(self.writer.finish()?)
@@ -61,20 +57,46 @@ impl Into<Group> for ApiResource {
     }
 }
 
+enum Collectable {
+    Object(Object),
+    Logs(Logs),
+    Events(Events),
+}
+
+impl Collectable {
+    async fn collect(&self, writer: &mut Writer, secrets: &Vec<String>) -> anyhow::Result<()> {
+        let representations = match self {
+            Collectable::Object(o) => o.collect(),
+            Collectable::Logs(l) => l.collect(),
+            Collectable::Events(e) => e.collect(),
+        }
+        .await?;
+
+        for repr in representations {
+            writer.add(repr, secrets)?;
+        }
+        Ok(())
+    }
+}
+
 impl Group {
-    fn to_collectable(self, client: Client, filter: Arc<dyn Filter>) -> Vec<Box<dyn Collect>> {
+    fn to_collectable(self, client: Client, filter: Arc<dyn Filter>) -> Vec<Collectable> {
         match self {
             Group::Logs(resource) => vec![
-                Logs::new(client.clone(), filter.clone(), LogGroup::Current).into(),
-                Logs::new(client.clone(), filter.clone(), LogGroup::Previous).into(),
-                Collectable::new(client, resource, filter).into(),
+                Collectable::Logs(Logs::new(client.clone(), filter.clone(), LogGroup::Current)),
+                Collectable::Logs(Logs::new(
+                    client.clone(),
+                    filter.clone(),
+                    LogGroup::Previous,
+                )),
+                Collectable::Object(Object::new(client, resource, filter)),
             ],
             Group::Events(resource) => vec![
-                Events::new(client.clone(), filter.clone()).into(),
-                Collectable::new(client, resource, filter).into(),
+                Collectable::Events(Events::new(client.clone(), filter.clone())),
+                Collectable::Object(Object::new(client, resource, filter)),
             ],
             Group::DynamicObject(resource) => {
-                vec![Collectable::new(client, resource, filter).into()]
+                vec![Collectable::Object(Object::new(client, resource, filter))]
             }
         }
     }
@@ -86,7 +108,9 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
-        filters::namespace::NamespaceInclude, tests::kwok, gather::writer::{Encoding, Archive},
+        filters::namespace::NamespaceInclude,
+        gather::writer::{Archive, Encoding},
+        tests::kwok,
     };
 
     use super::*;
@@ -101,12 +125,14 @@ mod tests {
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let mut config = GatherConfig {
             client: test_env.client().await,
-            filter: Arc::new(List(vec![NamespaceInclude::try_from("default".to_string())
-                .unwrap()
-                .into()])),
+            filter: Arc::new(List(vec![NamespaceInclude::try_from(
+                "default".to_string(),
+            )
+            .unwrap()
+            .into()])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder"),
-            secrets: vec![],
+            secrets: Default::default(),
         };
 
         let result = config.collect().await;
@@ -126,7 +152,7 @@ mod tests {
             filter: Arc::new(List(vec![])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
                 .expect("failed to create builder"),
-            secrets: vec![],
+            secrets: Default::default(),
         };
 
         let result = config.collect().await;

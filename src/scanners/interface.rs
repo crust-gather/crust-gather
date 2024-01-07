@@ -6,6 +6,8 @@ use kube_core::{DynamicObject, GroupVersionKind, TypeMeta};
 use serde_yaml;
 use std::path::PathBuf;
 
+use crate::gather::writer::Representation;
+
 #[async_trait]
 /// Collect defines a trait for collecting Kubernetes object representations.
 pub trait Collect: Sync + Send {
@@ -43,7 +45,7 @@ pub trait Collect: Sync + Send {
     /// Lists Kubernetes objects of the type handled by this scanner, and set
     /// the get_type_meta() information on the objects. Objects are filtered
     /// before getting added to the result.
-    async fn list(&mut self) -> anyhow::Result<Vec<DynamicObject>> {
+    async fn list(&self) -> anyhow::Result<Vec<DynamicObject>> {
         let data = self.get_api().list(&ListParams::default()).await?;
 
         Ok(data
@@ -67,42 +69,12 @@ pub trait Collect: Sync + Send {
     }
 
     /// Lists all object and collects representations for them.
-    async fn collect(self: &mut Self) -> anyhow::Result<Vec<Representation>> {
+    async fn collect(&self) -> anyhow::Result<Vec<Representation>> {
         let mut representations = vec![];
         for obj in self.list().await? {
             representations.append(&mut self.representations(&obj).await?);
         }
 
         Ok(representations)
-    }
-}
-
-#[derive(Clone, Default)]
-/// Representation holds the path and content for a serialized Kubernetes object.
-pub struct Representation {
-    pub path: PathBuf,
-    pub data: String,
-}
-
-impl Representation {
-    pub fn new() -> Self {
-        Representation {
-            ..Default::default()
-        }
-    }
-
-    pub fn with_data(self, data: &str) -> Self {
-        Self {
-            data: data.into(),
-            ..self
-        }
-    }
-
-    pub fn with_path(self, path: PathBuf) -> Self {
-        Self { path: path, ..self }
-    }
-
-    pub fn data(&self) -> &str {
-        self.data.as_ref()
     }
 }

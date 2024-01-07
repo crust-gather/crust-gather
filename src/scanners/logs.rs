@@ -2,18 +2,15 @@ use std::{fmt, path::PathBuf, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
-use k8s_openapi::{api::core::v1::Pod, Resource};
+use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, Client};
 use kube_core::{
-    subresource::LogParams, ApiResource, DynamicObject, ErrorResponse, GroupVersionKind, TypeMeta,
+    subresource::LogParams, ApiResource, DynamicObject, ErrorResponse, GroupVersionKind, TypeMeta, Resource,
 };
 
-use crate::filters::filter::Filter;
+use crate::{filters::filter::Filter, gather::writer::Representation};
 
-use super::{
-    generic::Collectable,
-    interface::{Collect, Representation},
-};
+use super::{generic::Object, interface::Collect};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum LogGroup {
@@ -43,22 +40,16 @@ impl Into<LogParams> for LogGroup {
 /// querying pods and a LogGroup to specify whether to collect current or
 /// previous logs.
 pub struct Logs {
-    pub collectable: Collectable,
+    pub collectable: Object,
     pub group: LogGroup,
 }
 
 impl Logs {
     pub fn new(client: Client, filter: Arc<dyn Filter>, group: LogGroup) -> Self {
         Logs {
-            collectable: Collectable::new(client, ApiResource::erase::<Pod>(&()), filter),
+            collectable: Object::new(client, ApiResource::erase::<Pod>(&()), filter),
             group,
         }
-    }
-}
-
-impl Into<Box<dyn Collect>> for Logs {
-    fn into(self) -> Box<dyn Collect> {
-        Box::new(self)
     }
 }
 
@@ -84,8 +75,8 @@ impl Collect for Logs {
 
     fn get_type_meta(&self) -> TypeMeta {
         TypeMeta {
-            api_version: Pod::API_VERSION.into(),
-            kind: Pod::KIND.into(),
+            api_version: Pod::api_version(&()).into(),
+            kind: Pod::kind(&()).into(),
         }
     }
 
@@ -104,7 +95,7 @@ impl Collect for Logs {
             self.get_api().into(),
             pod.metadata.clone().namespace.unwrap().as_ref(),
         );
-        let mut representations: Vec<Representation> = vec![];
+        let mut representations = vec![];
 
         for container in pod.spec.unwrap().containers {
             let meta = pod.metadata.clone();
@@ -154,7 +145,7 @@ mod test {
 
     use crate::{
         filters::namespace::NamespaceInclude,
-        scanners::{generic::Collectable, interface::Collect},
+        scanners::{generic::Object, interface::Collect},
         tests::kwok,
     };
 
@@ -192,7 +183,7 @@ mod test {
             .expect("Pod to be created");
 
         let repr = Logs {
-            collectable: Collectable::new(
+            collectable: Object::new(
                 test_env.client().await,
                 ApiResource::erase::<Pod>(&()),
                 Arc::new(filter),
