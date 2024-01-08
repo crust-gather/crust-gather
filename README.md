@@ -13,6 +13,10 @@
 - Store data in a zip/tar.gz archive.
 - Hide out secret data, by providing environment keys with values to exclude during processing.
 
+## Prerequisites
+- kubectl
+- [krew](https://krew.sigs.k8s.io/docs/user-guide/setup/install/)
+
 ## Usage
 
 The plugin can be installed and used as follows:
