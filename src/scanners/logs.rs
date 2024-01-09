@@ -142,6 +142,7 @@ mod test {
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
+    use serial_test::serial;
     use tokio::time::timeout;
     use tokio_retry::{Retry, strategy::FixedInterval};
 
@@ -154,10 +155,11 @@ mod test {
     use super::{LogGroup, Logs};
 
     #[tokio::test]
+    #[serial]
     async fn collect_logs() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<DynamicObject> =

@@ -1,7 +1,7 @@
 on:
   # Indicates I want to run this workflow on all branches, PR, and tags
   push:
-    branches: ["main"]
+    branches: ["*"]
     tags: ["*"]
   pull_request:
     branches: ["main"]
@@ -18,8 +18,33 @@ permissions:
   contents: write
 
 jobs:
+
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Git repo
+        uses: actions/checkout@v3
+
+      # Linux & Windows
+      - name: Install rust toolchain
+        if: ${{ !contains(matrix.platform.target, 'apple') }}
+        uses: actions-rs/toolchain@v1
+        with:
+          # We setup Rust toolchain and the desired target
+          profile: minimal
+          toolchain: "${{ env.RUST_VERSION }}"
+          override: true
+          target: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy
+
+      - name: Test binary
+        run: |
+          GOOS=linux GOARCH=amd64 make test
+
   build:
     name: Build - ${{ matrix.platform.name }}
+    needs: test
     # By default, runs on Ubuntu, otherwise, override with the desired os
     runs-on: ${{ matrix.platform.os || 'ubuntu-22.04' }}
     strategy:
@@ -31,6 +56,7 @@ jobs:
           - name: Linux x86_64
             # The used Rust target architecture
             target: x86_64-unknown-linux-gnu
+
           - name: Linux aarch64
             target: aarch64-unknown-linux-gnu
 
@@ -59,6 +85,7 @@ jobs:
           override: true
           target: ${{ matrix.platform.target }}
           components: rustfmt, clippy
+
       - name: Build ${{ matrix.platform.name }} binary
         if: ${{ !contains(matrix.platform.target, 'apple') }}
         uses: actions-rs/cargo@v1

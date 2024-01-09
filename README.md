@@ -27,3 +27,15 @@ kubectl krew install crust-gather/crust-gather
 
 kubectl crust-gather --help
 ```
+
+## Testing
+
+To run tests locally you need to have `golang` and `kwok` pre-installed. On linux and mac this will be done automatically with the test command:
+```bash
+make test
+```
+
+Alternatively you can pass `GOOS` or `GOARCH` directly to the make task:
+```bash
+GOOS=linux GOARCH=amd64 make test
+```

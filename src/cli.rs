@@ -320,6 +320,7 @@ mod tests {
     use k8s_openapi::api::core::v1::Namespace;
     use kube::Api;
     use kube_core::params::ListParams;
+    use serial_test::serial;
     use tempdir::TempDir;
     use tokio::fs;
 
@@ -351,10 +352,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_client_from_kubeconfig() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
         fs::write(test_env.kubeconfig_path(), kubeconfig)
@@ -377,10 +379,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_client_from_default() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
 
