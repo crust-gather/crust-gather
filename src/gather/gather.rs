@@ -105,6 +105,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
 
+    use serial_test::serial;
     use tempdir::TempDir;
 
     use crate::{
@@ -116,10 +117,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[serial]
     async fn test_gzip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
@@ -140,10 +142,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_zip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");

@@ -85,6 +85,7 @@ mod test {
     };
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
+    use serial_test::serial;
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
 
@@ -98,10 +99,11 @@ mod test {
     use std::time::Duration;
 
     #[tokio::test]
+    #[serial]
     async fn collect_pod() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
@@ -150,10 +152,11 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_path_cluster_scoped() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
@@ -170,10 +173,11 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_path_namespaced() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build().await;
+            .build();
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Object::new(

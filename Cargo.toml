@@ -25,6 +25,7 @@ regex = "1.10.2"
 xid = "1.0.0"
 tempdir = "0.3.7"
 tokio-retry = "0.3.0"
+serial_test = "3.0.0"
 
 [profile.release]
 opt-level = "z"
