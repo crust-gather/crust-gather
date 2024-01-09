@@ -24,6 +24,7 @@ regex = "1.10.2"
 [dev-dependencies]
 xid = "1.0.0"
 tempdir = "0.3.7"
+tokio-retry = "0.3.0"
 
 [profile.release]
 opt-level = "z"

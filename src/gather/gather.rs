@@ -119,7 +119,7 @@ mod tests {
     async fn test_gzip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
@@ -143,7 +143,7 @@ mod tests {
     async fn test_zip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");

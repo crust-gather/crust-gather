@@ -85,43 +85,54 @@ mod test {
     };
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
+    use tokio_retry::strategy::FixedInterval;
+    use tokio_retry::Retry;
 
     use crate::{
         filters::{filter::List, namespace::NamespaceInclude},
         scanners::{generic::Object, interface::Collect},
         tests::kwok,
     };
+    use tokio::time::timeout;
+
+    use std::time::Duration;
 
     #[tokio::test]
     async fn collect_pod() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().await);
-
-        pod_api
-            .create(
-                &PostParams::default(),
-                &serde_json::from_value(serde_json::json!({
-                    "apiVersion": "v1",
-                    "kind": "Pod",
-                    "metadata": {
-                        "name": "test",
-                    },
-                    "spec": {
-                        "containers": [{
-                          "name": "test",
-                          "image": "test",
-                        }],
-                    }
-                }))
-                .unwrap(),
-            )
-            .await
-            .expect("Pod to be created");
+        timeout(
+            Duration::new(10, 0),
+            Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+                pod_api
+                    .create(
+                        &PostParams::default(),
+                        &serde_json::from_value(serde_json::json!({
+                            "apiVersion": "v1",
+                            "kind": "Pod",
+                            "metadata": {
+                                "name": "test",
+                            },
+                            "spec": {
+                                "containers": [{
+                                  "name": "test",
+                                  "image": "test",
+                                }],
+                            }
+                        }))
+                        .expect("Serialize"),
+                    )
+                    .await
+            }),
+        )
+        .await
+        .expect("Timeout")
+        .unwrap();
 
         let repr = Object::new(
             test_env.client().await,
@@ -142,7 +153,7 @@ mod test {
     async fn test_path_cluster_scoped() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
@@ -162,7 +173,7 @@ mod test {
     async fn test_path_namespaced() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Object::new(

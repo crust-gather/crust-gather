@@ -1,10 +1,18 @@
 //! Test helper to create a temporary kwok cluster.
-use std::{convert::TryFrom, env, fs, path::PathBuf, process::Command, sync::Mutex};
+use std::{
+    convert::TryFrom,
+    env, fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
+use anyhow::bail;
 use kube::{config::Kubeconfig, Client, Config};
-
-// Mutex to secure port selection for the cluster
-static CLUSTER_MUTEX: Mutex<i32> = Mutex::new(1);
+use tokio_retry::{
+    strategy::{jitter, FixedInterval},
+    Retry,
+};
 
 /// Struct to manage a temporary kwok cluster.
 #[derive(Default)]
@@ -26,8 +34,8 @@ impl TestEnv {
     }
 
     /// Create the default minimal test environment.
-    pub fn new() -> Self {
-        Self::builder().build()
+    pub async fn new() -> Self {
+        Self::builder().build().await
     }
 
     /// Deletes the temporary Kwok cluster and removes the kubeconfig file.
@@ -124,8 +132,7 @@ impl TestEnvBuilder {
     }
 
     /// Create the test environment.
-    pub fn build(&self) -> TestEnv {
-        let _guard = CLUSTER_MUTEX.lock().unwrap();
+    pub async fn build(&self) -> TestEnv {
         let cluster = xid::new().to_string();
         let name = cluster.clone();
         let mut args = vec![
@@ -151,11 +158,28 @@ impl TestEnvBuilder {
         args.push("--kubeconfig");
         args.push(kubeconfig.to_str().unwrap());
 
-        let status = Command::new("kwokctl")
-            .args(&args)
-            .status()
-            .expect("kwok create cluster");
-        assert!(status.success(), "failed to create kwok cluster");
+        async fn test() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        Retry::spawn(
+            FixedInterval::new(jitter(Duration::from_secs(10))),
+            || async {
+                match Command::new("kwokctl")
+                    .args(&args)
+                    .stderr(Stdio::null())
+                    .status()
+                {
+                    Ok(status) => match status.success() {
+                        true => Ok(()),
+                        false => bail!("Cluster create failed"),
+                    },
+                    Err(e) => bail!(e),
+                }
+            },
+        )
+        .await
+        .expect("kwok create cluster");
 
         let mut args = vec!["get", "kubeconfig", "--name", &name];
         if self.insecure_skip_tls_verify {
@@ -166,7 +190,7 @@ impl TestEnvBuilder {
         let stdout = Command::new("kwokctl")
             .args(&args)
             .output()
-            .expect("kwok kubeconfig get failed")
+            .expect("kwokctl get kubeconfig failed")
             .stdout;
         let stdout = std::str::from_utf8(&stdout).expect("valid string");
 
@@ -195,7 +219,8 @@ mod test {
     async fn sanity() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build()
+            .await;
         let pod_api: Api<DynamicObject> =
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
 

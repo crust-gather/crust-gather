@@ -186,7 +186,7 @@ impl Writer {
             }
             Writer::Gzip(Archive(archive), builder) => {
                 let mut header = Header::new_gnu();
-                header.set_size(data.as_bytes().len() as u64);
+                header.set_size(data.len() as u64 + 1);
                 header.set_cksum();
                 header.set_mode(0o644);
 
@@ -236,7 +236,10 @@ impl Writer {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs::{self, File},
+        io::{Read, Seek},
+    };
 
     use tempdir::TempDir;
 
@@ -289,7 +292,7 @@ mod tests {
 
         assert!(writer.add(repr, &vec![]).is_ok());
         assert!(writer.finish().is_ok());
-        assert!(archive.with_file_name("test.tar.gz").exists())
+        assert!(archive.with_file_name("test.tar.gz").exists());
     }
 
     #[test]
@@ -300,12 +303,23 @@ mod tests {
 
         let repr = Representation {
             path: "test.txt".into(),
-            data: "content".into(),
+            data: "content with secret".into(),
         };
 
-        assert!(writer.add(repr, &vec![]).is_ok());
+        assert!(writer.add(repr, &vec!["secret".into()]).is_ok());
         assert!(writer.finish().is_ok());
-        assert!(archive.exists())
+        assert!(archive.exists());
+
+        fn check_zip_contents(reader: impl Read + Seek) {
+            let mut zip = zip::ZipArchive::new(reader).unwrap();
+            let mut file = zip.by_name("test/test.txt").unwrap();
+
+            let mut data = String::new();
+            file.read_to_string(&mut data).unwrap();
+            assert_eq!(data, "content with ***");
+        }
+
+        check_zip_contents(File::open(archive).unwrap());
     }
 
     #[test]
@@ -316,15 +330,15 @@ mod tests {
 
         let repr = Representation {
             path: "test.txt".into(),
-            data: "content".into(),
+            data: "content with secret".into(),
         };
 
-        assert!(writer.add(repr, &vec![]).is_ok());
+        assert!(writer.add(repr, &vec!["secret".into()]).is_ok());
         assert!(writer.finish().is_ok());
         assert!(archive.clone().exists());
         assert!(archive.join("test.txt").exists());
         let data = fs::read_to_string(archive.join("test.txt")).unwrap();
-        assert_eq!(data, "content")
+        assert_eq!(data, "content with ***")
     }
 
     #[test]

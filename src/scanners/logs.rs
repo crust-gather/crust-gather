@@ -137,11 +137,13 @@ impl Collect for Logs {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
     use kube_core::{params::PostParams, ApiResource, DynamicObject};
+    use tokio::time::timeout;
+    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::{
         filters::namespace::NamespaceInclude,
@@ -155,31 +157,38 @@ mod test {
     async fn collect_logs() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<DynamicObject> =
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
 
-        let pod = pod_api
-            .create(
-                &PostParams::default(),
-                &serde_json::from_value(serde_json::json!({
-                    "apiVersion": "v1",
-                    "kind": "Pod",
-                    "metadata": {
-                        "name": "test",
-                    },
-                    "spec": {
-                        "containers": [{
-                          "name": "test",
-                          "image": "test",
-                        }],
-                    }
-                }))
-                .expect("Serialized pod"),
+            let pod = timeout(
+                Duration::new(10, 0),
+                Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+                    pod_api
+                        .create(
+                            &PostParams::default(),
+                            &serde_json::from_value(serde_json::json!({
+                                "apiVersion": "v1",
+                                "kind": "Pod",
+                                "metadata": {
+                                    "name": "test",
+                                },
+                                "spec": {
+                                    "containers": [{
+                                      "name": "test",
+                                      "image": "test",
+                                    }],
+                                }
+                            }))
+                            .expect("Serialize"),
+                        )
+                        .await
+                }),
             )
             .await
+            .expect("Timeout")
             .expect("Pod to be created");
 
         let repr = Logs {

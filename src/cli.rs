@@ -354,7 +354,7 @@ mod tests {
     async fn test_client_from_kubeconfig() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
         fs::write(test_env.kubeconfig_path(), kubeconfig)
@@ -380,7 +380,7 @@ mod tests {
     async fn test_client_from_default() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
-            .build();
+            .build().await;
 
         env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
 
