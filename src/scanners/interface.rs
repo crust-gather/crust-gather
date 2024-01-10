@@ -1,16 +1,34 @@
-use anyhow;
+use anyhow::{self, bail};
 use async_trait::async_trait;
 use kube::Api;
 use kube_core::params::ListParams;
 use kube_core::{DynamicObject, GroupVersionKind, TypeMeta};
 use serde_yaml;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio_retry::strategy::ExponentialBackoff;
+use tokio_retry::Retry;
 
-use crate::gather::writer::Representation;
+use crate::gather::gather::Secrets;
+use crate::gather::writer::{Representation, Writer};
 
 #[async_trait]
 /// Collect defines a trait for collecting Kubernetes object representations.
 pub trait Collect: Sync + Send {
+    /// Default delay iterator - exponential backoff.
+    /// Starts at 2ms, doubles each iteration, up to max of 60s.
+    fn delay() -> impl Iterator<Item = Duration> + Send {
+        ExponentialBackoff::from_millis(10).max_delay(Duration::from_secs(60))
+    }
+
+    /// Returns the Secrets instance to filter any secrets in the representation
+    fn get_secrets(&self) -> Secrets;
+
+    /// Returns the Writer instance for this scanner to write object
+    /// representations to.
+    fn get_writer(&self) -> Arc<Mutex<Writer>>;
+
     /// Returns the path where the representation of the given object
     /// should be stored.
     fn path(&self, object: &DynamicObject) -> PathBuf;
@@ -46,7 +64,13 @@ pub trait Collect: Sync + Send {
     /// the get_type_meta() information on the objects. Objects are filtered
     /// before getting added to the result.
     async fn list(&self) -> anyhow::Result<Vec<DynamicObject>> {
-        let data = self.get_api().list(&ListParams::default()).await?;
+        let data = match self.get_api().list(&ListParams::default()).await {
+            Ok(items) => items,
+            Err(e) => {
+                log::error!("Failed to list resources: {:?}", e);
+                bail!(e)
+            }
+        };
 
         Ok(data
             .items
@@ -69,12 +93,39 @@ pub trait Collect: Sync + Send {
     }
 
     /// Lists all object and collects representations for them.
-    async fn collect(&self) -> anyhow::Result<Vec<Representation>> {
-        let mut representations = vec![];
+    async fn collect(&self) -> anyhow::Result<()> {
         for obj in self.list().await? {
-            representations.append(&mut self.representations(&obj).await?);
+            self.write_with_retry(&obj).await?;
         }
 
-        Ok(representations)
+        Ok(())
+    }
+
+    /// Retries collecting representations using an exponential backoff with jitter.
+    /// This helps handle transient errors and spreading load.
+    async fn collect_retry(&self) {
+        Retry::spawn(Self::delay(), || async { self.collect().await })
+            .await
+            .unwrap()
+    }
+
+    /// Retries collecting representations using an exponential backoff with jitter.
+    /// This helps handle transient errors and spreading load.
+    async fn write_with_retry(&self, object: &DynamicObject) -> anyhow::Result<()> {
+        let representations = Retry::spawn(Self::delay(), || async {
+            self.representations(object).await
+        })
+        .await
+        .unwrap();
+
+        let writer = self.get_writer();
+        for repr in representations {
+            writer
+                .lock()
+                .unwrap()
+                .store(&self.get_secrets().strip(&repr))?
+        }
+
+        Ok(())
     }
 }

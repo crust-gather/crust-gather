@@ -1,5 +1,3 @@
-use std::{path::PathBuf, sync::Arc};
-
 use async_trait::async_trait;
 use build_html::{Html, HtmlContainer, TableCell, TableRow};
 use k8s_openapi::{
@@ -7,40 +5,52 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::Time,
     chrono::{DateTime, Utc},
 };
-use kube::{Api, Client};
-use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta, Resource};
+use kube::Api;
+use kube_core::{ApiResource, DynamicObject, GroupVersionKind, Resource, TypeMeta};
+use std::{
+    fmt::Debug,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use crate::{filters::filter::Filter, gather::writer::Representation};
+use crate::gather::{
+    gather::{GatherConfig, Secrets},
+    writer::{Representation, Writer},
+};
 
 use super::{generic::Object, interface::Collect};
 
+#[derive(Clone)]
 pub struct Events {
     pub collectable: Object,
 }
 
-impl Events {
-    pub fn new(client: Client, filter: Arc<dyn Filter>) -> Self {
+impl Debug for Events {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Events").finish()
+    }
+}
+
+impl From<GatherConfig> for Events {
+    fn from(value: GatherConfig) -> Self {
         Events {
-            collectable: Object::new(client, ApiResource::erase::<Event>(&()), filter),
+            collectable: Object::new(value, ApiResource::erase::<Event>(&())),
         }
     }
 }
 
 #[async_trait]
 impl Collect for Events {
+    fn get_secrets(&self) -> Secrets {
+        self.collectable.get_secrets()
+    }
+
+    fn get_writer(&self) -> Arc<Mutex<Writer>> {
+        self.collectable.get_writer()
+    }
+
     fn path(self: &Self, _: &DynamicObject) -> PathBuf {
         "event-filter.html".into()
-    }
-
-    fn get_type_meta(&self) -> TypeMeta {
-        TypeMeta {
-            api_version: Event::api_version(&()).into(),
-            kind: Event::kind(&()).into(),
-        }
-    }
-
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.collectable.get_api()
     }
 
     fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
@@ -49,6 +59,8 @@ impl Collect for Events {
 
     /// Generates an HTML table representations for an Event object.
     async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
+        log::info!("Collecting events");
+
         let event: Event = obj.clone().try_parse()?;
         let mut representations = vec![];
         let row = TableRow::new()
@@ -115,18 +127,31 @@ impl Collect for Events {
         Ok(representations)
     }
 
-    async fn collect(&self) -> anyhow::Result<Vec<Representation>> {
+    fn get_api(&self) -> Api<DynamicObject> {
+        self.collectable.get_api()
+    }
+
+    fn get_type_meta(&self) -> TypeMeta {
+        TypeMeta {
+            api_version: Event::api_version(&()).into(),
+            kind: Event::kind(&()).into(),
+        }
+    }
+
+    async fn collect(&self) -> anyhow::Result<()> {
         let mut data = String::from("");
         for obj in self.list().await? {
-            for repr in &mut self.representations(&obj).await? {
+            for repr in self.representations(&obj).await? {
                 data.push_str(repr.data())
             }
         }
 
-        Ok(vec![Representation::new()
-            .with_path(self.path(&DynamicObject::new("", &ApiResource::erase::<Event>(&()))))
-            .with_data(
-                format!(include_str!("templates/event-filter.html"), data).as_str(),
-            )])
+        self.get_writer().lock().unwrap().store(
+            &Representation::new()
+                .with_path(self.path(&DynamicObject::new("", &ApiResource::erase::<Event>(&()))))
+                .with_data(format!(include_str!("templates/event-filter.html"), data).as_str()),
+        )?;
+
+        Ok(())
     }
 }

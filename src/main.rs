@@ -17,9 +17,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     cli.init();
 
-    let mut config = cli.command.load().await?;
+    let config = cli.command.load().await?;
 
-    log::info!("Collecting resources");
     config.collect().await?;
 
     log::info!("Done");

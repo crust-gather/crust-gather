@@ -1,8 +1,9 @@
 use std::{
     fmt::Display,
     fs::{DirBuilder, File},
-    io::Write,
+    io::Write as _,
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use flate2::{write::GzEncoder, Compression};
@@ -98,7 +99,7 @@ impl From<&str> for Encoding {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 /// Representation holds the path and content for a serialized Kubernetes object.
 pub struct Representation {
     path: PathBuf,
@@ -137,6 +138,12 @@ pub enum Writer {
     Zip(Archive, ZipWriter<File>),
 }
 
+impl Into<Arc<Mutex<Writer>>> for Writer {
+    fn into(self) -> Arc<Mutex<Writer>> {
+        Arc::new(Mutex::new(self))
+    }
+}
+
 /// Replaces invalid characters in a path with dashes, to make the path valid for GitHub artifacts.
 /// GitHub artifacts paths may not contain : * ? | characters. This replaces those characters with dashes.
 fn fix_github_artifacts_path(path: &str) -> String {
@@ -147,15 +154,6 @@ fn fix_github_artifacts_path(path: &str) -> String {
 }
 
 impl Writer {
-    /// Replaces any secrets in representation data with ***.
-    fn strip_secrets(&self, mut data: String, secrets: &Vec<String>) -> String {
-        for secret in secrets {
-            data = data.replace(secret.as_str(), "***");
-        }
-
-        data
-    }
-
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub fn finish(&mut self) -> anyhow::Result<()> {
         Ok(match self {
@@ -169,11 +167,11 @@ impl Writer {
     }
 
     /// Adds a representation data to the archive under the representation path
-    pub fn add(&mut self, repr: Representation, secrets: &Vec<String>) -> anyhow::Result<()> {
+    pub fn store(&mut self, repr: &Representation) -> anyhow::Result<()> {
         log::debug!("Writing {}...", repr.path.to_str().unwrap());
 
         let archive_path = fix_github_artifacts_path(repr.path.to_str().unwrap());
-        let data = self.strip_secrets(repr.data.to_string(), secrets);
+        let data = repr.data.clone();
 
         match self {
             Writer::Path(Archive(archive)) => {
@@ -236,30 +234,13 @@ impl Writer {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs::{self, File},
-        io::{Read, Seek},
-    };
+    use std::{env, fs::{self, File}, io::{Read, Seek}};
 
     use tempdir::TempDir;
 
-    use crate::gather::writer::Representation;
+    use crate::gather::{gather::Secrets, writer::Representation};
 
     use super::{Archive, Encoding, Writer};
-
-    #[test]
-    fn test_strip_secrets() {
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
-        let archive = tmp_dir.path().join("test.tar.gz");
-        let writer = Writer::new(&Archive::new(archive), &Encoding::Gzip).unwrap();
-
-        let secrets = vec!["password".to_string()];
-        let data = "omit password string".to_string();
-
-        let result = writer.strip_secrets(data, &secrets);
-
-        assert_eq!(result, "omit *** string");
-    }
 
     #[test]
     fn test_new_gzip() {
@@ -290,13 +271,15 @@ mod tests {
             data: "content".into(),
         };
 
-        assert!(writer.add(repr, &vec![]).is_ok());
+        assert!(writer.store(&repr).is_ok());
         assert!(writer.finish().is_ok());
         assert!(archive.with_file_name("test.tar.gz").exists());
     }
 
     #[test]
     fn test_add_zip() {
+        env::set_var("SECRET", "secret");
+
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Zip).unwrap();
@@ -306,7 +289,8 @@ mod tests {
             data: "content with secret".into(),
         };
 
-        assert!(writer.add(repr, &vec!["secret".into()]).is_ok());
+        let secret: Secrets = vec!["SECRET".into()].into();
+        assert!(writer.store(&secret.strip(&repr)).is_ok());
         assert!(writer.finish().is_ok());
         assert!(archive.exists());
 
@@ -324,6 +308,8 @@ mod tests {
 
     #[test]
     fn test_add_path() {
+        env::set_var("SECRET", "secret");
+
         let tmp_dir = TempDir::new("path").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("cluster1/collected");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Path).unwrap();
@@ -333,7 +319,8 @@ mod tests {
             data: "content with secret".into(),
         };
 
-        assert!(writer.add(repr, &vec!["secret".into()]).is_ok());
+        let secret: Secrets = vec!["SECRET".into()].into();
+        assert!(writer.store(&secret.strip(&repr)).is_ok());
         assert!(writer.finish().is_ok());
         assert!(archive.clone().exists());
         assert!(archive.join("test.txt").exists());

@@ -1,4 +1,4 @@
-use std::{env, fs::File, sync::Arc};
+use std::fs::File;
 
 use clap::{arg, command, ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::Deserialize;
@@ -12,7 +12,7 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        gather::GatherConfig,
+        gather::{GatherConfig, RunDuration},
         writer::{Archive, Encoding, KubeconfigFile, Writer},
     },
 };
@@ -200,6 +200,16 @@ pub struct GatherCommands {
     #[arg(short, long = "secret", action = ArgAction::Append)]
     #[serde(default)]
     secrets: Vec<String>,
+
+    /// The duration to run the collection for.
+    /// Defaults to 60 seconds.
+    ///
+    /// Example:
+    ///     --duration=2m
+    #[arg(short, long, value_name = "DURATION", default_value_t = Default::default(),
+        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
+    #[serde(default)]
+    duration: RunDuration,
 }
 
 impl Into<GatherCommands> for &Commands {
@@ -221,26 +231,18 @@ impl TryFrom<String> for GatherCommands {
 
 impl GatherCommands {
     pub async fn load(&self) -> anyhow::Result<GatherConfig> {
-        log::info!("Initializing client");
-
-        Ok(GatherConfig {
-            client: self.client().await?,
-            filter: self.into(),
-            writer: self.try_into()?,
-            secrets: self.secrets(),
-        })
-    }
-
-    /// Gets a list of secret environment variable values to exclude from the collected artifacts.
-    fn secrets(&self) -> Vec<String> {
-        self.secrets
-            .iter()
-            .map(|s| env::var(s).unwrap_or_default())
-            .filter(|s| !s.is_empty())
-            .collect()
+        Ok(GatherConfig::new(
+            self.client().await?,
+            self.into(),
+            self.try_into()?,
+            self.secrets.clone().into(),
+            self.duration,
+        ))
     }
 
     async fn client(&self) -> anyhow::Result<Client> {
+        log::info!("Initializing client...");
+
         Ok(match &self.kubeconfig {
             Some(kubeconfig) => kubeconfig.client().await?,
             None => Client::try_default().await?,
@@ -258,6 +260,8 @@ impl TryInto<Writer> for &GatherCommands {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<Writer, Self::Error> {
+        log::info!("Opening archive...");
+
         Writer::new(
             &self.file,
             match &self.encoding {
@@ -268,9 +272,9 @@ impl TryInto<Writer> for &GatherCommands {
     }
 }
 
-impl From<&GatherCommands> for Arc<List> {
+impl From<&GatherCommands> for List {
     fn from(val: &GatherCommands) -> Self {
-        Arc::new(List({
+        List({
             let data: Vec<Vec<FilterType>> = vec![
                 val.include_namespace
                     .iter()
@@ -309,13 +313,13 @@ impl From<&GatherCommands> for Arc<List> {
                 .map(Clone::clone)
                 .map(Into::into)
                 .collect()
-        }))
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{env, io::Write};
 
     use k8s_openapi::api::core::v1::Namespace;
     use kube::Api;
@@ -327,29 +331,6 @@ mod tests {
     use crate::tests::kwok;
 
     use super::*;
-
-    #[test]
-    fn test_secrets_empty() {
-        let commands = GatherCommands::default();
-        let secrets = commands.secrets();
-
-        assert!(secrets.is_empty());
-    }
-
-    #[test]
-    fn test_secrets_populated() {
-        env::set_var("FOO", "foo");
-        env::set_var("BAR", "bar");
-
-        let commands = GatherCommands {
-            secrets: vec!["FOO".into(), "BAR".into(), "OTHER".into()],
-            ..Default::default()
-        };
-
-        let secrets = commands.secrets();
-
-        assert_eq!(secrets, vec!["foo", "bar"]);
-    }
 
     #[tokio::test]
     #[serial]

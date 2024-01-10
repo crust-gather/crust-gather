@@ -24,6 +24,7 @@ pub(crate) trait FilterDefinition:
 {
 }
 
+#[derive(Default)]
 pub struct List(pub Vec<FilterType>);
 
 #[derive(Clone)]

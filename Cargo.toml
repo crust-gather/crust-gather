@@ -20,14 +20,17 @@ build_html = "2.4.0"
 log = "0.4.20"
 env_logger = "0.10.1"
 regex = "1.10.2"
+futures = "0.3.30"
+tokio-retry = "0.3.0"
+duration-string = { version = "0.3.0", features = ["serde"] }
 
 [dev-dependencies]
 xid = "1.0.0"
 tempdir = "0.3.7"
-tokio-retry = "0.3.0"
 serial_test = "3.0.0"
 
 [profile.release]
+strip = true
 opt-level = "z"
 codegen-units = 1
 

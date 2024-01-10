@@ -1,30 +1,44 @@
+use crate::{
+    filters::filter::Filter,
+    gather::{
+        gather::{GatherConfig, Secrets},
+        writer::Writer,
+    },
+};
 use async_trait::async_trait;
-use kube::{Api, Client};
+use kube::Api;
 use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta};
-use std::{path::PathBuf, sync::Arc};
-
-use crate::filters::filter::Filter;
+use std::{
+    fmt::Debug,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use super::interface::Collect;
 
+#[derive(Clone)]
 pub struct Object {
     pub api: Api<DynamicObject>,
     pub filter: Arc<dyn Filter>,
-    resource: ApiResource,
+    pub resource: ApiResource,
+    secrets: Secrets,
+    writer: Arc<Mutex<Writer>>,
 }
 
-/// Constructs a new Collectable instance.
-///
-/// # Arguments
-///
-/// * `client` - The Kubernetes client to use for API calls.
-/// * `resource` - The Kubernetes discovery resource to collect.
-/// * `filter` - The filter to apply when collecting objects of the resource.
+impl Debug for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Object")
+            .field("resource", &self.resource.kind)
+            .finish()
+    }
+}
 impl Object {
-    pub fn new(client: Client, resource: ApiResource, filter: Arc<dyn Filter>) -> Self {
+    pub fn new(config: GatherConfig, resource: ApiResource) -> Self {
         Object {
-            api: Api::all_with(client, &resource),
-            filter,
+            api: Api::all_with(config.client, &resource),
+            filter: config.filter,
+            writer: config.writer,
+            secrets: config.secrets,
             resource,
         }
     }
@@ -36,6 +50,14 @@ impl Object {
 /// This allows Collectable to be collected into an archive under the
 /// PathBuf destination returned by the path method.
 impl Collect for Object {
+    fn get_secrets(&self) -> Secrets {
+        self.secrets.clone()
+    }
+
+    fn get_writer(&self) -> Arc<Mutex<Writer>> {
+        self.writer.clone()
+    }
+
     /// Constructs the path for storing the collected Kubernetes object.
     ///
     /// The path is constructed differently for cluster-scoped vs namespaced objects.
@@ -59,25 +81,30 @@ impl Collect for Object {
         .into()
     }
 
+    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
+        self.filter.filter(gvk, obj)
+    }
+
+    fn get_api(&self) -> Api<DynamicObject> {
+        log::info!(
+            "Collecting {} {} resources",
+            self.resource.group,
+            self.resource.kind
+        );
+        self.api.clone()
+    }
+
     fn get_type_meta(&self) -> TypeMeta {
         TypeMeta {
             kind: self.resource.kind.clone(),
             api_version: self.resource.api_version.clone(),
         }
     }
-
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.api.clone()
-    }
-
-    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
-        self.filter.filter(gvk, obj)
-    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, sync::Arc};
+    use std::path::PathBuf;
 
     use k8s_openapi::{
         api::core::v1::{Namespace, Pod},
@@ -91,6 +118,10 @@ mod test {
 
     use crate::{
         filters::{filter::List, namespace::NamespaceInclude},
+        gather::{
+            gather::GatherConfig,
+            writer::{Archive, Encoding, Writer},
+        },
         scanners::{generic::Object, interface::Collect},
         tests::kwok,
     };
@@ -136,12 +167,22 @@ mod test {
         .expect("Timeout")
         .unwrap();
 
+        let api: Api<DynamicObject> =
+            Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
+        let pod = api.get("test").await.unwrap();
         let repr = Object::new(
-            test_env.client().await,
+            GatherConfig::new(
+                test_env.client().await,
+                List(vec![filter.into()]),
+                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                Default::default(),
+                "1m".to_string().try_into().unwrap(),
+            ),
             ApiResource::erase::<Pod>(&()),
-            Arc::new(filter),
         )
-        .collect()
+        .representations(&pod)
         .await
         .expect("Succeed");
 
@@ -161,9 +202,16 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
         let collectable = Object::new(
-            test_env.client().await,
+            GatherConfig::new(
+                test_env.client().await,
+                List(vec![]),
+                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                Default::default(),
+                "1m".to_string().try_into().unwrap(),
+            ),
             ApiResource::erase::<Namespace>(&()),
-            Arc::new(List(vec![])),
         );
 
         let expected = PathBuf::from("cluster/namespace/test.yaml");
@@ -181,9 +229,16 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Object::new(
-            test_env.client().await,
+            GatherConfig::new(
+                test_env.client().await,
+                List(vec![]),
+                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                Default::default(),
+                "1m".to_string().try_into().unwrap(),
+            ),
             ApiResource::erase::<Pod>(&()),
-            Arc::new(List(vec![])),
         );
 
         let expected = PathBuf::from("namespaces/default/pod/test.yaml");
