@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{self, bail};
 use duration_string::DurationString;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{Event, Pod};
+use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use kube::{discovery, Client};
 use kube_core::discovery::verbs::LIST;
 use kube_core::ApiResource;
@@ -18,6 +18,7 @@ use crate::scanners::events::Events;
 use crate::scanners::generic::Object;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogGroup, Logs};
+use crate::scanners::nodes::Nodes;
 
 use super::writer::{Representation, Writer};
 
@@ -134,6 +135,7 @@ impl GatherConfig {
 }
 
 enum Group {
+    Nodes(ApiResource),
     Logs(ApiResource),
     Events(ApiResource),
     DynamicObject(ApiResource),
@@ -144,6 +146,7 @@ impl Into<Group> for ApiResource {
         match self {
             r if r == ApiResource::erase::<Event>(&()) => Group::Events(r),
             r if r == ApiResource::erase::<Pod>(&()) => Group::Logs(r),
+            r if r == ApiResource::erase::<Node>(&()) => Group::Nodes(r),
             r => Group::DynamicObject(r),
         }
     }
@@ -154,6 +157,7 @@ enum Collectable {
     Object(Object),
     Logs(Logs),
     Events(Events),
+    Nodes(Nodes),
 }
 
 impl Collectable {
@@ -162,6 +166,7 @@ impl Collectable {
             Collectable::Object(o) => o.collect_retry(),
             Collectable::Logs(l) => l.collect_retry(),
             Collectable::Events(e) => e.collect_retry(),
+            Collectable::Nodes(n) => n.collect_retry(),
         }
         .await
     }
@@ -170,6 +175,10 @@ impl Collectable {
 impl Group {
     fn to_collectable(self, gather: GatherConfig) -> Vec<Collectable> {
         match self {
+            Group::Nodes(resource) => vec![
+                Collectable::Nodes(Nodes::from(gather.clone())),
+                Collectable::Object(Object::new(gather, resource)),
+            ],
             Group::Logs(resource) => vec![
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Current)),
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Previous)),

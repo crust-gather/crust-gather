@@ -1,5 +1,6 @@
 use anyhow::{self, bail};
 use async_trait::async_trait;
+use futures::future::join_all;
 use kube::Api;
 use kube_core::params::ListParams;
 use kube_core::{DynamicObject, GroupVersionKind, TypeMeta};
@@ -94,9 +95,13 @@ pub trait Collect: Sync + Send {
 
     /// Lists all object and collects representations for them.
     async fn collect(&self) -> anyhow::Result<()> {
-        for obj in self.list().await? {
-            self.write_with_retry(&obj).await?;
-        }
+        join_all(
+            self.list()
+                .await?
+                .iter()
+                .map(|c| async { self.write_with_retry(c).await }),
+        )
+        .await;
 
         Ok(())
     }
@@ -115,8 +120,7 @@ pub trait Collect: Sync + Send {
         let representations = Retry::spawn(Self::delay(), || async {
             self.representations(object).await
         })
-        .await
-        .unwrap();
+        .await?;
 
         let writer = self.get_writer();
         for repr in representations {
