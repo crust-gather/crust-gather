@@ -31,9 +31,9 @@ impl Default for Archive {
     }
 }
 
-impl Into<PathBuf> for Archive {
-    fn into(self) -> PathBuf {
-        self.0
+impl From<Archive> for PathBuf {
+    fn from(val: Archive) -> Self {
+        val.0
     }
 }
 
@@ -71,9 +71,9 @@ impl TryFrom<String> for KubeconfigFile {
     }
 }
 
-impl Into<config::Kubeconfig> for &KubeconfigFile {
-    fn into(self) -> config::Kubeconfig {
-        self.0.clone()
+impl From<&KubeconfigFile> for config::Kubeconfig {
+    fn from(val: &KubeconfigFile) -> Self {
+        val.0.clone()
     }
 }
 
@@ -121,7 +121,7 @@ impl Representation {
     }
 
     pub fn with_path(self, path: PathBuf) -> Self {
-        Self { path: path, ..self }
+        Self { path, ..self }
     }
 
     pub fn data(&self) -> &str {
@@ -138,32 +138,30 @@ pub enum Writer {
     Zip(Archive, ZipWriter<File>),
 }
 
-impl Into<Arc<Mutex<Writer>>> for Writer {
-    fn into(self) -> Arc<Mutex<Writer>> {
-        Arc::new(Mutex::new(self))
+impl From<Writer> for Arc<Mutex<Writer>> {
+    fn from(val: Writer) -> Self {
+        Arc::new(Mutex::new(val))
     }
 }
 
 /// Replaces invalid characters in a path with dashes, to make the path valid for GitHub artifacts.
 /// GitHub artifacts paths may not contain : * ? | characters. This replaces those characters with dashes.
 fn fix_github_artifacts_path(path: &str) -> String {
-    path.replace(":", "-")
-        .replace("*", "-")
-        .replace("?", "-")
-        .replace("|", "-")
+    path.replace([':', '*', '?', '|'], "-")
 }
 
 impl Writer {
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub fn finish(&mut self) -> anyhow::Result<()> {
-        Ok(match self {
+        match self {
             Writer::Path(_) => (),
             Writer::Gzip(_, builder) => builder.finish()?,
             Writer::Zip(_, writer) => match writer.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             }?,
-        })
+        };
+        Ok(())
     }
 
     /// Adds a representation data to the archive under the representation path
@@ -200,7 +198,7 @@ impl Writer {
                 let file = PathBuf::from(root_prefix).join(archive_path);
                 let file = file.to_str().unwrap();
                 writer.start_file(file, FileOptions::default())?;
-                writer.write(data.as_bytes())?;
+                writer.write_all(data.as_bytes())?;
             }
         }
         Ok(())
@@ -234,11 +232,15 @@ impl Writer {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs::{self, File}, io::{Read, Seek}};
+    use std::{
+        env,
+        fs::{self, File},
+        io::{Read, Seek},
+    };
 
     use tempdir::TempDir;
 
-    use crate::gather::{gather::Secrets, writer::Representation};
+    use crate::gather::{config::Secrets, writer::Representation};
 
     use super::{Archive, Encoding, Writer};
 

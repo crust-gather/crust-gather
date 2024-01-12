@@ -37,9 +37,9 @@ pub enum FilterType {
     GroupExclude(GroupExclude),
 }
 
-impl Into<FilterType> for &FilterType {
-    fn into(self) -> FilterType {
-        self.clone()
+impl From<&FilterType> for FilterType {
+    fn from(val: &FilterType) -> Self {
+        val.clone()
     }
 }
 
@@ -67,7 +67,7 @@ impl Filter for List {
             FilterType::GroupExclude(_) => false,
         });
 
-        return no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed));
+        no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed))
     }
 
     fn filter_api(&self, gvk: &GroupVersionKind) -> bool {
@@ -93,7 +93,7 @@ impl Filter for List {
             | FilterType::KindExclude(_) => false,
         });
 
-        return no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed));
+        no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed))
     }
 }
 

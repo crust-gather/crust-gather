@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::gather::{
-    gather::{GatherConfig, Secrets},
+    config::{Config, Secrets},
     writer::{Representation, Writer},
 };
 
@@ -31,8 +31,8 @@ impl Debug for Events {
     }
 }
 
-impl From<GatherConfig> for Events {
-    fn from(value: GatherConfig) -> Self {
+impl From<Config> for Events {
+    fn from(value: Config) -> Self {
         Events {
             collectable: Object::new(value, ApiResource::erase::<Event>(&())),
         }
@@ -49,7 +49,7 @@ impl Collect for Events {
         self.collectable.get_writer()
     }
 
-    fn path(self: &Self, _: &DynamicObject) -> PathBuf {
+    fn path(&self, _: &DynamicObject) -> PathBuf {
         "event-filter.html".into()
     }
 

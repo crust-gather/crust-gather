@@ -51,9 +51,9 @@ impl TryFrom<String> for NamespaceInclude {
     }
 }
 
-impl Into<FilterType> for NamespaceInclude {
-    fn into(self) -> FilterType {
-        FilterType::NamespaceInclude(self)
+impl From<NamespaceInclude> for FilterType {
+    fn from(val: NamespaceInclude) -> Self {
+        FilterType::NamespaceInclude(val)
     }
 }
 
@@ -75,9 +75,9 @@ impl TryFrom<String> for NamespaceExclude {
     }
 }
 
-impl Into<FilterType> for NamespaceExclude {
-    fn into(self) -> FilterType {
-        FilterType::NamespaceExclude(self)
+impl From<NamespaceExclude> for FilterType {
+    fn from(val: NamespaceExclude) -> Self {
+        FilterType::NamespaceExclude(val)
     }
 }
 

@@ -33,7 +33,7 @@ impl TestEnv {
     /// kubeconfig file for this cluster.
     fn delete(&mut self) {
         let status = Command::new("kwokctl")
-            .args(&["delete", "cluster", "--name", &self.name])
+            .args(["delete", "cluster", "--name", &self.name])
             .status()
             .expect("kwok cluster delete failed");
         assert!(

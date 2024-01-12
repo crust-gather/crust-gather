@@ -14,7 +14,7 @@ use kube_core::{
 };
 
 use crate::gather::{
-    gather::{GatherConfig, Secrets},
+    config::{Config, Secrets},
     writer::{Representation, Writer},
 };
 
@@ -35,10 +35,10 @@ impl fmt::Display for LogGroup {
     }
 }
 
-impl Into<LogParams> for LogGroup {
-    fn into(self) -> LogParams {
+impl From<LogGroup> for LogParams {
+    fn from(val: LogGroup) -> Self {
         LogParams {
-            previous: self == LogGroup::Previous,
+            previous: val == LogGroup::Previous,
             ..Default::default()
         }
     }
@@ -60,7 +60,7 @@ impl Debug for Logs {
 }
 
 impl Logs {
-    pub fn new(config: GatherConfig, group: LogGroup) -> Self {
+    pub fn new(config: Config, group: LogGroup) -> Self {
         Logs {
             collectable: Object::new(config, ApiResource::erase::<Pod>(&())),
             group,
@@ -92,7 +92,7 @@ impl Collect for Logs {
     }
 
     /// Returns the path for the pod object. This will be the root path for the logs to store in.
-    fn path(self: &Self, obj: &DynamicObject) -> PathBuf {
+    fn path(&self, obj: &DynamicObject) -> PathBuf {
         self.collectable.path(obj)
     }
 
@@ -183,7 +183,7 @@ mod test {
     use crate::{
         filters::{filter::List, namespace::NamespaceInclude},
         gather::{
-            gather::GatherConfig,
+            config::Config,
             writer::{Archive, Encoding, Writer},
         },
         scanners::{generic::Object, interface::Collect},
@@ -235,12 +235,11 @@ mod test {
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
             collectable: Object::new(
-                GatherConfig::new(
+                Config::new(
                     test_env.client().await,
                     List(vec![filter.into()]),
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
-                        .expect("failed to create builder")
-                        .into(),
+                        .expect("failed to create builder"),
                     Default::default(),
                     "1m".to_string().try_into().unwrap(),
                 ),

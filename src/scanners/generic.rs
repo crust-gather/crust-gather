@@ -1,7 +1,7 @@
 use crate::{
     filters::filter::Filter,
     gather::{
-        gather::{GatherConfig, Secrets},
+        config::{Config, Secrets},
         writer::Writer,
     },
 };
@@ -33,7 +33,7 @@ impl Debug for Object {
     }
 }
 impl Object {
-    pub fn new(config: GatherConfig, resource: ApiResource) -> Self {
+    pub fn new(config: Config, resource: ApiResource) -> Self {
         Object {
             api: Api::all_with(config.client, &resource),
             filter: config.filter,
@@ -65,7 +65,7 @@ impl Collect for Object {
     /// Namespaced objects are stored under `namespaces/{namespace}/{kind}/{name}.yaml`.
     ///
     /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
-    fn path(self: &Self, obj: &DynamicObject) -> PathBuf {
+    fn path(&self, obj: &DynamicObject) -> PathBuf {
         let obj = obj.clone();
         let (kind, namespace, name) = (
             obj.types.unwrap().kind.to_lowercase(),
@@ -119,7 +119,7 @@ mod test {
     use crate::{
         filters::{filter::List, namespace::NamespaceInclude},
         gather::{
-            gather::GatherConfig,
+            config::Config,
             writer::{Archive, Encoding, Writer},
         },
         scanners::{generic::Object, interface::Collect},
@@ -171,12 +171,11 @@ mod test {
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
         let pod = api.get("test").await.unwrap();
         let repr = Object::new(
-            GatherConfig::new(
+            Config::new(
                 test_env.client().await,
                 List(vec![filter.into()]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                    .expect("failed to create builder"),
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
             ),
@@ -202,12 +201,11 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
         let collectable = Object::new(
-            GatherConfig::new(
+            Config::new(
                 test_env.client().await,
                 List(vec![]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                    .expect("failed to create builder"),
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
             ),
@@ -229,12 +227,11 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Object::new(
-            GatherConfig::new(
+            Config::new(
                 test_env.client().await,
                 List(vec![]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                    .expect("failed to create builder"),
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
             ),

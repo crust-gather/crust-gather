@@ -42,9 +42,9 @@ impl TryFrom<String> for KindInclude {
     }
 }
 
-impl Into<FilterType> for KindInclude {
-    fn into(self) -> FilterType {
-        FilterType::KindInclude(self)
+impl From<KindInclude> for FilterType {
+    fn from(val: KindInclude) -> Self {
+        FilterType::KindInclude(val)
     }
 }
 
@@ -87,9 +87,9 @@ impl TryFrom<String> for KindExclude {
     }
 }
 
-impl Into<FilterType> for KindExclude {
-    fn into(self) -> FilterType {
-        FilterType::KindExclude(self)
+impl From<KindExclude> for FilterType {
+    fn from(val: KindExclude) -> Self {
+        FilterType::KindExclude(val)
     }
 }
 

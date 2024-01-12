@@ -12,7 +12,7 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        gather::{GatherConfig, RunDuration},
+        config::{Config, RunDuration},
         writer::{Archive, Encoding, KubeconfigFile, Writer},
     },
 };
@@ -212,9 +212,9 @@ pub struct GatherCommands {
     duration: RunDuration,
 }
 
-impl Into<GatherCommands> for &Commands {
-    fn into(self) -> GatherCommands {
-        match self {
+impl From<&Commands> for GatherCommands {
+    fn from(val: &Commands) -> Self {
+        match val {
             Commands::Collect { config } => config.clone(),
             Commands::CollectFromConfig { config } => config.clone(),
         }
@@ -230,8 +230,8 @@ impl TryFrom<String> for GatherCommands {
 }
 
 impl GatherCommands {
-    pub async fn load(&self) -> anyhow::Result<GatherConfig> {
-        Ok(GatherConfig::new(
+    pub async fn load(&self) -> anyhow::Result<Config> {
+        Ok(Config::new(
             self.client().await?,
             self.into(),
             self.try_into()?,
@@ -251,8 +251,8 @@ impl GatherCommands {
 }
 
 impl Commands {
-    pub async fn load(&self) -> anyhow::Result<GatherConfig> {
-        Ok(Into::<GatherCommands>::into(self).load().await?)
+    pub async fn load(&self) -> anyhow::Result<Config> {
+        Into::<GatherCommands>::into(self).load().await
     }
 }
 

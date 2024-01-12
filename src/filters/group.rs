@@ -85,9 +85,9 @@ impl TryFrom<String> for GroupInclude {
     }
 }
 
-impl Into<FilterType> for GroupInclude {
-    fn into(self) -> FilterType {
-        FilterType::GroupInclude(self)
+impl From<GroupInclude> for FilterType {
+    fn from(val: GroupInclude) -> Self {
+        FilterType::GroupInclude(val)
     }
 }
 
@@ -130,9 +130,9 @@ impl TryFrom<String> for GroupExclude {
     }
 }
 
-impl Into<FilterType> for GroupExclude {
-    fn into(self) -> FilterType {
-        FilterType::GroupExclude(self)
+impl From<GroupExclude> for FilterType {
+    fn from(val: GroupExclude) -> Self {
+        FilterType::GroupExclude(val)
     }
 }
 

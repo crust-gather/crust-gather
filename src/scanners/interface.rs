@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
 use tokio_retry::Retry;
 
-use crate::gather::gather::Secrets;
+use crate::gather::config::Secrets;
 use crate::gather::writer::{Representation, Writer};
 
 #[async_trait]

@@ -19,7 +19,7 @@ use kube_core::{
 };
 
 use crate::gather::{
-    gather::{GatherConfig, Secrets},
+    config::{Config, Secrets},
     writer::{Representation, Writer},
 };
 
@@ -36,8 +36,8 @@ impl Debug for Nodes {
     }
 }
 
-impl From<GatherConfig> for Nodes {
-    fn from(value: GatherConfig) -> Self {
+impl From<Config> for Nodes {
+    fn from(value: Config) -> Self {
         Nodes {
             collectable: Object::new(value, ApiResource::erase::<Node>(&())),
         }
@@ -55,7 +55,7 @@ impl Collect for Nodes {
     }
 
     /// Returns the path for the pod object. This will be the root path for the logs to store in.
-    fn path(self: &Self, obj: &DynamicObject) -> PathBuf {
+    fn path(&self, obj: &DynamicObject) -> PathBuf {
         self.collectable.path(obj)
     }
 

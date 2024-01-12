@@ -71,12 +71,12 @@ impl Default for RunDuration {
 
 impl Display for RunDuration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 
 #[derive(Clone)]
-pub struct GatherConfig {
+pub struct Config {
     pub client: Client,
     pub filter: Arc<List>,
     pub writer: Arc<Mutex<Writer>>,
@@ -84,15 +84,15 @@ pub struct GatherConfig {
     duration: RunDuration,
 }
 
-impl GatherConfig {
+impl Config {
     pub fn new(
         client: Client,
         filter: List,
         writer: Writer,
         secrets: Secrets,
         duration: RunDuration,
-    ) -> GatherConfig {
-        GatherConfig {
+    ) -> Config {
+        Config {
             client,
             filter: Arc::new(filter),
             secrets,
@@ -102,7 +102,7 @@ impl GatherConfig {
     }
 }
 
-impl GatherConfig {
+impl Config {
     /// Collect representations for resources from discovery to the specified archive file.
     pub async fn collect(&self) -> anyhow::Result<()> {
         log::info!("Collecting resources...");
@@ -113,7 +113,7 @@ impl GatherConfig {
             .groups()
             .flat_map(|g| g.recommended_resources())
             .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
-            .flat_map(|group: Group| group.to_collectable(self.clone()))
+            .flat_map(|group: Group| group.into_collectable(self.clone()))
             .collect();
 
         match timeout(
@@ -126,7 +126,7 @@ impl GatherConfig {
             Err(e) => log::error!("{e}"),
         }
 
-        Ok(self.writer.lock().unwrap().finish()?)
+        self.writer.lock().unwrap().finish()
     }
 
     async fn iterate_until_completion(&self, collectables: Vec<Collectable>) {
@@ -141,9 +141,9 @@ enum Group {
     DynamicObject(ApiResource),
 }
 
-impl Into<Group> for ApiResource {
-    fn into(self) -> Group {
-        match self {
+impl From<ApiResource> for Group {
+    fn from(val: ApiResource) -> Self {
+        match val {
             r if r == ApiResource::erase::<Event>(&()) => Group::Events(r),
             r if r == ApiResource::erase::<Pod>(&()) => Group::Logs(r),
             r if r == ApiResource::erase::<Node>(&()) => Group::Nodes(r),
@@ -173,7 +173,7 @@ impl Collectable {
 }
 
 impl Group {
-    fn to_collectable(self, gather: GatherConfig) -> Vec<Collectable> {
+    fn into_collectable(self, gather: Config) -> Vec<Collectable> {
         match self {
             Group::Nodes(resource) => vec![
                 Collectable::Nodes(Nodes::from(gather.clone())),
@@ -246,7 +246,7 @@ mod tests {
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
-        let config = GatherConfig {
+        let config = Config {
             client: test_env.client().await,
             filter: Arc::new(List(vec![NamespaceInclude::try_from(
                 "default".to_string(),
@@ -273,7 +273,7 @@ mod tests {
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
-        let config = GatherConfig {
+        let config = Config {
             client: test_env.client().await,
             filter: Arc::new(List(vec![])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
@@ -296,7 +296,7 @@ mod tests {
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
-        let config = GatherConfig {
+        let config = Config {
             client: test_env.client().await,
             filter: Arc::new(List(vec![])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Path)

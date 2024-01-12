@@ -6,9 +6,9 @@ mod scanners;
 #[cfg(test)]
 mod tests;
 
-use anyhow;
+
 use clap::{self, Parser};
-use log;
+
 
 use crate::cli::Cli;
 

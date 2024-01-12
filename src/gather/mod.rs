@@ -1,2 +1,2 @@
-pub mod gather;
+pub mod config;
 pub mod writer;
