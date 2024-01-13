@@ -8,6 +8,8 @@
 
 - Collect all available resources across the cluster.
 - Collect container logs.
+- Collect node kubelet logs.
+- Resource collection is parallel, with exponential backoff retry and configurable timeout.
 - Filter collected resources based on regexes, include/excludes, namespaces, groups or kinds.
 - Display events in an HTML table with filtering capabilities.
 - Store data in a zip/tar.gz archive.

@@ -6,7 +6,7 @@ use k8s_openapi::{
     chrono::{DateTime, Utc},
 };
 use kube::Api;
-use kube_core::{ApiResource, Resource, TypeMeta};
+use kube_core::{ApiResource, TypeMeta};
 use std::{
     fmt::Debug,
     path::PathBuf,
@@ -18,7 +18,7 @@ use crate::gather::{
     writer::{Representation, Writer},
 };
 
-use super::{generic::Objects, interface::Collect};
+use super::{interface::Collect, objects::Objects};
 
 #[derive(Clone)]
 pub struct Events {
@@ -131,10 +131,7 @@ impl Collect<Event> for Events {
     }
 
     fn get_type_meta(&self) -> TypeMeta {
-        TypeMeta {
-            api_version: Event::api_version(&()).into(),
-            kind: Event::kind(&()).into(),
-        }
+        self.collectable.get_type_meta()
     }
 
     async fn collect(&self) -> anyhow::Result<()> {

@@ -7,16 +7,14 @@ use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
-use kube_core::{
-    subresource::LogParams, ApiResource, ErrorResponse, Resource, ResourceExt, TypeMeta,
-};
+use kube_core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt, TypeMeta};
 
 use crate::gather::{
     config::{Config, Secrets},
     writer::{Representation, Writer},
 };
 
-use super::{generic::Objects, interface::Collect};
+use super::{interface::Collect, objects::Objects};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LogGroup {
@@ -130,14 +128,11 @@ impl Collect<Pod> for Logs {
     }
 
     fn get_api(&self) -> Api<Pod> {
-        Collect::get_api(&self.collectable)
+        self.collectable.get_api()
     }
 
     fn get_type_meta(&self) -> TypeMeta {
-        TypeMeta {
-            api_version: Pod::api_version(&()).into(),
-            kind: Pod::kind(&()).into(),
-        }
+        self.collectable.get_type_meta()
     }
 }
 
@@ -159,7 +154,7 @@ mod test {
             config::Config,
             writer::{Archive, Encoding, Writer},
         },
-        scanners::{generic::Objects, interface::Collect},
+        scanners::{interface::Collect, objects::Objects},
         tests::kwok,
     };
 

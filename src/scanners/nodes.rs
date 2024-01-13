@@ -14,7 +14,7 @@ use kube::Api;
 use kube_core::{
     params::{DeleteParams, WatchParams},
     subresource::AttachParams,
-    ApiResource, ErrorResponse, ObjectMeta, Resource, ResourceExt, TypeMeta, WatchEvent,
+    ApiResource, ErrorResponse, ObjectMeta, ResourceExt, TypeMeta, WatchEvent,
 };
 
 use crate::gather::{
@@ -22,7 +22,7 @@ use crate::gather::{
     writer::{Representation, Writer},
 };
 
-use super::{generic::Objects, interface::Collect};
+use super::{interface::Collect, objects::Objects};
 
 #[derive(Clone)]
 pub struct Nodes {
@@ -129,10 +129,7 @@ impl Collect<Node> for Nodes {
     }
 
     fn get_type_meta(&self) -> TypeMeta {
-        TypeMeta {
-            api_version: Node::api_version(&()).into(),
-            kind: Node::kind(&()).into(),
-        }
+        self.collectable.get_type_meta()
     }
 }
 

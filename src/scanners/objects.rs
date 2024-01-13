@@ -120,7 +120,7 @@ mod test {
             config::Config,
             writer::{Archive, Encoding, Writer},
         },
-        scanners::{generic::Objects, interface::Collect},
+        scanners::{interface::Collect, objects::Objects},
         tests::kwok,
     };
     use tokio::time::timeout;
@@ -210,7 +210,7 @@ mod test {
             ApiResource::erase::<Namespace>(&()),
         );
 
-        let expected = PathBuf::from("cluster/namespace/test.yaml");
+        let expected = PathBuf::from("cluster/v1/namespace/test.yaml");
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);
@@ -236,7 +236,7 @@ mod test {
             ApiResource::erase::<Pod>(&()),
         );
 
-        let expected = PathBuf::from("namespaces/default/pod/test.yaml");
+        let expected = PathBuf::from("namespaces/default/v1/pod/test.yaml");
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);

@@ -30,6 +30,7 @@ trait-set = "0.3.0"
 xid = "1.0.0"
 tempdir = "0.3.7"
 serial_test = "3.0.0"
+serde_with = "3.4.0"
 
 [profile.release]
 strip = true

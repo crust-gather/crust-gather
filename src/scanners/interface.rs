@@ -45,22 +45,24 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Constructs the path for storing the collected Kubernetes object.
     ///
     /// The path is constructed differently for cluster-scoped vs namespaced objects.
-    /// Cluster-scoped objects are stored under `cluster/{kind}/{name}.yaml`.
-    /// Namespaced objects are stored under `namespaces/{namespace}/{kind}/{name}.yaml`.
+    /// Cluster-scoped objects are stored under `cluster/{api_version}/{kind}/{name}.yaml`.
+    /// Namespaced objects are stored under `namespaces/{namespace}/{api_version}/{kind}/{name}.yaml`.
     ///
     /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
     fn path(&self, obj: &R) -> PathBuf {
-        let obj = obj.clone();
-        let (kind, namespace, name) = (
+        let (api_version, kind, name) = (
+            self.get_type_meta()
+                .api_version
+                .to_lowercase()
+                .replace('/', "-"),
             self.get_type_meta().kind.to_lowercase(),
-            obj.namespace().unwrap_or_default(),
             obj.name_any(),
         );
 
         // Constructs the path for the collected object, cluster-scoped or namespaced.
-        match namespace.as_str() {
-            "" => format!("cluster/{kind}/{name}.yaml"),
-            _ => format!("namespaces/{namespace}/{kind}/{name}.yaml"),
+        match obj.namespace().unwrap_or_default().as_str() {
+            "" => format!("cluster/{api_version}/{kind}/{name}.yaml"),
+            namespace => format!("namespaces/{namespace}/{api_version}/{kind}/{name}.yaml"),
         }
         .into()
     }
@@ -79,12 +81,11 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             object.name_any(),
         );
 
-        let data = DynamicObject::new(
-            object.name_any().as_str(),
-            &ApiResource::from_gvk(&GroupVersionKind::try_from(self.get_type_meta())?),
-        )
-        .data(serde_json::to_value(object)?)
-        .within(object.namespace().unwrap_or_default().as_str());
+        let data = DynamicObject {
+            types: Some(self.get_type_meta()),
+            metadata: Default::default(),
+            data: serde_json::to_value(object)?,
+        };
 
         Ok(vec![Representation::new()
             .with_path(self.path(object))
