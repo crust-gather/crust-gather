@@ -1,8 +1,10 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
-use kube_core::{DynamicObject, GroupVersionKind};
+use kube_core::{GroupVersionKind, Resource};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use crate::scanners::interface::ResourceThreadSafe;
 
 use super::{
     group::{GroupExclude, GroupInclude},
@@ -10,17 +12,26 @@ use super::{
     namespace::{NamespaceExclude, NamespaceInclude},
 };
 
-pub trait Filter: Sync + Send {
-    fn filter_object(&self, _: &DynamicObject) -> bool;
+pub trait Filter<R>: Sync + Send
+where
+    R: Resource,
+    R: Serialize + DeserializeOwned,
+    R: Clone + Sync + Send + Debug,
+{
+    fn filter_object(&self, _: &R) -> bool;
     fn filter_api(&self, _: &GroupVersionKind) -> bool;
 
-    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
+    fn filter(&self, gvk: &GroupVersionKind, obj: &R) -> bool {
         self.filter_api(gvk) && self.filter_object(obj)
     }
 }
 
-pub(crate) trait FilterDefinition:
-    Filter + TryFrom<String> + Into<FilterType> + Clone
+pub(crate) trait FilterDefinition<R>:
+    Filter<R> + TryFrom<String> + Into<FilterType> + Clone
+where
+    R: Resource,
+    R: Serialize + DeserializeOwned,
+    R: Clone + Sync + Send + Debug,
 {
 }
 
@@ -43,8 +54,8 @@ impl From<&FilterType> for FilterType {
     }
 }
 
-impl Filter for List {
-    fn filter_object(&self, obj: &DynamicObject) -> bool {
+impl<R: ResourceThreadSafe> Filter<R> for List {
+    fn filter_object(&self, obj: &R) -> bool {
         let no_excludes = self
             .0
             .iter()
@@ -75,9 +86,9 @@ impl Filter for List {
             .0
             .iter()
             .map(|f| match f {
-                FilterType::NamespaceExclude(f) => f.filter_api(gvk),
-                FilterType::KindExclude(f) => f.filter_api(gvk),
-                FilterType::GroupExclude(f) => f.filter_api(gvk),
+                FilterType::NamespaceExclude(f) => Filter::<R>::filter_api(f, gvk),
+                FilterType::KindExclude(f) => Filter::<R>::filter_api(f, gvk),
+                FilterType::GroupExclude(f) => Filter::<R>::filter_api(f, gvk),
                 FilterType::NamespaceInclude(_)
                 | FilterType::KindInclude(_)
                 | FilterType::GroupInclude(_) => true,
@@ -85,9 +96,9 @@ impl Filter for List {
             .all(|allowed| allowed);
 
         let mut includes = self.0.iter().map(|f| match f {
-            FilterType::NamespaceInclude(f) => f.filter_api(gvk),
-            FilterType::KindInclude(f) => f.filter_api(gvk),
-            FilterType::GroupInclude(f) => f.filter_api(gvk),
+            FilterType::NamespaceInclude(f) => Filter::<R>::filter_api(f, gvk),
+            FilterType::KindInclude(f) => Filter::<R>::filter_api(f, gvk),
+            FilterType::GroupInclude(f) => Filter::<R>::filter_api(f, gvk),
             FilterType::NamespaceExclude(_)
             | FilterType::GroupExclude(_)
             | FilterType::KindExclude(_) => false,
@@ -131,7 +142,7 @@ impl TryFrom<String> for FilterRegex {
 mod tests {
 
     use k8s_openapi::api::core::v1::Pod;
-    use kube_core::ApiResource;
+    use kube_core::{ApiResource, DynamicObject};
 
     use crate::filters::namespace::{NamespaceExclude, NamespaceInclude};
 

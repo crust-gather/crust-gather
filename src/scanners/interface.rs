@@ -1,24 +1,36 @@
 use anyhow::{self, bail};
 use async_trait::async_trait;
 use futures::future::join_all;
+use k8s_openapi::serde_json;
 use kube::Api;
 use kube_core::params::ListParams;
-use kube_core::{DynamicObject, GroupVersionKind, TypeMeta};
-use serde_yaml;
+use kube_core::{ApiResource, DynamicObject, GroupVersionKind, ResourceExt, TypeMeta};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
 use tokio_retry::Retry;
+use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
 use crate::gather::writer::{Representation, Writer};
 
+trait_set! {
+    pub trait Base = Clone + Debug;
+    pub trait ThreadSafe = Send + Sync;
+    pub trait SerDe = Serialize + DeserializeOwned;
+    pub trait ResourceReq = Base + ThreadSafe + SerDe;
+    pub trait ResourceThreadSafe = ResourceReq + ResourceExt;
+}
+
 #[async_trait]
 /// Collect defines a trait for collecting Kubernetes object representations.
-pub trait Collect: Sync + Send {
+pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Default delay iterator - exponential backoff.
-    /// Starts at 2ms, doubles each iteration, up to max of 60s.
+    /// Starts at 10ms, doubles each iteration, up to max of 60s.
     fn delay() -> impl Iterator<Item = Duration> + Send {
         ExponentialBackoff::from_millis(10).max_delay(Duration::from_secs(60))
     }
@@ -30,41 +42,74 @@ pub trait Collect: Sync + Send {
     /// representations to.
     fn get_writer(&self) -> Arc<Mutex<Writer>>;
 
-    /// Returns the path where the representation of the given object
-    /// should be stored.
-    fn path(&self, object: &DynamicObject) -> PathBuf;
+    /// Constructs the path for storing the collected Kubernetes object.
+    ///
+    /// The path is constructed differently for cluster-scoped vs namespaced objects.
+    /// Cluster-scoped objects are stored under `cluster/{kind}/{name}.yaml`.
+    /// Namespaced objects are stored under `namespaces/{namespace}/{kind}/{name}.yaml`.
+    ///
+    /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
+    fn path(&self, obj: &R) -> PathBuf {
+        let obj = obj.clone();
+        let (kind, namespace, name) = (
+            self.get_type_meta().kind.to_lowercase(),
+            obj.namespace().unwrap_or_default(),
+            obj.name_any(),
+        );
+
+        // Constructs the path for the collected object, cluster-scoped or namespaced.
+        match namespace.as_str() {
+            "" => format!("cluster/{kind}/{name}.yaml"),
+            _ => format!("namespaces/{namespace}/{kind}/{name}.yaml"),
+        }
+        .into()
+    }
 
     /// Filters objects based on their GroupVersionKind and the object itself.
     /// Returns true if the object should be included, false otherwise.
-    fn filter(&self, gvk: &GroupVersionKind, object: &DynamicObject) -> bool;
+    fn filter(&self, object: &R) -> anyhow::Result<bool>;
 
     /// Converts the provided DynamicObject into a vector of Representation
     /// with YAML object data and output path for the object.
-    async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
         log::debug!(
             "Collecting representation for {} {}/{}",
-            object.types.clone().unwrap().kind,
-            object.metadata.clone().namespace.unwrap_or_default(),
-            object.metadata.clone().name.unwrap()
+            self.get_type_meta().kind,
+            object.namespace().unwrap_or_default(),
+            object.name_any(),
         );
+
+        let data = DynamicObject::new(
+            object.name_any().as_str(),
+            &ApiResource::from_gvk(&GroupVersionKind::try_from(self.get_type_meta())?),
+        )
+        .data(serde_json::to_value(object)?)
+        .within(object.namespace().unwrap_or_default().as_str());
 
         Ok(vec![Representation::new()
             .with_path(self.path(object))
-            .with_data(serde_yaml::to_string(&object)?.as_str())])
+            .with_data(serde_yaml::to_string(&data)?.as_str())])
     }
 
     /// Returns the Kubernetes API client for the resource type this scanner handles.
-    fn get_api(&self) -> Api<DynamicObject>;
+    fn get_api(&self) -> Api<R>;
 
     /// Returns the TypeMeta for the API resource type this scanner handles.
     /// Used to set the TypeMeta on the returned objects in the list,
     /// as the API server does not provide this data in the response.
     fn get_type_meta(&self) -> TypeMeta;
 
+    /// Returns the ApiResource with the resource type for object
+    fn get_api_resource(&self) -> anyhow::Result<ApiResource> {
+        Ok(ApiResource::from_gvk(&GroupVersionKind::try_from(
+            self.get_type_meta(),
+        )?))
+    }
+
     /// Lists Kubernetes objects of the type handled by this scanner, and set
     /// the get_type_meta() information on the objects. Objects are filtered
     /// before getting added to the result.
-    async fn list(&self) -> anyhow::Result<Vec<DynamicObject>> {
+    async fn list(&self) -> anyhow::Result<Vec<R>> {
         let data = match self.get_api().list(&ListParams::default()).await {
             Ok(items) => items,
             Err(e) => {
@@ -76,19 +121,17 @@ pub trait Collect: Sync + Send {
         Ok(data
             .items
             .into_iter()
-            .map(|o| DynamicObject {
-                types: Some(self.get_type_meta()),
-                ..o
-            })
-            .filter(|o| {
-                self.filter(
-                    &o.types
-                        .as_ref()
-                        .unwrap()
-                        .try_into()
-                        .expect("incomplete TypeMeta provided"),
-                    o,
-                )
+            .filter_map(|o| match self.filter(&o) {
+                Ok(true) => Some(o),
+                Ok(false) => None,
+                Err(e) => {
+                    log::error!(
+                        "Unable to filter object {:?}: {:?}",
+                        self.get_type_meta(),
+                        e
+                    );
+                    None
+                }
             })
             .collect())
     }
@@ -116,7 +159,7 @@ pub trait Collect: Sync + Send {
 
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
-    async fn write_with_retry(&self, object: &DynamicObject) -> anyhow::Result<()> {
+    async fn write_with_retry(&self, object: &R) -> anyhow::Result<()> {
         let representations = Retry::spawn(Self::delay(), || async {
             self.representations(object).await
         })

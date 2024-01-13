@@ -6,7 +6,7 @@ use k8s_openapi::{
     chrono::{DateTime, Utc},
 };
 use kube::Api;
-use kube_core::{ApiResource, DynamicObject, GroupVersionKind, Resource, TypeMeta};
+use kube_core::{ApiResource, Resource, TypeMeta};
 use std::{
     fmt::Debug,
     path::PathBuf,
@@ -18,11 +18,11 @@ use crate::gather::{
     writer::{Representation, Writer},
 };
 
-use super::{generic::Object, interface::Collect};
+use super::{generic::Objects, interface::Collect};
 
 #[derive(Clone)]
 pub struct Events {
-    pub collectable: Object,
+    pub collectable: Objects<Event>,
 }
 
 impl Debug for Events {
@@ -34,13 +34,13 @@ impl Debug for Events {
 impl From<Config> for Events {
     fn from(value: Config) -> Self {
         Events {
-            collectable: Object::new(value, ApiResource::erase::<Event>(&())),
+            collectable: Objects::new_typed(value, ApiResource::erase::<Event>(&())),
         }
     }
 }
 
 #[async_trait]
-impl Collect for Events {
+impl Collect<Event> for Events {
     fn get_secrets(&self) -> Secrets {
         self.collectable.get_secrets()
     }
@@ -49,37 +49,36 @@ impl Collect for Events {
         self.collectable.get_writer()
     }
 
-    fn path(&self, _: &DynamicObject) -> PathBuf {
+    fn path(&self, _: &Event) -> PathBuf {
         "event-filter.html".into()
     }
 
-    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
-        self.collectable.filter(gvk, obj)
+    fn filter(&self, obj: &Event) -> anyhow::Result<bool> {
+        self.collectable.filter(obj)
     }
 
     /// Generates an HTML table representations for an Event object.
-    async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, event: &Event) -> anyhow::Result<Vec<Representation>> {
         log::info!("Collecting events");
 
-        let event: Event = obj.clone().try_parse()?;
         let mut representations = vec![];
         let row = TableRow::new()
             .with_cell(TableCell::default().with_raw({
                 let (creation, first, last) = (
-                    event.metadata.creation_timestamp.unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
-                    event.first_timestamp.unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
-                    event.last_timestamp.unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0
+                    event.metadata.creation_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
+                    event.first_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
+                    event.last_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0
                 );
                 let count = event.count.unwrap_or(1).to_string();
                 format!("<time datetime=\"{creation}\" title=\"First Seen: {first}\">{last}</time> <small>(x{count})</small>")}))
             .with_cell(TableCell::default().with_paragraph_attr(
-                event.metadata.namespace.unwrap_or_default(),
+                event.metadata.namespace.clone().unwrap_or_default(),
                 [("class", "truncated")],
             ))
             .with_cell(
                 TableCell::default().with_paragraph_attr(
                     event
-                        .source
+                        .source.clone()
                         .unwrap_or_default()
                         .component
                         .unwrap_or_default(),
@@ -87,7 +86,7 @@ impl Collect for Events {
                 ),
             )
             .with_cell(TableCell::default().with_paragraph_attr(
-                event.involved_object.name.unwrap_or_default(),
+                event.involved_object.name.clone().unwrap_or_default(),
                 [("class", "truncated")],
             ))
             .with_cell(
@@ -110,24 +109,24 @@ impl Collect for Events {
                             _ => ("class", "text-muted"),
                         },
                     ])
-                    .with_paragraph(event.reason.unwrap_or_default()),
+                    .with_paragraph(event.reason.clone().unwrap_or_default()),
             )
             .with_cell(
                 TableCell::default()
                     .with_attributes([("data-formatter", "messageForm")])
-                    .with_raw(event.message.unwrap_or_default()),
+                    .with_raw(event.message.clone().unwrap_or_default()),
             );
 
         representations.push(
             Representation::new()
-                .with_path(self.path(obj))
+                .with_path(self.path(event))
                 .with_data(row.to_html_string().as_str()),
         );
 
         Ok(representations)
     }
 
-    fn get_api(&self) -> Api<DynamicObject> {
+    fn get_api(&self) -> Api<Event> {
         self.collectable.get_api()
     }
 
@@ -148,7 +147,7 @@ impl Collect for Events {
 
         self.get_writer().lock().unwrap().store(
             &Representation::new()
-                .with_path(self.path(&DynamicObject::new("", &ApiResource::erase::<Event>(&()))))
+                .with_path(self.path(&Event::default()))
                 .with_data(format!(include_str!("templates/event-filter.html"), data).as_str()),
         )?;
 

@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
-use kube_core::{DynamicObject, GroupVersionKind};
+use kube_core::GroupVersionKind;
 use serde::Deserialize;
+
+use crate::scanners::interface::ResourceThreadSafe;
 
 use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
 
@@ -24,8 +26,8 @@ pub struct GroupInclude {
     group: Group,
 }
 
-impl Filter for GroupInclude {
-    fn filter_object(&self, _: &DynamicObject) -> bool {
+impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
+    fn filter_object(&self, _: &R) -> bool {
         true
     }
 
@@ -73,7 +75,7 @@ impl Display for Group {
     }
 }
 
-impl FilterDefinition for GroupInclude {}
+impl<R: ResourceThreadSafe> FilterDefinition<R> for GroupInclude {}
 
 impl TryFrom<String> for GroupInclude {
     type Error = anyhow::Error;
@@ -97,7 +99,7 @@ pub struct GroupExclude {
     group: Group,
 }
 
-impl Filter for GroupExclude {
+impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
     fn filter_api(&self, gvk: &GroupVersionKind) -> bool {
         let accepted = !self.group.matches(gvk);
 
@@ -113,12 +115,12 @@ impl Filter for GroupExclude {
         accepted
     }
 
-    fn filter_object(&self, _: &DynamicObject) -> bool {
+    fn filter_object(&self, _: &R) -> bool {
         true
     }
 }
 
-impl FilterDefinition for GroupExclude {}
+impl<R: ResourceThreadSafe> FilterDefinition<R> for GroupExclude {}
 
 impl TryFrom<String> for GroupExclude {
     type Error = anyhow::Error;
@@ -140,7 +142,7 @@ impl From<GroupExclude> for FilterType {
 mod tests {
 
     use k8s_openapi::{api::core::v1::Pod, Resource};
-    use kube_core::TypeMeta;
+    use kube_core::{DynamicObject, TypeMeta};
 
     use super::*;
 
@@ -164,9 +166,18 @@ mod tests {
 
         let filter = GroupInclude::try_from("apps/(Deployment|ReplicaSet)".to_string()).unwrap();
 
-        assert!(!filter.filter_api(&GroupVersionKind::try_from(pod_tm).expect("parse GVK")));
-        assert!(filter.filter_api(&GroupVersionKind::try_from(deploy_tm).expect("parse GVK")));
-        assert!(filter.filter_api(&GroupVersionKind::try_from(replicaset_tm).expect("parse GVK")));
+        assert!(!<GroupInclude as Filter<DynamicObject>>::filter_api(
+            &filter,
+            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
+        ));
+        assert!(<GroupInclude as Filter<DynamicObject>>::filter_api(
+            &filter,
+            &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
+        ));
+        assert!(<GroupInclude as Filter<DynamicObject>>::filter_api(
+            &filter,
+            &GroupVersionKind::try_from(replicaset_tm).expect("parse GVK")
+        ));
     }
 
     #[test]
@@ -192,8 +203,14 @@ mod tests {
         let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
 
         let exclude = GroupExclude::try_from(Pod::GROUP.to_string()).unwrap();
-        assert!(!exclude.filter_api(&GroupVersionKind::try_from(pod_tm).expect("parse GVK")));
-        assert!(exclude.filter_api(&GroupVersionKind::try_from(deploy_tm).expect("parse GVK")));
+        assert!(!<GroupExclude as Filter<DynamicObject>>::filter_api(
+            &exclude,
+            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
+        ));
+        assert!(<GroupExclude as Filter<DynamicObject>>::filter_api(
+            &exclude,
+            &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
+        ));
     }
 
     #[test]

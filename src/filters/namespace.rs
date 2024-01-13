@@ -1,5 +1,7 @@
-use kube_core::{DynamicObject, GroupVersionKind};
+use kube_core::GroupVersionKind;
 use serde::Deserialize;
+
+use crate::scanners::interface::ResourceThreadSafe;
 
 use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
 
@@ -12,23 +14,16 @@ pub struct NamespaceInclude {
 /// Filters kubernetes namespaced resources based on whether their namespace is in the allowed
 /// list. Returns true if the object's namespace is in the allowed namespaces,
 /// or the namespace list is empty or the resource is cluster-scoped.
-impl Filter for NamespaceInclude {
-    fn filter_object(&self, obj: &DynamicObject) -> bool {
-        let accepted = obj
-            .metadata
-            .namespace
-            .clone()
-            .unwrap_or_default()
-            .is_empty()
-            || self
-                .namespace
-                .matches(&obj.metadata.namespace.clone().unwrap_or_default());
+impl<R: ResourceThreadSafe> Filter<R> for NamespaceInclude {
+    fn filter_object(&self, obj: &R) -> bool {
+        let accepted = obj.namespace().unwrap_or_default().is_empty()
+            || self.namespace.matches(&obj.namespace().unwrap_or_default());
 
         if !accepted {
             log::debug!(
                 "NamespaceInclude filter excluded {}/{} as it is not present in the namespace list {}",
-                obj.metadata.clone().name.unwrap(),
-                obj.metadata.clone().namespace.unwrap(), self.namespace);
+                obj.name_any(),
+                obj.namespace().unwrap(), self.namespace);
         }
 
         accepted
@@ -39,7 +34,7 @@ impl Filter for NamespaceInclude {
     }
 }
 
-impl FilterDefinition for NamespaceInclude {}
+impl<R: ResourceThreadSafe> FilterDefinition<R> for NamespaceInclude {}
 
 impl TryFrom<String> for NamespaceInclude {
     type Error = anyhow::Error;
@@ -63,7 +58,7 @@ pub struct NamespaceExclude {
     namespace: FilterRegex,
 }
 
-impl FilterDefinition for NamespaceExclude {}
+impl<R: ResourceThreadSafe> FilterDefinition<R> for NamespaceExclude {}
 
 impl TryFrom<String> for NamespaceExclude {
     type Error = anyhow::Error;
@@ -81,23 +76,16 @@ impl From<NamespaceExclude> for FilterType {
     }
 }
 
-impl Filter for NamespaceExclude {
-    fn filter_object(&self, obj: &DynamicObject) -> bool {
-        let accepted = obj
-            .metadata
-            .namespace
-            .clone()
-            .unwrap_or_default()
-            .is_empty()
-            || !self
-                .namespace
-                .matches(&obj.metadata.namespace.clone().unwrap_or_default());
+impl<R: ResourceThreadSafe> Filter<R> for NamespaceExclude {
+    fn filter_object(&self, obj: &R) -> bool {
+        let accepted = obj.namespace().unwrap_or_default().is_empty()
+            || !self.namespace.matches(&obj.namespace().unwrap_or_default());
 
         if !accepted {
             log::debug!(
                 "NamespaceExclude filter excluded {}/{} as it is not present in the namespace list {}",
-                obj.metadata.clone().name.unwrap(),
-                obj.metadata.clone().namespace.unwrap(), self.namespace);
+                obj.name_any(),
+                obj.meta().clone().namespace.unwrap(), self.namespace);
         }
 
         accepted
@@ -112,7 +100,7 @@ impl Filter for NamespaceExclude {
 mod tests {
 
     use k8s_openapi::api::core::v1::Pod;
-    use kube_core::ApiResource;
+    use kube_core::{ApiResource, DynamicObject};
 
     use super::*;
 

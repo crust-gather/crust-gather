@@ -9,13 +9,13 @@ use futures::future::join_all;
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use kube::{discovery, Client};
 use kube_core::discovery::verbs::LIST;
-use kube_core::ApiResource;
+use kube_core::{ApiResource, DynamicObject};
 use serde::Deserialize;
 use tokio::time::timeout;
 
 use crate::filters::filter::List;
 use crate::scanners::events::Events;
-use crate::scanners::generic::Object;
+use crate::scanners::generic::Objects;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogGroup, Logs};
 use crate::scanners::nodes::Nodes;
@@ -138,7 +138,7 @@ enum Group {
     Nodes(ApiResource),
     Logs(ApiResource),
     Events(ApiResource),
-    DynamicObject(ApiResource),
+    Objects(ApiResource),
 }
 
 impl From<ApiResource> for Group {
@@ -147,14 +147,14 @@ impl From<ApiResource> for Group {
             r if r == ApiResource::erase::<Event>(&()) => Group::Events(r),
             r if r == ApiResource::erase::<Pod>(&()) => Group::Logs(r),
             r if r == ApiResource::erase::<Node>(&()) => Group::Nodes(r),
-            r => Group::DynamicObject(r),
+            r => Group::Objects(r),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 enum Collectable {
-    Object(Object),
+    Objects(Objects<DynamicObject>),
     Logs(Logs),
     Events(Events),
     Nodes(Nodes),
@@ -163,7 +163,7 @@ enum Collectable {
 impl Collectable {
     async fn collect(&self) {
         match self {
-            Collectable::Object(o) => o.collect_retry(),
+            Collectable::Objects(o) => o.collect_retry(),
             Collectable::Logs(l) => l.collect_retry(),
             Collectable::Events(e) => e.collect_retry(),
             Collectable::Nodes(n) => n.collect_retry(),
@@ -177,19 +177,19 @@ impl Group {
         match self {
             Group::Nodes(resource) => vec![
                 Collectable::Nodes(Nodes::from(gather.clone())),
-                Collectable::Object(Object::new(gather, resource)),
+                Collectable::Objects(Objects::new(gather, resource)),
             ],
             Group::Logs(resource) => vec![
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Current)),
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Previous)),
-                Collectable::Object(Object::new(gather, resource)),
+                Collectable::Objects(Objects::new(gather, resource)),
             ],
             Group::Events(resource) => vec![
                 Collectable::Events(Events::from(gather.clone())),
-                Collectable::Object(Object::new(gather, resource)),
+                Collectable::Objects(Objects::new(gather, resource)),
             ],
-            Group::DynamicObject(resource) => {
-                vec![Collectable::Object(Object::new(gather, resource))]
+            Group::Objects(resource) => {
+                vec![Collectable::Objects(Objects::new(gather, resource))]
             }
         }
     }

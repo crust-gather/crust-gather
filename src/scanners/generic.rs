@@ -6,35 +6,41 @@ use crate::{
     },
 };
 use async_trait::async_trait;
+
 use kube::Api;
-use kube_core::{ApiResource, DynamicObject, GroupVersionKind, TypeMeta};
+use kube_core::{ApiResource, GroupVersionKind, Resource, TypeMeta};
+
 use std::{
     fmt::Debug,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use super::interface::Collect;
+use super::interface::{Collect, ResourceReq, ResourceThreadSafe};
 
 #[derive(Clone)]
-pub struct Object {
-    pub api: Api<DynamicObject>,
-    pub filter: Arc<dyn Filter>,
+pub struct Objects<R: Resource> {
+    pub api: Api<R>,
+    pub filter: Arc<dyn Filter<R>>,
     pub resource: ApiResource,
     secrets: Secrets,
     writer: Arc<Mutex<Writer>>,
 }
 
-impl Debug for Object {
+impl<R: ResourceThreadSafe> Debug for Objects<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Object")
             .field("resource", &self.resource.kind)
             .finish()
     }
 }
-impl Object {
+
+impl<R> Objects<R>
+where
+    R: Resource<DynamicType = ApiResource>,
+    R: ResourceReq,
+{
     pub fn new(config: Config, resource: ApiResource) -> Self {
-        Object {
+        Objects {
             api: Api::all_with(config.client, &resource),
             filter: config.filter,
             writer: config.writer,
@@ -44,12 +50,25 @@ impl Object {
     }
 }
 
+impl<R> Objects<R>
+where
+    R: Resource<DynamicType = ()>,
+    R: ResourceReq,
+{
+    pub fn new_typed(config: Config, resource: ApiResource) -> Self {
+        Objects {
+            api: Api::all(config.client),
+            filter: config.filter,
+            writer: config.writer,
+            secrets: config.secrets,
+            resource,
+        }
+    }
+}
+
 #[async_trait]
-/// Implements the Collect trait for Collectable.
-///
-/// This allows Collectable to be collected into an archive under the
-/// PathBuf destination returned by the path method.
-impl Collect for Object {
+/// Collects default representations for Kubernetes API objects of any type.
+impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     fn get_secrets(&self) -> Secrets {
         self.secrets.clone()
     }
@@ -58,34 +77,13 @@ impl Collect for Object {
         self.writer.clone()
     }
 
-    /// Constructs the path for storing the collected Kubernetes object.
-    ///
-    /// The path is constructed differently for cluster-scoped vs namespaced objects.
-    /// Cluster-scoped objects are stored under `cluster/{kind}/{name}.yaml`.
-    /// Namespaced objects are stored under `namespaces/{namespace}/{kind}/{name}.yaml`.
-    ///
-    /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
-    fn path(&self, obj: &DynamicObject) -> PathBuf {
-        let obj = obj.clone();
-        let (kind, namespace, name) = (
-            obj.types.unwrap().kind.to_lowercase(),
-            obj.metadata.namespace.unwrap_or_default(),
-            obj.metadata.name.unwrap(),
-        );
-
-        // Constructs the path for the collected object, cluster-scoped or namespaced.
-        match namespace.as_str() {
-            "" => format!("cluster/{kind}/{name}.yaml"),
-            _ => format!("namespaces/{namespace}/{kind}/{name}.yaml"),
-        }
-        .into()
+    fn filter(&self, obj: &R) -> anyhow::Result<bool> {
+        Ok(self
+            .filter
+            .filter(&GroupVersionKind::try_from(self.get_type_meta())?, obj))
     }
 
-    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
-        self.filter.filter(gvk, obj)
-    }
-
-    fn get_api(&self) -> Api<DynamicObject> {
+    fn get_api(&self) -> Api<R> {
         log::info!(
             "Collecting {} {} resources",
             self.resource.group,
@@ -122,7 +120,7 @@ mod test {
             config::Config,
             writer::{Archive, Encoding, Writer},
         },
-        scanners::{generic::Object, interface::Collect},
+        scanners::{generic::Objects, interface::Collect},
         tests::kwok,
     };
     use tokio::time::timeout;
@@ -170,7 +168,7 @@ mod test {
         let api: Api<DynamicObject> =
             Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
         let pod = api.get("test").await.unwrap();
-        let repr = Object::new(
+        let repr = Objects::new(
             Config::new(
                 test_env.client().await,
                 List(vec![filter.into()]),
@@ -200,7 +198,7 @@ mod test {
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
-        let collectable = Object::new(
+        let collectable = Objects::new(
             Config::new(
                 test_env.client().await,
                 List(vec![]),
@@ -226,7 +224,7 @@ mod test {
             .build();
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
-        let collectable = Object::new(
+        let collectable = Objects::new(
             Config::new(
                 test_env.client().await,
                 List(vec![]),

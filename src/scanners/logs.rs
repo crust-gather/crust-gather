@@ -1,6 +1,5 @@
 use std::{
     fmt::{self, Debug},
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -9,8 +8,7 @@ use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube_core::{
-    subresource::LogParams, ApiResource, DynamicObject, ErrorResponse, GroupVersionKind, Resource,
-    TypeMeta,
+    subresource::LogParams, ApiResource, ErrorResponse, Resource, ResourceExt, TypeMeta,
 };
 
 use crate::gather::{
@@ -18,7 +16,7 @@ use crate::gather::{
     writer::{Representation, Writer},
 };
 
-use super::{generic::Object, interface::Collect};
+use super::{generic::Objects, interface::Collect};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LogGroup {
@@ -49,7 +47,7 @@ impl From<LogGroup> for LogParams {
 /// previous logs.
 #[derive(Clone)]
 pub struct Logs {
-    pub collectable: Object,
+    pub collectable: Objects<Pod>,
     pub group: LogGroup,
 }
 
@@ -62,27 +60,14 @@ impl Debug for Logs {
 impl Logs {
     pub fn new(config: Config, group: LogGroup) -> Self {
         Logs {
-            collectable: Object::new(config, ApiResource::erase::<Pod>(&())),
+            collectable: Objects::new_typed(config, ApiResource::erase::<Pod>(&())),
             group,
         }
     }
 }
 
 #[async_trait]
-/// Implements the Collect trait for Logs. This collects container logs for Kubernetes pods.
-///
-/// The path() method returns the path for the pod object.
-///
-/// The get_type_meta() method returns the TypeMeta for pods.
-///
-/// The get_api() method returns the API client for pods.
-///
-/// The filter() method filters pods based on the configured filter.
-///
-/// The representations() method collects the container logs for the given pod. It parses the pod,
-/// gets the API client for that pod, and then for each container it calls the logs API to get the
-/// logs. It returns a vector of Representation objects containing the log data.
-impl Collect for Logs {
+impl Collect<Pod> for Logs {
     fn get_secrets(&self) -> Secrets {
         self.collectable.get_secrets()
     }
@@ -91,36 +76,29 @@ impl Collect for Logs {
         self.collectable.get_writer()
     }
 
-    /// Returns the path for the pod object. This will be the root path for the logs to store in.
-    fn path(&self, obj: &DynamicObject) -> PathBuf {
-        self.collectable.path(obj)
-    }
-
-    fn filter(&self, gvk: &GroupVersionKind, obj: &DynamicObject) -> bool {
-        self.collectable.filter(gvk, obj)
+    fn filter(&self, obj: &Pod) -> anyhow::Result<bool> {
+        self.collectable.filter(obj)
     }
 
     /// Collects container logs representations.
-    async fn representations(&self, obj: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
         log::info!(
             "Collecting {} logs for {}/{}",
             self.group,
-            obj.metadata.clone().namespace.unwrap(),
-            obj.metadata.clone().name.unwrap()
+            pod.namespace().unwrap_or_default(),
+            pod.name_any(),
         );
 
-        let pod: Pod = obj.clone().try_parse()?;
         let api: Api<Pod> = Api::namespaced(
             self.get_api().into(),
-            pod.metadata.clone().namespace.unwrap().as_ref(),
+            pod.namespace().unwrap_or_default().as_ref(),
         );
         let mut representations = vec![];
 
-        for container in pod.spec.unwrap().containers {
-            let meta = pod.metadata.clone();
+        for container in pod.spec.clone().unwrap().containers {
             let logs = match api
                 .logs(
-                    meta.clone().name.unwrap().as_str(),
+                    pod.name_any().as_str(),
                     &LogParams {
                         container: Some(container.name.clone()),
                         ..self.group.into()
@@ -131,11 +109,7 @@ impl Collect for Logs {
                 Ok(logs) => logs,
                 // If a 400 error occurs, returns the current representations, as that indicates no logs exist.
                 Err(kube::Error::Api(ErrorResponse { code: 400, .. })) => {
-                    log::info!(
-                        "No {} logs found for pod {}",
-                        self.group,
-                        meta.name.unwrap()
-                    );
+                    log::info!("No {} logs found for pod {}", self.group, pod.name_any());
                     return Ok(representations);
                 }
                 Err(e) => {
@@ -144,11 +118,10 @@ impl Collect for Logs {
                 }
             };
 
-            let container_path =
-                format!("{}/{}/{}", meta.name.unwrap(), container.name, self.group);
+            let container_path = format!("{}/{}/{}", pod.name_any(), container.name, self.group);
             representations.push(
                 Representation::new()
-                    .with_path(self.path(obj).with_file_name(container_path))
+                    .with_path(Collect::path(self, pod).with_file_name(container_path))
                     .with_data(logs.as_str()),
             )
         }
@@ -156,8 +129,8 @@ impl Collect for Logs {
         Ok(representations)
     }
 
-    fn get_api(&self) -> Api<DynamicObject> {
-        self.collectable.get_api()
+    fn get_api(&self) -> Api<Pod> {
+        Collect::get_api(&self.collectable)
     }
 
     fn get_type_meta(&self) -> TypeMeta {
@@ -174,7 +147,7 @@ mod test {
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
-    use kube_core::{params::PostParams, ApiResource, DynamicObject};
+    use kube_core::{params::PostParams, ApiResource};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::time::timeout;
@@ -186,7 +159,7 @@ mod test {
             config::Config,
             writer::{Archive, Encoding, Writer},
         },
-        scanners::{generic::Object, interface::Collect},
+        scanners::{generic::Objects, interface::Collect},
         tests::kwok,
     };
 
@@ -200,8 +173,7 @@ mod test {
             .build();
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<DynamicObject> =
-            Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
+        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().await);
 
         let pod = timeout(
             Duration::new(10, 0),
@@ -234,7 +206,7 @@ mod test {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
-            collectable: Object::new(
+            collectable: Objects::new_typed(
                 Config::new(
                     test_env.client().await,
                     List(vec![filter.into()]),
