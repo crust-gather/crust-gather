@@ -33,7 +33,7 @@ impl Debug for Events {
 
 impl From<Config> for Events {
     fn from(value: Config) -> Self {
-        Events {
+        Self {
             collectable: Objects::new_typed(value, ApiResource::erase::<Event>(&())),
         }
     }
@@ -135,10 +135,10 @@ impl Collect<Event> for Events {
     }
 
     async fn collect(&self) -> anyhow::Result<()> {
-        let mut data = String::from("");
+        let mut data = String::new();
         for obj in self.list().await? {
             for repr in self.representations(&obj).await? {
-                data.push_str(repr.data())
+                data.push_str(repr.data());
             }
         }
 

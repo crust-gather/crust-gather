@@ -37,7 +37,7 @@ impl Debug for Nodes {
 
 impl From<Config> for Nodes {
     fn from(value: Config) -> Self {
-        Nodes {
+        Self {
             collectable: Objects::new_typed(value, ApiResource::erase::<Node>(&())),
         }
     }
@@ -62,7 +62,7 @@ impl Collect<Node> for Nodes {
         let node_name = node.name_any();
         log::info!("Collecting node logs for {}", node.name_any());
 
-        let pod = self.get_template_pod(node_name);
+        let pod = Self::get_template_pod(node_name);
         let pod_name = pod.name_any();
         let api: Api<Pod> = Api::default_namespaced(self.get_api().into());
 
@@ -159,7 +159,7 @@ impl Nodes {
             .with_data(out.as_str()))
     }
 
-    fn get_template_pod(&self, node_name: String) -> Pod {
+    fn get_template_pod(node_name: String) -> Pod {
         Pod {
             metadata: ObjectMeta {
                 name: Some(format!("node-debug-{node_name}")),
@@ -194,7 +194,7 @@ impl Nodes {
                     name: "host-root".into(),
                     host_path: Some(HostPathVolumeSource {
                         path: "/".into(),
-                        type_: Some("".into()),
+                        type_: Some(String::new()),
                     }),
                     ..Default::default()
                 }]),

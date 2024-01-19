@@ -40,7 +40,7 @@ impl Secrets {
 impl From<Vec<String>> for Secrets {
     /// Gets a list of secret environment variable values to exclude from the collected artifacts.
     fn from(val: Vec<String>) -> Self {
-        Secrets(
+        Self(
             val.iter()
                 .map(|s| env::var(s).unwrap_or_default())
                 .filter(|s| !s.is_empty())
@@ -56,7 +56,7 @@ impl TryFrom<String> for RunDuration {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(RunDuration(match DurationString::try_from(value) {
+        Ok(Self(match DurationString::try_from(value) {
             Ok(duration) => duration,
             Err(error) => bail!(error),
         }))
@@ -91,8 +91,8 @@ impl Config {
         writer: Writer,
         secrets: Secrets,
         duration: RunDuration,
-    ) -> Config {
-        Config {
+    ) -> Self {
+        Self {
             client,
             filter: Arc::new(filter),
             secrets,
@@ -100,29 +100,27 @@ impl Config {
             writer: writer.into(),
         }
     }
-}
 
-impl Config {
     /// Collect representations for resources from discovery to the specified archive file.
     pub async fn collect(&self) -> anyhow::Result<()> {
         log::info!("Collecting resources...");
 
-        let collectables = discovery::Discovery::new(self.client.clone())
-            .run()
-            .await?
-            .groups()
-            .flat_map(|g| g.recommended_resources())
-            .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
-            .flat_map(|group: Group| group.into_collectable(self.clone()))
-            .collect();
-
         match timeout(
             self.duration.0.into(),
-            self.iterate_until_completion(collectables),
+            self.iterate_until_completion(
+                discovery::Discovery::new(self.client.clone())
+                    .run()
+                    .await?
+                    .groups()
+                    .flat_map(kube::discovery::ApiGroup::recommended_resources)
+                    .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
+                    .flat_map(|group: Group| group.into_collectable(self.clone()))
+                    .collect(),
+            ),
         )
         .await
         {
-            Ok(_) => (),
+            Ok(()) => (),
             Err(e) => log::error!("{e}"),
         }
 
@@ -144,10 +142,10 @@ enum Group {
 impl From<ApiResource> for Group {
     fn from(val: ApiResource) -> Self {
         match val {
-            r if r == ApiResource::erase::<Event>(&()) => Group::Events(r),
-            r if r == ApiResource::erase::<Pod>(&()) => Group::Logs(r),
-            r if r == ApiResource::erase::<Node>(&()) => Group::Nodes(r),
-            r => Group::Dynamic(r),
+            r if r == ApiResource::erase::<Event>(&()) => Self::Events(r),
+            r if r == ApiResource::erase::<Pod>(&()) => Self::Logs(r),
+            r if r == ApiResource::erase::<Node>(&()) => Self::Nodes(r),
+            r => Self::Dynamic(r),
         }
     }
 }
@@ -163,32 +161,32 @@ enum Collectable {
 impl Collectable {
     async fn collect(&self) {
         match self {
-            Collectable::Dynamic(o) => o.collect_retry(),
-            Collectable::Logs(l) => l.collect_retry(),
-            Collectable::Events(e) => e.collect_retry(),
-            Collectable::Nodes(n) => n.collect_retry(),
+            Self::Dynamic(o) => o.collect_retry(),
+            Self::Logs(l) => l.collect_retry(),
+            Self::Events(e) => e.collect_retry(),
+            Self::Nodes(n) => n.collect_retry(),
         }
-        .await
+        .await;
     }
 }
 
 impl Group {
     fn into_collectable(self, gather: Config) -> Vec<Collectable> {
         match self {
-            Group::Nodes(resource) => vec![
+            Self::Nodes(resource) => vec![
                 Collectable::Nodes(Nodes::from(gather.clone())),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
-            Group::Logs(resource) => vec![
+            Self::Logs(resource) => vec![
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Current)),
                 Collectable::Logs(Logs::new(gather.clone(), LogGroup::Previous)),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
-            Group::Events(resource) => vec![
+            Self::Events(resource) => vec![
                 Collectable::Events(Events::from(gather.clone())),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
-            Group::Dynamic(resource) => {
+            Self::Dynamic(resource) => {
                 vec![Collectable::Dynamic(Dynamic::new(gather, resource))]
             }
         }
@@ -238,6 +236,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature="archive")]
     #[serial]
     async fn test_gzip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
@@ -265,6 +264,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature="archive")]
     #[serial]
     async fn test_zip_collect() {
         let test_env = kwok::TestEnvBuilder::default()

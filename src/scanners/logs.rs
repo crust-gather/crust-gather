@@ -16,7 +16,7 @@ use crate::gather::{
 
 use super::{interface::Collect, objects::Objects};
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LogGroup {
     Current,
     Previous,
@@ -25,15 +25,15 @@ pub enum LogGroup {
 impl fmt::Display for LogGroup {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            LogGroup::Current => write!(formatter, "current.log"),
-            LogGroup::Previous => write!(formatter, "previous.log"),
+            Self::Current => write!(formatter, "current.log"),
+            Self::Previous => write!(formatter, "previous.log"),
         }
     }
 }
 
 impl From<LogGroup> for LogParams {
     fn from(val: LogGroup) -> Self {
-        LogParams {
+        Self {
             previous: val == LogGroup::Previous,
             ..Default::default()
         }
@@ -41,7 +41,7 @@ impl From<LogGroup> for LogParams {
 }
 
 /// Logs collects container logs for pods. It contains a Collectable for
-/// querying pods and a LogGroup to specify whether to collect current or
+/// querying pods and a `LogGroup` to specify whether to collect current or
 /// previous logs.
 #[derive(Clone)]
 pub struct Logs {
@@ -51,13 +51,13 @@ pub struct Logs {
 
 impl Debug for Logs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Logs").field("group", &self.group).finish()
+        f.debug_struct("Logs").field("group", &self.group).finish_non_exhaustive()
     }
 }
 
 impl Logs {
     pub fn new(config: Config, group: LogGroup) -> Self {
-        Logs {
+        Self {
             collectable: Objects::new_typed(config, ApiResource::erase::<Pod>(&())),
             group,
         }
@@ -87,22 +87,21 @@ impl Collect<Pod> for Logs {
             pod.name_any(),
         );
 
-        let api: Api<Pod> = Api::namespaced(
-            self.get_api().into(),
-            pod.namespace().unwrap_or_default().as_ref(),
-        );
         let mut representations = vec![];
 
         for container in pod.spec.clone().unwrap().containers {
-            let logs = match api
-                .logs(
-                    pod.name_any().as_str(),
-                    &LogParams {
-                        container: Some(container.name.clone()),
-                        ..self.group.into()
-                    },
-                )
-                .await
+            let logs = match Api::<Pod>::namespaced(
+                self.get_api().into(),
+                pod.namespace().unwrap_or_default().as_ref(),
+            )
+            .logs(
+                pod.name_any().as_str(),
+                &LogParams {
+                    container: Some(container.name.clone()),
+                    ..self.group.into()
+                },
+            )
+            .await
             {
                 Ok(logs) => logs,
                 // If a 400 error occurs, returns the current representations, as that indicates no logs exist.
@@ -121,7 +120,7 @@ impl Collect<Pod> for Logs {
                 Representation::new()
                     .with_path(Collect::path(self, pod).with_file_name(container_path))
                     .with_data(logs.as_str()),
-            )
+            );
         }
 
         Ok(representations)

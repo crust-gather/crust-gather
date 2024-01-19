@@ -30,17 +30,16 @@ impl<R: ResourceThreadSafe> Debug for Objects<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Object")
             .field("resource", &self.resource.kind)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl<R> Objects<R>
 where
-    R: Resource<DynamicType = ApiResource>,
-    R: ResourceReq,
+    R: Resource<DynamicType = ApiResource> + ResourceReq,
 {
     pub fn new(config: Config, resource: ApiResource) -> Self {
-        Objects {
+        Self {
             api: Api::all_with(config.client, &resource),
             filter: config.filter,
             writer: config.writer,
@@ -52,11 +51,10 @@ where
 
 impl<R> Objects<R>
 where
-    R: Resource<DynamicType = ()>,
-    R: ResourceReq,
+    R: Resource<DynamicType = ()> + ResourceReq,
 {
     pub fn new_typed(config: Config, resource: ApiResource) -> Self {
-        Objects {
+        Self {
             api: Api::all(config.client),
             filter: config.filter,
             writer: config.writer,

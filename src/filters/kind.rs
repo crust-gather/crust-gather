@@ -25,7 +25,7 @@ impl<R: ResourceThreadSafe> Filter<R> for KindInclude {
                 gvk.group,
                 gvk.kind,
                 self.kind,
-            )
+            );
         }
 
         accepted
@@ -38,7 +38,7 @@ impl TryFrom<String> for KindInclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(KindInclude {
+        Ok(Self {
             kind: value.try_into()?,
         })
     }
@@ -46,7 +46,7 @@ impl TryFrom<String> for KindInclude {
 
 impl From<KindInclude> for FilterType {
     fn from(val: KindInclude) -> Self {
-        FilterType::KindInclude(val)
+        Self::KindInclude(val)
     }
 }
 
@@ -66,7 +66,7 @@ impl<R: ResourceThreadSafe> Filter<R> for KindExclude {
                 gvk.group,
                 gvk.kind,
                 self.kinds
-            )
+            );
         }
 
         accepted
@@ -83,7 +83,7 @@ impl TryFrom<String> for KindExclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(KindExclude {
+        Ok(Self {
             kinds: value.try_into()?,
         })
     }
@@ -91,7 +91,7 @@ impl TryFrom<String> for KindExclude {
 
 impl From<KindExclude> for FilterType {
     fn from(val: KindExclude) -> Self {
-        FilterType::KindExclude(val)
+        Self::KindExclude(val)
     }
 }
 
@@ -105,14 +105,14 @@ mod tests {
 
     #[test]
     fn test_kind_include_filter() {
-        let pod = r#"---
+        let pod = r"---
         apiVersion: v1
-        kind: Pod"#;
+        kind: Pod";
 
-        let deploy = r#"---
+        let deploy = r"---
         apiVersion: v1
         kind: Deployment
-        "#;
+        ";
 
         let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
@@ -121,7 +121,7 @@ mod tests {
 
         assert!(<KindInclude as Filter<DynamicObject>>::filter_api(
             &filter,
-            &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
         ));
         assert!(!<KindInclude as Filter<DynamicObject>>::filter_api(
             &filter,
@@ -137,14 +137,14 @@ mod tests {
 
     #[test]
     fn test_kind_exclude_filter() {
-        let pod = r#"---
+        let pod = r"---
         apiVersion: v1
-        kind: Pod"#;
+        kind: Pod";
 
-        let deploy = r#"---
+        let deploy = r"---
         apiVersion: v1
         kind: Deployment
-        "#;
+        ";
 
         let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
@@ -152,11 +152,11 @@ mod tests {
         let filter = KindExclude::try_from("Pod".to_string()).expect("KindExclude");
         assert!(!<KindExclude as Filter<DynamicObject>>::filter_api(
             &filter,
-            &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
         ));
         assert!(<KindExclude as Filter<DynamicObject>>::filter_api(
             &filter,
-            &GroupVersionKind::try_from(deploy_tm.clone()).expect("parse GVK")
+            &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
         ));
     }
 }

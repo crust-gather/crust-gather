@@ -32,7 +32,7 @@ pub struct Cli {
 
 impl Cli {
     pub fn init(&self) {
-        env_logger::builder().filter_level(self.verbosity).init()
+        env_logger::builder().filter_level(self.verbosity).init();
     }
 }
 
@@ -264,17 +264,14 @@ impl TryInto<Writer> for &GatherCommands {
 
         Writer::new(
             &self.file,
-            match &self.encoding {
-                Some(encoding) => encoding,
-                None => &Encoding::Path,
-            },
+            self.encoding.as_ref().map_or(&Encoding::Path, |e| e),
         )
     }
 }
 
 impl From<&GatherCommands> for List {
     fn from(val: &GatherCommands) -> Self {
-        List({
+        Self({
             let data: Vec<Vec<FilterType>> = vec![
                 val.include_namespace
                     .iter()
@@ -385,20 +382,20 @@ mod tests {
         let tmp_dir = TempDir::new("config").expect("failed to create temp dir");
 
         let mut valid = File::create(tmp_dir.path().join("valid.yaml")).unwrap();
-        let valid_config = r#"
+        let valid_config = r"
         include_namespace:
             - default
             - kube-system
-        "#;
+        ";
         valid.write_all(valid_config.as_bytes()).unwrap();
 
         let mut invalid = File::create(tmp_dir.path().join("invalid.yaml")).unwrap();
-        let invalid_config = r#"
+        let invalid_config = r"
         include_namespace:
             - default
             - kube-system
         something: unknown
-        "#;
+        ";
         invalid.write_all(invalid_config.as_bytes()).unwrap();
 
         let result = GatherCommands::try_from(
