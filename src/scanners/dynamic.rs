@@ -21,7 +21,7 @@ pub struct Dynamic {
 
 impl Dynamic {
     pub fn new(config: Config, resource: ApiResource) -> Self {
-        Dynamic {
+        Self {
             collectable: Objects::new(config, resource),
         }
     }

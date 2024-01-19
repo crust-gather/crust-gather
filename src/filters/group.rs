@@ -40,7 +40,7 @@ impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
                 gvk.group,
                 gvk.kind,
                 self.group,
-            )
+            );
         }
 
         accepted
@@ -60,7 +60,7 @@ impl TryFrom<String> for Group {
             _ => unreachable!(),
         };
 
-        Ok(Group {
+        Ok(Self {
             group: groups.to_string().try_into()?,
             kind: kinds.to_string().try_into()?,
         })
@@ -81,7 +81,7 @@ impl TryFrom<String> for GroupInclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(GroupInclude {
+        Ok(Self {
             group: value.try_into()?,
         })
     }
@@ -89,7 +89,7 @@ impl TryFrom<String> for GroupInclude {
 
 impl From<GroupInclude> for FilterType {
     fn from(val: GroupInclude) -> Self {
-        FilterType::GroupInclude(val)
+        Self::GroupInclude(val)
     }
 }
 
@@ -109,7 +109,7 @@ impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
                 gvk.group,
                 gvk.kind,
                 self.group,
-            )
+            );
         }
 
         accepted
@@ -126,7 +126,7 @@ impl TryFrom<String> for GroupExclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(GroupExclude {
+        Ok(Self {
             group: value.try_into()?,
         })
     }
@@ -134,7 +134,7 @@ impl TryFrom<String> for GroupExclude {
 
 impl From<GroupExclude> for FilterType {
     fn from(val: GroupExclude) -> Self {
-        FilterType::GroupExclude(val)
+        Self::GroupExclude(val)
     }
 }
 
@@ -148,17 +148,17 @@ mod tests {
 
     #[test]
     fn test_group_include_filter() {
-        let pod = r#"---
+        let pod = r"---
         apiVersion: v1
-        kind: Pod"#;
+        kind: Pod";
 
-        let deploy = r#"---
+        let deploy = r"---
         apiVersion: apps/v1
-        kind: Deployment"#;
+        kind: Deployment";
 
-        let rs = r#"---
+        let rs = r"---
         apiVersion: apps/v1
-        kind: ReplicaSet"#;
+        kind: ReplicaSet";
 
         let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
@@ -186,18 +186,18 @@ mod tests {
         assert_eq!(filter.group.to_string(), "<Group: ^$, Kind: Pod>");
 
         let filter = GroupInclude::try_from("apps".to_string()).unwrap();
-        assert_eq!(filter.group.to_string(), "<Group: apps, Kind: .*>")
+        assert_eq!(filter.group.to_string(), "<Group: apps, Kind: .*>");
     }
 
     #[test]
     fn test_group_exclude_filter() {
-        let pod = r#"---
+        let pod = r"---
         apiVersion: v1
-        kind: Pod"#;
+        kind: Pod";
 
-        let deploy = r#"---
+        let deploy = r"---
         apiVersion: test/v1
-        kind: OtherType"#;
+        kind: OtherType";
 
         let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
@@ -221,7 +221,7 @@ mod tests {
             "<Group: apps, Kind: Deployment|ReplicaSet>"
         );
 
-        let filter = GroupInclude::try_from("".to_string()).unwrap();
+        let filter = GroupInclude::try_from(String::new()).unwrap();
         assert_eq!(filter.group.to_string(), "<Group: ^$, Kind: .*>");
     }
 }

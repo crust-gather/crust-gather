@@ -13,9 +13,9 @@ serde = { version = "1.0.194", features = ["derive"] }
 clap = { version = "4.4.11", features = ["derive"] }
 anyhow = "1.0.76"
 async-trait = "0.1.75"
-tar = "0.4.40"
-flate2 = "1.0.28"
-zip = "0.6.6"
+tar = { version = "0.4.40", optional = true }
+flate2 = { version = "1.0.28", optional = true }
+zip = { version = "0.6.6", optional = true }
 build_html = "2.4.0"
 log = "0.4.20"
 env_logger = "0.10.1"
@@ -25,6 +25,9 @@ tokio-retry = "0.3.0"
 duration-string = { version = "0.3.0", features = ["serde"] }
 tokio-util = "0.7.10"
 trait-set = "0.3.0"
+
+[features]
+archive = ["dep:tar", "dep:flate2", "dep:zip"]
 
 [dev-dependencies]
 xid = "1.0.0"

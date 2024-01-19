@@ -40,7 +40,7 @@ impl TryFrom<String> for NamespaceInclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(NamespaceInclude {
+        Ok(Self {
             namespace: value.try_into()?,
         })
     }
@@ -48,7 +48,7 @@ impl TryFrom<String> for NamespaceInclude {
 
 impl From<NamespaceInclude> for FilterType {
     fn from(val: NamespaceInclude) -> Self {
-        FilterType::NamespaceInclude(val)
+        Self::NamespaceInclude(val)
     }
 }
 
@@ -64,7 +64,7 @@ impl TryFrom<String> for NamespaceExclude {
     type Error = anyhow::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(NamespaceExclude {
+        Ok(Self {
             namespace: value.try_into()?,
         })
     }
@@ -72,7 +72,7 @@ impl TryFrom<String> for NamespaceExclude {
 
 impl From<NamespaceExclude> for FilterType {
     fn from(val: NamespaceExclude) -> Self {
-        FilterType::NamespaceExclude(val)
+        Self::NamespaceExclude(val)
     }
 }
 

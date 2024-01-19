@@ -14,8 +14,7 @@ use super::{
 
 pub trait Filter<R>: Sync + Send
 where
-    R: Resource,
-    R: Serialize + DeserializeOwned,
+    R: Resource + Serialize + DeserializeOwned,
     R: Clone + Sync + Send + Debug,
 {
     fn filter_object(&self, _: &R) -> bool;
@@ -26,11 +25,9 @@ where
     }
 }
 
-pub(crate) trait FilterDefinition<R>:
-    Filter<R> + TryFrom<String> + Into<FilterType> + Clone
+pub trait FilterDefinition<R>: Filter<R> + TryFrom<String> + Into<FilterType> + Clone
 where
-    R: Resource,
-    R: Serialize + DeserializeOwned,
+    R: Resource + Serialize + DeserializeOwned,
     R: Clone + Sync + Send + Debug,
 {
 }
@@ -48,8 +45,8 @@ pub enum FilterType {
     GroupExclude(GroupExclude),
 }
 
-impl From<&FilterType> for FilterType {
-    fn from(val: &FilterType) -> Self {
+impl From<&Self> for FilterType {
+    fn from(val: &Self) -> Self {
         val.clone()
     }
 }
@@ -134,7 +131,7 @@ impl TryFrom<String> for FilterRegex {
     type Error = anyhow::Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        Ok(FilterRegex(Regex::new(s.as_str())?))
+        Ok(Self(Regex::new(s.as_str())?))
     }
 }
 

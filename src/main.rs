@@ -15,9 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     cli.init();
 
-    let config = cli.command.load().await?;
-
-    config.collect().await?;
+    cli.command.load().await?.collect().await?;
 
     log::info!("Done");
     Ok(())

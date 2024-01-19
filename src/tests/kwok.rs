@@ -12,7 +12,7 @@ pub struct TestEnv {
     kubeconfig: Kubeconfig,
 }
 
-/// TestEnv manages a temporary Kwok test cluster.
+/// `TestEnv` manages a temporary Kwok test cluster.
 ///
 /// It provides methods to create, delete and interact with the minimal test cluster.
 /// The cluster is automatically deleted when this struct is dropped.
@@ -23,7 +23,7 @@ impl TestEnv {
     }
 
     /// Create the default minimal test environment.
-    pub async fn new() -> Self {
+    pub fn new() -> Self {
         Self::builder().build()
     }
 
@@ -59,12 +59,12 @@ impl TestEnv {
         Client::try_from(config).expect("client")
     }
 
-    /// Returns the Kubeconfig for this TestEnv.
+    /// Returns the Kubeconfig for this `TestEnv`.
     pub fn kubeconfig(&self) -> Kubeconfig {
         self.kubeconfig.clone()
     }
 
-    /// Returns the path to the Kubeconfig file for this TestEnv.
+    /// Returns the path to the Kubeconfig file for this `TestEnv`.
     pub fn kubeconfig_path(&self) -> PathBuf {
         temp_kubeconfig(&self.name)
     }
@@ -89,7 +89,7 @@ impl Default for TestEnvBuilder {
         Self {
             verbose: 0,
             wait: "10s".into(),
-            kubeconfig: "".into(),
+            kubeconfig: String::new(),
             insecure_skip_tls_verify: false,
         }
     }
@@ -114,7 +114,7 @@ impl TestEnvBuilder {
         self
     }
 
-    /// Set the insecure_skip_tls_verify kubeconfig flag.
+    /// Set the `insecure_skip_tls_verify` kubeconfig flag.
     pub fn insecure_skip_tls_verify(&mut self, v: bool) -> &mut Self {
         self.insecure_skip_tls_verify = v;
         self
@@ -147,23 +147,18 @@ impl TestEnvBuilder {
         args.push("--kubeconfig");
         args.push(kubeconfig.to_str().unwrap());
 
-        async fn test() -> anyhow::Result<()> {
-            Ok(())
-        }
-
         let status = Command::new("kwokctl")
             .args(&args)
             .status()
             .expect("kwok create cluster");
         assert!(
             status.success(),
-            "kwokctl create cluster --name {} falied.",
-            name
+            "kwokctl create cluster --name {name} falied."
         );
 
         let mut args = vec!["get", "kubeconfig", "--name", &name];
         if self.insecure_skip_tls_verify {
-            args.push("--insecure-skip-tls-verify")
+            args.push("--insecure-skip-tls-verify");
         }
 
         // Output the cluster's kubeconfig to stdout and store it.

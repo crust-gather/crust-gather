@@ -155,7 +155,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     async fn collect_retry(&self) {
         Retry::spawn(Self::delay(), || async { self.collect().await })
             .await
-            .unwrap()
+            .unwrap();
     }
 
     /// Retries collecting representations using an exponential backoff with jitter.
@@ -171,7 +171,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             writer
                 .lock()
                 .unwrap()
-                .store(&self.get_secrets().strip(&repr))?
+                .store(&self.get_secrets().strip(&repr))?;
         }
 
         Ok(())
