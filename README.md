@@ -14,6 +14,11 @@
 - Display events in an HTML table with filtering capabilities.
 - Store data in a zip/tar.gz archive.
 - Hide out secret data, by providing environment keys with values to exclude during processing.
+- Browse cluster snapshot with kubectl/k9s, via a local web server.
+
+## Demo
+
+[![asciicast](https://asciinema.org/a/632848.svg)](https://asciinema.org/a/632848)
 
 ## Prerequisites
 - kubectl
