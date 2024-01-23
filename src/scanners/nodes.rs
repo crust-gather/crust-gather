@@ -1,6 +1,5 @@
 use std::{
     fmt::{self, Debug},
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -19,7 +18,8 @@ use kube_core::{
 
 use crate::gather::{
     config::{Config, Secrets},
-    writer::{Representation, Writer},
+    representation::{ArchivePath, LogGroup, Representation},
+    writer::Writer,
 };
 
 use super::{interface::Collect, objects::Objects};
@@ -105,15 +105,13 @@ impl Collect<Node> for Nodes {
                     "-c",
                     "chroot /host /bin/sh <<\"EOT\"\njournalctl -u kubelet\n\"EOT\"",
                 ],
-                self.path(node).with_extension("").join("kubelet.log"),
+                ArchivePath::logs_path(node, self.get_type_meta(), LogGroup::Node),
             )
             .await?,
             self.get_representation(
                 pod_name.as_str(),
                 vec!["sh", "-c", "cat /host/var/log/kubelet.log"],
-                self.path(node)
-                    .with_extension("")
-                    .join("kubelet-log-path.log"),
+                ArchivePath::logs_path(node, self.get_type_meta(), LogGroup::NodePath),
             )
             .await?,
         ];
@@ -121,7 +119,7 @@ impl Collect<Node> for Nodes {
         api.delete(&pod_name, &DeleteParams::default().grace_period(0))
             .await?;
 
-        Ok(representations)
+        Ok(representations.into_iter().flatten().collect())
     }
 
     fn get_api(&self) -> Api<Node> {
@@ -138,8 +136,8 @@ impl Nodes {
         &self,
         pod_name: &str,
         args: Vec<&str>,
-        path: PathBuf,
-    ) -> anyhow::Result<Representation> {
+        path: ArchivePath,
+    ) -> anyhow::Result<Option<Representation>> {
         let api: Api<Pod> = Api::default_namespaced(self.get_api().into());
 
         let mut attached = api
@@ -154,9 +152,13 @@ impl Nodes {
             .join("");
         attached.join().await.unwrap();
 
-        Ok(Representation::new()
-            .with_path(path)
-            .with_data(out.as_str()))
+        match out.as_str() {
+            "" => {
+                log::debug!("Node {path} is unavailable.");
+                Ok(None)
+            }
+            data => Ok(Some(Representation::new().with_path(path).with_data(data))),
+        }
     }
 
     fn get_template_pod(node_name: String) -> Pod {

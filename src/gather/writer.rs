@@ -1,3 +1,12 @@
+#[cfg(feature = "archive")]
+use flate2::{write::GzEncoder, Compression};
+
+use kube::{
+    config::{self, KubeConfigOptions},
+    Client,
+};
+
+use serde::Deserialize;
 use std::{
     fmt::Display,
     fs::{DirBuilder, File},
@@ -5,17 +14,12 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-#[cfg(feature="archive")]
-use flate2::{write::GzEncoder, Compression};
-use kube::{
-    config::{self, KubeConfigOptions},
-    Client,
-};
-use serde::Deserialize;
-#[cfg(feature="archive")]
+#[cfg(feature = "archive")]
 use tar::{Builder, Header};
-#[cfg(feature="archive")]
+#[cfg(feature = "archive")]
 use zip::{write::FileOptions, ZipWriter};
+
+use super::representation::{ArchivePath, Representation};
 
 #[derive(Clone, Deserialize)]
 pub struct Archive(PathBuf);
@@ -24,6 +28,22 @@ pub struct Archive(PathBuf);
 impl Archive {
     pub fn new(path: PathBuf) -> Self {
         Self(path)
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.0.clone()
+    }
+
+    pub fn join(&self, path: ArchivePath) -> PathBuf {
+        match path {
+            ArchivePath::Empty => self.path(),
+            ArchivePath::Cluster(path) => self.path().join(path),
+            ArchivePath::Namespaced(path) => self.path().join(path),
+            ArchivePath::NamespacedList(path) => self.path().join(path),
+            ArchivePath::ClusterList(path) => self.path().join(path),
+            ArchivePath::Logs(path) => self.path().join(path),
+            ArchivePath::Custom(path) => self.path().join(path),
+        }
     }
 }
 
@@ -87,49 +107,21 @@ impl From<&KubeconfigFile> for config::Kubeconfig {
 pub enum Encoding {
     #[default]
     Path,
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     Gzip,
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     Zip,
 }
 
 impl From<&str> for Encoding {
     fn from(value: &str) -> Self {
         match value {
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             "zip" => Self::Zip,
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             "gzip" => Self::Gzip,
             _ => Self::Path,
         }
-    }
-}
-
-#[derive(Clone, Default, Debug)]
-/// Representation holds the path and content for a serialized Kubernetes object.
-pub struct Representation {
-    path: PathBuf,
-    data: String,
-}
-
-impl Representation {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    pub fn with_data(self, data: &str) -> Self {
-        Self {
-            data: data.into(),
-            ..self
-        }
-    }
-
-    pub fn with_path(self, path: PathBuf) -> Self {
-        Self { path, ..self }
-    }
-
-    pub fn data(&self) -> &str {
-        self.data.as_ref()
     }
 }
 
@@ -138,9 +130,9 @@ impl Representation {
 /// Zip uses the zip compression format.
 pub enum Writer {
     Path(Archive),
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     Gzip(Archive, Builder<GzEncoder<File>>),
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     Zip(Archive, ZipWriter<File>),
 }
 
@@ -150,21 +142,14 @@ impl From<Writer> for Arc<Mutex<Writer>> {
     }
 }
 
-#[inline]
-/// Replaces invalid characters in a path with dashes, to make the path valid for GitHub artifacts.
-/// GitHub artifacts paths may not contain : * ? | characters. This replaces those characters with dashes.
-fn fix_github_artifacts_path(path: &str) -> String {
-    path.replace([':', '*', '?', '|'], "-")
-}
-
 impl Writer {
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub fn finish(&mut self) -> anyhow::Result<()> {
         match self {
             Self::Path(_) => (),
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Self::Gzip(_, builder) => builder.finish()?,
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Self::Zip(_, writer) => match writer.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
@@ -175,10 +160,10 @@ impl Writer {
 
     /// Adds a representation data to the archive under the representation path
     pub fn store(&mut self, repr: &Representation) -> anyhow::Result<()> {
-        log::debug!("Writing {}...", repr.path.to_str().unwrap());
+        log::debug!("Writing {}...", repr.path());
 
-        let archive_path = fix_github_artifacts_path(repr.path.to_str().unwrap());
-        let data = repr.data.clone();
+        let archive_path: String = repr.path().try_into()?;
+        let data = repr.data();
 
         match self {
             Self::Path(Archive(archive)) => {
@@ -189,7 +174,7 @@ impl Writer {
                 let mut file = File::create(file)?;
                 file.write_all(data.as_bytes())?;
             }
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Self::Gzip(Archive(archive), builder) => {
                 let mut header = Header::new_gnu();
                 header.set_size(data.len() as u64 + 1);
@@ -200,9 +185,10 @@ impl Writer {
                 let file = PathBuf::from(root_prefix).join(archive_path);
                 builder.append_data(&mut header, file, data.as_bytes())?;
             }
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Self::Zip(Archive(archive), writer) => {
-                let path = repr.path.parent().unwrap().to_str().unwrap();
+                let path = repr.path();
+                let path = path.parent().unwrap().to_str().unwrap();
                 writer.add_directory(path, FileOptions::default())?;
 
                 let root_prefix = archive.file_stem().unwrap();
@@ -226,7 +212,7 @@ impl Writer {
 
         Ok(match encoding {
             Encoding::Path => Self::Path(archive.clone()),
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Encoding::Gzip => Self::Gzip(
                 archive.clone(),
                 Builder::new(GzEncoder::new(
@@ -234,7 +220,7 @@ impl Writer {
                     Compression::default(),
                 )),
             ),
-            #[cfg(feature="archive")]
+            #[cfg(feature = "archive")]
             Encoding::Zip => Self::Zip(
                 archive.clone(),
                 ZipWriter::new(File::create(archive.0.with_extension("zip"))?),
@@ -247,18 +233,17 @@ impl Writer {
 mod tests {
     use std::{
         env,
-        fs::{self, File},
-        io::{Read, Seek},
+        fs::{self},
     };
 
     use tempdir::TempDir;
 
-    use crate::gather::{config::Secrets, writer::Representation};
+    use crate::gather::{config::Secrets, representation::ArchivePath, writer::Representation};
 
     use super::{Archive, Encoding, Writer};
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_new_gzip() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.tar.gz");
@@ -268,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_new_zip() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
@@ -278,16 +263,17 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_add_gzip() {
+        use crate::gather::representation::ArchivePath;
+
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Gzip).unwrap();
 
-        let repr = Representation {
-            path: "test.txt".into(),
-            data: "content".into(),
-        };
+        let repr = Representation::new()
+            .with_data("content".into())
+            .with_path(ArchivePath::Custom("test.txt".into()));
 
         assert!(writer.store(&repr).is_ok());
         assert!(writer.finish().is_ok());
@@ -295,18 +281,24 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_add_zip() {
+        use std::{
+            fs::File,
+            io::{Read, Seek},
+        };
+
+        use crate::gather::representation::ArchivePath;
+
         env::set_var("SECRET", "secret");
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Zip).unwrap();
 
-        let repr = Representation {
-            path: "test.txt".into(),
-            data: "content with secret".into(),
-        };
+        let repr = Representation::new()
+            .with_path(ArchivePath::Custom("test.txt".into()))
+            .with_data("content with secret".into());
 
         let secret: Secrets = vec!["SECRET".into()].into();
         assert!(writer.store(&secret.strip(&repr)).is_ok());
@@ -333,10 +325,9 @@ mod tests {
         let archive = tmp_dir.path().join("cluster1/collected");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Path).unwrap();
 
-        let repr = Representation {
-            path: "test.txt".into(),
-            data: "content with secret".into(),
-        };
+        let repr = Representation::new()
+            .with_data("content with secret")
+            .with_path(ArchivePath::Namespaced("test.txt".into()));
 
         let secret: Secrets = vec!["SECRET".into()].into();
         assert!(writer.store(&secret.strip(&repr)).is_ok());
@@ -348,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_try_into_nested_file_success() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let tmp_dir = tmp_dir.path();
@@ -364,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     fn test_try_into_writer_empty_path() {
         assert!(Writer::new(&Archive::new("".into()), &Encoding::Zip).is_err());
     }

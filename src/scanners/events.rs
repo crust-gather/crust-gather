@@ -9,13 +9,13 @@ use kube::Api;
 use kube_core::{ApiResource, TypeMeta};
 use std::{
     fmt::Debug,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
 use crate::gather::{
     config::{Config, Secrets},
-    writer::{Representation, Writer},
+    representation::{ArchivePath, Representation},
+    writer::Writer,
 };
 
 use super::{interface::Collect, objects::Objects};
@@ -49,8 +49,8 @@ impl Collect<Event> for Events {
         self.collectable.get_writer()
     }
 
-    fn path(&self, _: &Event) -> PathBuf {
-        "event-filter.html".into()
+    fn path(&self, _: &Event) -> ArchivePath {
+        ArchivePath::Custom("event-filter.html".into())
     }
 
     fn filter(&self, obj: &Event) -> anyhow::Result<bool> {
