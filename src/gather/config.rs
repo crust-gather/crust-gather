@@ -16,11 +16,13 @@ use tokio::time::timeout;
 use crate::filters::filter::List;
 use crate::scanners::dynamic::Dynamic;
 use crate::scanners::events::Events;
+use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
-use crate::scanners::logs::{LogGroup, Logs};
+use crate::scanners::logs::{LogSelection, Logs};
 use crate::scanners::nodes::Nodes;
 
-use super::writer::{Representation, Writer};
+use super::representation::Representation;
+use super::writer::Writer;
 
 #[derive(Default, Clone)]
 pub struct Secrets(pub Vec<String>);
@@ -156,6 +158,7 @@ enum Collectable {
     Logs(Logs),
     Events(Events),
     Nodes(Nodes),
+    Info(Info),
 }
 
 impl Collectable {
@@ -165,6 +168,7 @@ impl Collectable {
             Self::Logs(l) => l.collect_retry(),
             Self::Events(e) => e.collect_retry(),
             Self::Nodes(n) => n.collect_retry(),
+            Self::Info(i) => i.collect_retry(),
         }
         .await;
     }
@@ -175,11 +179,12 @@ impl Group {
         match self {
             Self::Nodes(resource) => vec![
                 Collectable::Nodes(Nodes::from(gather.clone())),
+                Collectable::Info(Info::new(gather.clone())),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
             Self::Logs(resource) => vec![
-                Collectable::Logs(Logs::new(gather.clone(), LogGroup::Current)),
-                Collectable::Logs(Logs::new(gather.clone(), LogGroup::Previous)),
+                Collectable::Logs(Logs::new(gather.clone(), LogSelection::Current)),
+                Collectable::Logs(Logs::new(gather.clone(), LogSelection::Previous)),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
             Self::Events(resource) => vec![
@@ -200,7 +205,6 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
-        filters::namespace::NamespaceInclude,
         gather::writer::{Archive, Encoding},
         tests::kwok,
     };
@@ -236,7 +240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     #[serial]
     async fn test_gzip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
@@ -247,11 +251,11 @@ mod tests {
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let config = Config {
             client: test_env.client().await,
-            filter: Arc::new(List(vec![NamespaceInclude::try_from(
-                "default".to_string(),
-            )
-            .unwrap()
-            .into()])),
+            filter: Arc::new(List(vec![
+                crate::filters::namespace::NamespaceInclude::try_from("default".to_string())
+                    .unwrap()
+                    .into(),
+            ])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder")
                 .into(),
@@ -264,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature="archive")]
+    #[cfg(feature = "archive")]
     #[serial]
     async fn test_zip_collect() {
         let test_env = kwok::TestEnvBuilder::default()
