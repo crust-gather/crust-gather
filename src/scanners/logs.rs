@@ -1,5 +1,5 @@
 use std::{
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     sync::{Arc, Mutex},
 };
 
@@ -11,30 +11,31 @@ use kube_core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt,
 
 use crate::gather::{
     config::{Config, Secrets},
-    writer::{Representation, Writer},
+    representation::{ArchivePath, Container, LogGroup, Representation},
+    writer::Writer,
 };
 
 use super::{interface::Collect, objects::Objects};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LogGroup {
+#[derive(Clone, PartialEq)]
+pub enum LogSelection {
     Current,
     Previous,
 }
 
-impl fmt::Display for LogGroup {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl Display for LogSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Current => write!(formatter, "current.log"),
-            Self::Previous => write!(formatter, "previous.log"),
+            LogSelection::Current => write!(f, "current.log"),
+            LogSelection::Previous => write!(f, "previous.log"),
         }
     }
 }
 
-impl From<LogGroup> for LogParams {
-    fn from(val: LogGroup) -> Self {
+impl From<LogSelection> for LogParams {
+    fn from(val: LogSelection) -> Self {
         Self {
-            previous: val == LogGroup::Previous,
+            previous: val == LogSelection::Previous,
             ..Default::default()
         }
     }
@@ -46,17 +47,17 @@ impl From<LogGroup> for LogParams {
 #[derive(Clone)]
 pub struct Logs {
     pub collectable: Objects<Pod>,
-    pub group: LogGroup,
+    pub group: LogSelection,
 }
 
 impl Debug for Logs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Logs").field("group", &self.group).finish_non_exhaustive()
+        self.group.fmt(f)
     }
 }
 
 impl Logs {
-    pub fn new(config: Config, group: LogGroup) -> Self {
+    pub fn new(config: Config, group: LogSelection) -> Self {
         Self {
             collectable: Objects::new_typed(config, ApiResource::erase::<Pod>(&())),
             group,
@@ -98,7 +99,7 @@ impl Collect<Pod> for Logs {
                 pod.name_any().as_str(),
                 &LogParams {
                     container: Some(container.name.clone()),
-                    ..self.group.into()
+                    ..self.group.clone().into()
                 },
             )
             .await
@@ -115,10 +116,16 @@ impl Collect<Pod> for Logs {
                 }
             };
 
-            let container_path = format!("{}/{}/{}", pod.name_any(), container.name, self.group);
             representations.push(
                 Representation::new()
-                    .with_path(Collect::path(self, pod).with_file_name(container_path))
+                    .with_path(ArchivePath::logs_path(
+                        pod,
+                        self.get_type_meta(),
+                        match self.group {
+                            LogSelection::Current => LogGroup::Current(Container(container.name)),
+                            LogSelection::Previous => LogGroup::Previous(Container(container.name)),
+                        },
+                    ))
                     .with_data(logs.as_str()),
             );
         }
@@ -153,11 +160,11 @@ mod test {
             config::Config,
             writer::{Archive, Encoding, Writer},
         },
-        scanners::{interface::Collect, objects::Objects},
+        scanners::{interface::Collect, logs::LogSelection, objects::Objects},
         tests::kwok,
     };
 
-    use super::{LogGroup, Logs};
+    use super::Logs;
 
     #[tokio::test]
     #[serial]
@@ -211,7 +218,7 @@ mod test {
                 ),
                 ApiResource::erase::<Pod>(&()),
             ),
-            group: LogGroup::Current,
+            group: LogSelection::Current,
         }
         .representations(&pod)
         .await

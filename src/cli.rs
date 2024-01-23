@@ -13,6 +13,7 @@ use crate::{
     },
     gather::{
         config::{Config, RunDuration},
+        server::Server,
         writer::{Archive, Encoding, KubeconfigFile, Writer},
     },
 };
@@ -44,24 +45,31 @@ pub enum Commands {
         #[command(flatten)]
         config: GatherCommands,
     },
+
     /// Parse the gather configuration from a file.
+    ///
+    /// Example file:
+    // ```yaml
+    /// include_namespace:
+    /// - default
+    /// include_kind:
+    /// - Pod
+    /// secret:
+    /// - FOO
+    /// - BAR
+    /// kubeconfig: ~/.kube/my_kubeconfig
+    /// ```
     CollectFromConfig {
-        /// Parse the gather configuration from a file.
-        ///
-        /// Example file:
-        // ```yaml
-        /// include_namespace:
-        /// - default
-        /// include_kind:
-        /// - Pod
-        /// secret:
-        /// - FOO
-        /// - BAR
-        /// kubeconfig: ~/.kube/my_kubeconfig
-        /// ```
         #[arg(short, long,
             value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg.to_string())?)},)]
         config: GatherCommands,
+    },
+
+    /// Start the API server on the archive.
+    Serve {
+        /// Start the API server with the provided configuration.
+        #[command(flatten)]
+        serve: Server,
     },
 }
 
@@ -212,15 +220,6 @@ pub struct GatherCommands {
     duration: RunDuration,
 }
 
-impl From<&Commands> for GatherCommands {
-    fn from(val: &Commands) -> Self {
-        match val {
-            Commands::Collect { config } => config.clone(),
-            Commands::CollectFromConfig { config } => config.clone(),
-        }
-    }
-}
-
 impl TryFrom<String> for GatherCommands {
     type Error = anyhow::Error;
 
@@ -247,12 +246,6 @@ impl GatherCommands {
             Some(kubeconfig) => kubeconfig.client().await?,
             None => Client::try_default().await?,
         })
-    }
-}
-
-impl Commands {
-    pub async fn load(&self) -> anyhow::Result<Config> {
-        Into::<GatherCommands>::into(self).load().await
     }
 }
 

@@ -8,14 +8,23 @@ mod tests;
 
 use clap::{self, Parser};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, GatherCommands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     cli.init();
 
-    cli.command.load().await?.collect().await?;
+    match cli.command {
+        cli::Commands::CollectFromConfig { config } | cli::Commands::Collect { config } => {
+            Into::<GatherCommands>::into(config)
+                .load()
+                .await?
+                .collect()
+                .await?
+        }
+        cli::Commands::Serve { serve } => serve.get_api()?.serve().await?,
+    };
 
     log::info!("Done");
     Ok(())

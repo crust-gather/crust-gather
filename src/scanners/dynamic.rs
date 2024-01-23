@@ -9,7 +9,8 @@ use kube_core::{ApiResource, DynamicObject, ResourceExt, TypeMeta};
 
 use crate::gather::{
     config::{Config, Secrets},
-    writer::{Representation, Writer},
+    representation::Representation,
+    writer::Writer,
 };
 
 use super::{interface::Collect, objects::Objects};

@@ -100,7 +100,6 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
 
 #[cfg(test)]
 mod test {
-    use std::path::PathBuf;
 
     use k8s_openapi::{
         api::core::v1::{Namespace, Pod},
@@ -116,6 +115,7 @@ mod test {
         filters::{filter::List, namespace::NamespaceInclude},
         gather::{
             config::Config,
+            representation::ArchivePath,
             writer::{Archive, Encoding, Writer},
         },
         scanners::{interface::Collect, objects::Objects},
@@ -208,7 +208,7 @@ mod test {
             ApiResource::erase::<Namespace>(&()),
         );
 
-        let expected = PathBuf::from("cluster/v1/namespace/test.yaml");
+        let expected = ArchivePath::Cluster("cluster/v1/namespace/test.yaml".into());
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);
@@ -234,7 +234,7 @@ mod test {
             ApiResource::erase::<Pod>(&()),
         );
 
-        let expected = PathBuf::from("namespaces/default/v1/pod/test.yaml");
+        let expected = ArchivePath::Namespaced("namespaces/default/v1/pod/test.yaml".into());
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);

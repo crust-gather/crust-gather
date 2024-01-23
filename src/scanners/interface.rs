@@ -8,7 +8,7 @@ use kube_core::{ApiResource, DynamicObject, GroupVersionKind, ResourceExt, TypeM
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
-use std::path::PathBuf;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
@@ -16,7 +16,8 @@ use tokio_retry::Retry;
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
-use crate::gather::writer::{Representation, Writer};
+use crate::gather::representation::{ArchivePath, Representation};
+use crate::gather::writer::Writer;
 
 trait_set! {
     pub trait Base = Clone + Debug;
@@ -49,22 +50,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Namespaced objects are stored under `namespaces/{namespace}/{api_version}/{kind}/{name}.yaml`.
     ///
     /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
-    fn path(&self, obj: &R) -> PathBuf {
-        let (api_version, kind, name) = (
-            self.get_type_meta()
-                .api_version
-                .to_lowercase()
-                .replace('/', "-"),
-            self.get_type_meta().kind.to_lowercase(),
-            obj.name_any(),
-        );
-
-        // Constructs the path for the collected object, cluster-scoped or namespaced.
-        match obj.namespace().unwrap_or_default().as_str() {
-            "" => format!("cluster/{api_version}/{kind}/{name}.yaml"),
-            namespace => format!("namespaces/{namespace}/{api_version}/{kind}/{name}.yaml"),
-        }
-        .into()
+    fn path(&self, obj: &R) -> ArchivePath {
+        ArchivePath::to_path(obj, self.get_type_meta())
     }
 
     /// Filters objects based on their GroupVersionKind and the object itself.
