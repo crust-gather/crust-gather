@@ -2,7 +2,7 @@
 use flate2::{write::GzEncoder, Compression};
 
 use kube::{
-    config::{self, KubeConfigOptions},
+    config::{self, KubeConfigOptions, Kubeconfig},
     Client,
 };
 
@@ -71,17 +71,48 @@ impl From<&str> for Archive {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Default, Clone, Deserialize)]
 /// `KubeconfigFile` wraps a Kubeconfig struct used to instantiate a Kubernetes client.
 pub struct KubeconfigFile(config::Kubeconfig);
 
 impl KubeconfigFile {
     /// Creates a new Kubernetes client from the `KubeconfigFile`.
-    pub async fn client(&self) -> anyhow::Result<Client> {
+    pub async fn client(&self, insecure: bool) -> anyhow::Result<Client> {
+        let kubeconfig = match insecure {
+            true => KubeconfigFile::insecure(self.into()),
+            false => self.into(),
+        };
+
         Ok(Client::try_from(
-            kube::Config::from_custom_kubeconfig(self.into(), &KubeConfigOptions::default())
+            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
                 .await?,
         )?)
+    }
+
+    /// Creates a new Kubernetes client from the inferred config.
+    pub async fn infer(insecure: bool) -> anyhow::Result<Client> {
+        let kubeconfig = match insecure {
+            true => KubeconfigFile::insecure(Kubeconfig::read()?),
+            false => Kubeconfig::read()?,
+        };
+
+        Ok(Client::try_from(
+            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
+        )?)
+    }
+
+    fn insecure(config: kube::config::Kubeconfig) -> kube::config::Kubeconfig {
+        let mut config = config.clone();
+        Kubeconfig{
+            clusters: config.clusters.iter_mut().map(|c| match c.cluster.as_mut() {
+                Some(cluster) => {
+                    cluster.insecure_skip_tls_verify = Some(true);
+                    c
+                },
+                _ => c,
+            }.clone()).collect(),
+            ..config
+        }
     }
 }
 
