@@ -1,0 +1,36 @@
+on:
+  # Indicates I want to run this workflow on all branches, PR, and tags
+  push:
+    branches: ["main"]
+    tags: ["*"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  # Define the rust version to use
+  RUST_VERSION: 1.75.0
+
+
+jobs:
+
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Git repo
+        uses: actions/checkout@v4
+
+      # Linux & Windows
+      - name: Install rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          # We setup Rust toolchain and the desired target
+          profile: minimal
+          toolchain: "${{ env.RUST_VERSION }}"
+          override: true
+          target: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy
+
+      - name: Test binary
+        run: |
+          GOOS=linux GOARCH=amd64 make test
