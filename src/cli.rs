@@ -179,6 +179,15 @@ pub struct GatherCommands {
         value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
     kubeconfig: Option<KubeconfigFile>,
 
+    /// Pass an insecure flag to kubeconfig file.
+    /// If not provided, defaults to false and kubeconfig will be uses as-is.
+    ///
+    /// Example:
+    ///     --insecure-skip-tls-verify=./kubeconfig
+    #[arg(short, long)]
+    #[serde(default)]
+    insecure_skip_tls_verify: bool,
+
     /// The output file path.
     /// Defaults to a new archive with name "crust-gather".
     ///
@@ -243,8 +252,8 @@ impl GatherCommands {
         log::info!("Initializing client...");
 
         Ok(match &self.kubeconfig {
-            Some(kubeconfig) => kubeconfig.client().await?,
-            None => Client::try_default().await?,
+            Some(kubeconfig) => kubeconfig.client(self.insecure_skip_tls_verify).await?,
+            None => KubeconfigFile::infer(self.insecure_skip_tls_verify).await?,
         })
     }
 }
@@ -351,6 +360,33 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn test_insecure_client_from_kubeconfig() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .build();
+
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let kubeconfig =
+            KubeconfigFile::try_from(test_env.kubeconfig_path().to_str().unwrap().to_string())
+                .unwrap();
+
+        let commands = GatherCommands {
+            insecure_skip_tls_verify: true,
+            kubeconfig: Some(kubeconfig),
+            ..Default::default()
+        };
+
+        let client = commands.client().await.unwrap();
+
+        let ns_api: Api<Namespace> = Api::all(client);
+        ns_api.list(&ListParams::default()).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn test_client_from_default() {
         let test_env = kwok::TestEnvBuilder::default()
             .insecure_skip_tls_verify(true)
@@ -364,6 +400,29 @@ mod tests {
             .unwrap();
 
         let commands = GatherCommands::default();
+        let client = commands.client().await.unwrap();
+
+        let ns_api: Api<Namespace> = Api::all(client);
+        ns_api.list(&ListParams::default()).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_insecure_client_from_default() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let commands = GatherCommands{
+            insecure_skip_tls_verify: true,
+            ..GatherCommands::default()
+        };
         let client = commands.client().await.unwrap();
 
         let ns_api: Api<Namespace> = Api::all(client);
