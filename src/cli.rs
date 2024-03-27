@@ -6,7 +6,7 @@ use kube::Client;
 
 use crate::{
     filters::{
-        filter::{FilterType, List},
+        filter::{FilterGroup, FilterList, FilterType},
         group::{GroupExclude, GroupInclude},
         kind::{KindExclude, KindInclude},
         namespace::{NamespaceExclude, NamespaceInclude},
@@ -46,23 +46,28 @@ pub enum Commands {
         config: GatherCommands,
     },
 
-    /// Parse the gather configuration from a file.
-    ///
-    /// Example file:
-    // ```yaml
-    /// include_namespace:
-    /// - default
-    /// include_kind:
-    /// - Pod
-    /// secret:
-    /// - FOO
-    /// - BAR
-    /// kubeconfig: ~/.kube/my_kubeconfig
-    /// ```
     CollectFromConfig {
+        /// Parse the gather configuration from a file.
+        ///
+        /// Example file:
+        // ```yaml
+        /// filters:
+        /// - include_namespace:
+        ///   - default
+        ///   include_kind:
+        ///   - Pod
+        /// settings:
+        ///   secret:
+        ///   - FOO
+        ///   - BAR
+        ///   kubeconfig: ~/.kube/my_kubeconfig
+        /// ```
         #[arg(short, long,
             value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg.to_string())?)},)]
         config: GatherCommands,
+
+        #[command(flatten)]
+        overrides: GatherSettings,
     },
 
     /// Start the API server on the archive.
@@ -76,6 +81,113 @@ pub enum Commands {
 #[derive(Parser, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatherCommands {
+    #[serde(default)]
+    #[clap(skip)]
+    filters: Vec<Filters>,
+
+    #[command(flatten)]
+    #[serde(default)]
+    filter: Option<Filters>,
+
+    #[command(flatten)]
+    #[serde(default)]
+    settings: GatherSettings,
+}
+
+impl GatherCommands {
+    pub fn merge(&self, other: GatherSettings) -> Self {
+        Self {
+            filter: self.filter.clone(),
+            filters: self.filters.clone(),
+            settings: self.settings.merge(other),
+        }
+    }
+}
+
+impl GatherSettings {
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            kubeconfig: other.kubeconfig.or(self.kubeconfig.clone()),
+            insecure_skip_tls_verify: other
+                .insecure_skip_tls_verify
+                .or(self.insecure_skip_tls_verify),
+            file: other.file.or(self.file.clone()),
+            encoding: other.encoding.or(self.encoding.clone()),
+            secrets: if other.secrets.is_empty() {
+                self.secrets.clone()
+            } else {
+                other.secrets
+            },
+            duration: other.duration.or(self.duration),
+        }
+    }
+}
+
+#[derive(Parser, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatherSettings {
+    /// Path to a kubeconfig file.
+    /// If not provided, will attempt to use the default config for the environemnt.
+    ///
+    /// Example:
+    ///     --kubeconfig=./kubeconfig
+    #[arg(short, long, value_name = "PATH",
+        value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
+    kubeconfig: Option<KubeconfigFile>,
+
+    /// Pass an insecure flag to kubeconfig file.
+    /// If not provided, defaults to false and kubeconfig will be uses as-is.
+    ///
+    /// Example:
+    ///     --insecure-skip-tls-verify
+    #[arg(short, long)]
+    #[serde(default)]
+    insecure_skip_tls_verify: Option<bool>,
+
+    /// The output file path.
+    /// Defaults to a new archive with name "crust-gather".
+    ///
+    /// Example:
+    ///     --file=./artifacts
+    #[arg(short, long, value_name = "PATH")]
+    #[serde(default)]
+    file: Option<Archive>,
+
+    /// Encoding for the output file.
+    /// By default there is no encoding and data is written to the filesystem.
+    /// The available options are:
+    /// - gzip: GZip encoded tar.
+    /// - zip: ZIP encoded.
+    ///
+    /// Example:
+    ///     --encoding=zip
+    #[arg(short, long, value_enum)]
+    #[serde(default)]
+    encoding: Option<Encoding>,
+
+    /// Secret environment variable name with data to exclude in the collected artifacts.
+    /// Can be specified multiple times to exclude multiple values.
+    ///
+    /// Example:
+    ///     --secret=MY_ENV_SECRET_DATA --secret=SOME_OTHER_SECRET_DATA
+    #[arg(short, long = "secret", action = ArgAction::Append)]
+    #[serde(default)]
+    secrets: Vec<String>,
+
+    /// The duration to run the collection for.
+    /// Defaults to 60 seconds.
+    ///
+    /// Example:
+    ///     --duration=2m
+    #[arg(short, long, value_name = "DURATION",
+        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
+    #[serde(default)]
+    duration: Option<RunDuration>,
+}
+
+#[derive(Parser, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Filters {
     /// Namespace to include in the resource collection.
     ///
     /// By default all cluster namespaces are getting collected.
@@ -169,64 +281,6 @@ pub struct GatherCommands {
             action = ArgAction::Append )]
     #[serde(default)]
     exclude_group: Vec<GroupExclude>,
-
-    /// Path to a kubeconfig file.
-    /// If not provided, will attempt to use the default config for the environemnt.
-    ///
-    /// Example:
-    ///     --kubeconfig=./kubeconfig
-    #[arg(short, long, value_name = "PATH",
-        value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
-    kubeconfig: Option<KubeconfigFile>,
-
-    /// Pass an insecure flag to kubeconfig file.
-    /// If not provided, defaults to false and kubeconfig will be uses as-is.
-    ///
-    /// Example:
-    ///     --insecure-skip-tls-verify=./kubeconfig
-    #[arg(short, long)]
-    #[serde(default)]
-    insecure_skip_tls_verify: bool,
-
-    /// The output file path.
-    /// Defaults to a new archive with name "crust-gather".
-    ///
-    /// Example:
-    ///     --file=./artifacts
-    #[arg(short, long, value_name = "PATH", default_value_t = Default::default())]
-    #[serde(default)]
-    file: Archive,
-
-    /// Encoding for the output file.
-    /// By default there is no encoding and data is written to the filesystem.
-    /// The available options are:
-    /// - gzip: GZip encoded tar.
-    /// - zip: ZIP encoded.
-    ///
-    /// Example:
-    ///     --encoding=zip
-    #[arg(short, long, value_enum)]
-    #[serde(default)]
-    encoding: Option<Encoding>,
-
-    /// Secret environment variable name with data to exclude in the collected artifacts.
-    /// Can be specified multiple times to exclude multiple values.
-    ///
-    /// Example:
-    ///     --secret=MY_ENV_SECRET_DATA --secret=SOME_OTHER_SECRET_DATA
-    #[arg(short, long = "secret", action = ArgAction::Append)]
-    #[serde(default)]
-    secrets: Vec<String>,
-
-    /// The duration to run the collection for.
-    /// Defaults to 60 seconds.
-    ///
-    /// Example:
-    ///     --duration=2m
-    #[arg(short, long, value_name = "DURATION", default_value_t = Default::default(),
-        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
-    #[serde(default)]
-    duration: RunDuration,
 }
 
 impl TryFrom<String> for GatherCommands {
@@ -242,77 +296,63 @@ impl GatherCommands {
         Ok(Config::new(
             self.client().await?,
             self.into(),
-            self.try_into()?,
-            self.secrets.clone().into(),
-            self.duration,
+            (&self.settings).try_into()?,
+            self.settings.secrets.clone().into(),
+            self.settings.duration.unwrap_or_default(),
         ))
     }
 
     async fn client(&self) -> anyhow::Result<Client> {
         log::info!("Initializing client...");
 
-        Ok(match &self.kubeconfig {
-            Some(kubeconfig) => kubeconfig.client(self.insecure_skip_tls_verify).await?,
-            None => KubeconfigFile::infer(self.insecure_skip_tls_verify).await?,
+        Ok(match &self.settings.kubeconfig {
+            Some(kubeconfig) => {
+                kubeconfig
+                    .client(self.settings.insecure_skip_tls_verify.unwrap_or_default())
+                    .await?
+            }
+            None => {
+                KubeconfigFile::infer(self.settings.insecure_skip_tls_verify.unwrap_or_default())
+                    .await?
+            }
         })
     }
 }
 
-impl TryInto<Writer> for &GatherCommands {
+impl TryInto<Writer> for &GatherSettings {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<Writer, Self::Error> {
         log::info!("Opening archive...");
 
         Writer::new(
-            &self.file,
+            &self.file.clone().unwrap_or_default(),
             self.encoding.as_ref().map_or(&Encoding::Path, |e| e),
         )
     }
 }
 
-impl From<&GatherCommands> for List {
-    fn from(val: &GatherCommands) -> Self {
-        Self({
-            let data: Vec<Vec<FilterType>> = vec![
-                val.include_namespace
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-                val.exclude_namespace
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-                val.include_kind
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-                val.exclude_kind
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-                val.include_group
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-                val.exclude_group
-                    .iter()
-                    .map(Clone::clone)
-                    .map(Into::into)
-                    .collect(),
-            ];
-
-            data.iter()
-                .flatten()
-                .map(Clone::clone)
-                .map(Into::into)
-                .collect()
+impl From<&GatherCommands> for FilterGroup {
+    fn from(val: &GatherCommands) -> FilterGroup {
+        FilterGroup(match &val.filter {
+            Some(filter) => vec![filter.into()],
+            None => val.filters.iter().map(Into::into).collect(),
         })
+    }
+}
+
+impl From<&Filters> for FilterList {
+    fn from(filter: &Filters) -> Self {
+        let data: Vec<FilterType> = vec![
+            filter.include_namespace.clone().into(),
+            filter.exclude_namespace.clone().into(),
+            filter.include_kind.clone().into(),
+            filter.exclude_kind.clone().into(),
+            filter.include_group.clone().into(),
+            filter.exclude_group.clone().into(),
+        ];
+
+        Self(data.iter().map(Clone::clone).map(Into::into).collect())
     }
 }
 
@@ -348,7 +388,10 @@ mod tests {
                 .unwrap();
 
         let commands = GatherCommands {
-            kubeconfig: Some(kubeconfig),
+            settings: GatherSettings {
+                kubeconfig: Some(kubeconfig),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -361,8 +404,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insecure_client_from_kubeconfig() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .build();
+        let test_env = kwok::TestEnvBuilder::default().build();
 
         let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
         fs::write(test_env.kubeconfig_path(), kubeconfig)
@@ -374,8 +416,11 @@ mod tests {
                 .unwrap();
 
         let commands = GatherCommands {
-            insecure_skip_tls_verify: true,
-            kubeconfig: Some(kubeconfig),
+            settings: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(kubeconfig),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -409,8 +454,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insecure_client_from_default() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .build();
+        let test_env = kwok::TestEnvBuilder::default().build();
 
         env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
 
@@ -419,8 +463,11 @@ mod tests {
             .await
             .unwrap();
 
-        let commands = GatherCommands{
-            insecure_skip_tls_verify: true,
+        let commands = GatherCommands {
+            settings: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                ..Default::default()
+            },
             ..GatherCommands::default()
         };
         let client = commands.client().await.unwrap();
@@ -435,7 +482,8 @@ mod tests {
 
         let mut valid = File::create(tmp_dir.path().join("valid.yaml")).unwrap();
         let valid_config = r"
-        include_namespace:
+        filters:
+        - include_namespace:
             - default
             - kube-system
         ";
@@ -443,7 +491,8 @@ mod tests {
 
         let mut invalid = File::create(tmp_dir.path().join("invalid.yaml")).unwrap();
         let invalid_config = r"
-        include_namespace:
+        filters:
+        - include_namespace:
             - default
             - kube-system
         something: unknown
@@ -460,7 +509,8 @@ mod tests {
         );
         assert!(result.is_ok());
         let result = &result.unwrap();
-        assert_eq!(result.include_namespace.len(), 2);
+        assert!(result.filters.len() == 1);
+        assert!(result.filters[0].include_namespace.len() == 2);
 
         let result = GatherCommands::try_from(
             tmp_dir

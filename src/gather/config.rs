@@ -13,7 +13,7 @@ use kube_core::ApiResource;
 use serde::Deserialize;
 use tokio::time::timeout;
 
-use crate::filters::filter::List;
+use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
 use crate::scanners::events::Events;
 use crate::scanners::info::Info;
@@ -80,7 +80,7 @@ impl Display for RunDuration {
 #[derive(Clone)]
 pub struct Config {
     pub client: Client,
-    pub filter: Arc<List>,
+    pub filter: Arc<FilterGroup>,
     pub writer: Arc<Mutex<Writer>>,
     pub secrets: Secrets,
     duration: RunDuration,
@@ -89,7 +89,7 @@ pub struct Config {
 impl Config {
     pub fn new(
         client: Client,
-        filter: List,
+        filter: FilterGroup,
         writer: Writer,
         secrets: Secrets,
         duration: RunDuration,
@@ -205,9 +205,13 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
+        filters::filter::FilterList,
         gather::writer::{Archive, Encoding},
         tests::kwok,
     };
+
+    #[cfg(feature = "archive")]
+    use crate::filters::namespace::NamespaceInclude;
 
     use super::*;
 
@@ -249,13 +253,10 @@ mod tests {
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
+        let f = NamespaceInclude::try_from("default".to_string()).unwrap();
         let config = Config {
             client: test_env.client().await,
-            filter: Arc::new(List(vec![
-                crate::filters::namespace::NamespaceInclude::try_from("default".to_string())
-                    .unwrap()
-                    .into(),
-            ])),
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder")
                 .into(),
@@ -279,7 +280,7 @@ mod tests {
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
         let config = Config {
             client: test_env.client().await,
-            filter: Arc::new(List(vec![])),
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
                 .expect("failed to create builder")
                 .into(),
@@ -302,7 +303,7 @@ mod tests {
         let file_path = tmp_dir.path().join("crust-gather-test");
         let config = Config {
             client: test_env.client().await,
-            filter: Arc::new(List(vec![])),
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
                 .expect("failed to create builder")
                 .into(),
