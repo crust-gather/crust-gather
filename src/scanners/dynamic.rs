@@ -86,7 +86,7 @@ mod test {
     use tokio_retry::{strategy::FixedInterval, Retry};
 
     use crate::{
-        filters::{filter::List, namespace::NamespaceInclude},
+        filters::{filter::{FilterGroup, FilterList}, namespace::NamespaceInclude},
         gather::{
             config::Config,
             writer::{Archive, Encoding, Writer},
@@ -148,7 +148,7 @@ mod test {
             collectable: Objects::new(
                 Config::new(
                     test_env.client().await,
-                    List(vec![filter.into()]),
+                    FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
                         .expect("failed to create builder"),
                     Default::default(),

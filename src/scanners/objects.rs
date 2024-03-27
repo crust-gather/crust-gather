@@ -112,7 +112,7 @@ mod test {
     use tokio_retry::Retry;
 
     use crate::{
-        filters::{filter::List, namespace::NamespaceInclude},
+        filters::{filter::{FilterGroup, FilterList}, namespace::NamespaceInclude},
         gather::{
             config::Config,
             representation::ArchivePath,
@@ -169,7 +169,7 @@ mod test {
         let repr = Objects::new(
             Config::new(
                 test_env.client().await,
-                List(vec![filter.into()]),
+                FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),
@@ -199,7 +199,7 @@ mod test {
         let collectable = Objects::new(
             Config::new(
                 test_env.client().await,
-                List(vec![]),
+                FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),
@@ -225,7 +225,7 @@ mod test {
         let collectable = Objects::new(
             Config::new(
                 test_env.client().await,
-                List(vec![]),
+                FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),

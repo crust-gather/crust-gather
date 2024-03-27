@@ -7,7 +7,7 @@ use crate::scanners::interface::ResourceThreadSafe;
 
 use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
 pub struct Group {
     group: FilterRegex,
@@ -20,18 +20,14 @@ impl Group {
     }
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
 pub struct GroupInclude {
     group: Group,
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
-    fn filter_object(&self, _: &R) -> bool {
-        true
-    }
-
-    fn filter_api(&self, gvk: &GroupVersionKind) -> bool {
+    fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = self.group.matches(gvk);
 
         if !accepted {
@@ -43,7 +39,7 @@ impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
             );
         }
 
-        accepted
+        Some(accepted)
     }
 }
 
@@ -87,20 +83,20 @@ impl TryFrom<String> for GroupInclude {
     }
 }
 
-impl From<GroupInclude> for FilterType {
-    fn from(val: GroupInclude) -> Self {
+impl From<Vec<GroupInclude>> for FilterType {
+    fn from(val: Vec<GroupInclude>) -> Self {
         Self::GroupInclude(val)
     }
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
 pub struct GroupExclude {
     group: Group,
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
-    fn filter_api(&self, gvk: &GroupVersionKind) -> bool {
+    fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = !self.group.matches(gvk);
 
         if !accepted {
@@ -112,11 +108,7 @@ impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
             );
         }
 
-        accepted
-    }
-
-    fn filter_object(&self, _: &R) -> bool {
-        true
+        Some(accepted)
     }
 }
 
@@ -132,8 +124,8 @@ impl TryFrom<String> for GroupExclude {
     }
 }
 
-impl From<GroupExclude> for FilterType {
-    fn from(val: GroupExclude) -> Self {
+impl From<Vec<GroupExclude>> for FilterType {
+    fn from(val: Vec<GroupExclude>) -> Self {
         Self::GroupExclude(val)
     }
 }
@@ -142,42 +134,56 @@ impl From<GroupExclude> for FilterType {
 mod tests {
 
     use k8s_openapi::{api::core::v1::Pod, Resource};
-    use kube_core::{DynamicObject, TypeMeta};
+    use kube_core::{ApiResource, DynamicObject, TypeMeta};
 
     use super::*;
 
+    static POD: &str = r"---
+    apiVersion: v1
+    kind: Pod";
+
+    static DEPLOY: &str = r"---
+    apiVersion: apps/v1
+    kind: Deployment";
+
+    static RS: &str = r"---
+    apiVersion: apps/v1
+    kind: ReplicaSet";
+
     #[test]
     fn test_group_include_filter() {
-        let pod = r"---
-        apiVersion: v1
-        kind: Pod";
-
-        let deploy = r"---
-        apiVersion: apps/v1
-        kind: Deployment";
-
-        let rs = r"---
-        apiVersion: apps/v1
-        kind: ReplicaSet";
-
-        let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
-        let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
-        let replicaset_tm: TypeMeta = serde_yaml::from_str(rs).unwrap();
-
         let filter = GroupInclude::try_from("apps/(Deployment|ReplicaSet)".to_string()).unwrap();
 
-        assert!(!<GroupInclude as Filter<DynamicObject>>::filter_api(
-            &filter,
-            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
-        ));
-        assert!(<GroupInclude as Filter<DynamicObject>>::filter_api(
-            &filter,
-            &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
-        ));
-        assert!(<GroupInclude as Filter<DynamicObject>>::filter_api(
-            &filter,
-            &GroupVersionKind::try_from(replicaset_tm).expect("parse GVK")
-        ));
+        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
+        let replicaset_tm: TypeMeta = serde_yaml::from_str(RS).unwrap();
+        let obj: DynamicObject =
+            DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
+
+        assert_eq!(
+            <GroupInclude as Filter<DynamicObject>>::filter_object(
+                &filter,
+                &obj,
+                &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            <GroupInclude as Filter<DynamicObject>>::filter_object(
+                &filter,
+                &obj,
+                &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            <GroupInclude as Filter<DynamicObject>>::filter_object(
+                &filter,
+                &obj,
+                &GroupVersionKind::try_from(replicaset_tm).expect("parse GVK")
+            ),
+            Some(true)
+        );
     }
 
     #[test]
@@ -191,26 +197,33 @@ mod tests {
 
     #[test]
     fn test_group_exclude_filter() {
-        let pod = r"---
-        apiVersion: v1
-        kind: Pod";
-
-        let deploy = r"---
+        let other = r"---
         apiVersion: test/v1
         kind: OtherType";
 
-        let pod_tm: TypeMeta = serde_yaml::from_str(pod).unwrap();
-        let deploy_tm: TypeMeta = serde_yaml::from_str(deploy).unwrap();
+        let other_tm: TypeMeta = serde_yaml::from_str(other).unwrap();
+
+        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let obj: DynamicObject =
+            DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let exclude = GroupExclude::try_from(Pod::GROUP.to_string()).unwrap();
-        assert!(!<GroupExclude as Filter<DynamicObject>>::filter_api(
-            &exclude,
-            &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
-        ));
-        assert!(<GroupExclude as Filter<DynamicObject>>::filter_api(
-            &exclude,
-            &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
-        ));
+        assert_eq!(
+            <GroupExclude as Filter<DynamicObject>>::filter_object(
+                &exclude,
+                &obj,
+                &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            <GroupExclude as Filter<DynamicObject>>::filter_object(
+                &exclude,
+                &obj,
+                &GroupVersionKind::try_from(other_tm).expect("parse GVK")
+            ),
+            Some(true)
+        );
     }
 
     #[test]

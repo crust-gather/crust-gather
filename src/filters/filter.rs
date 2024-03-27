@@ -17,32 +17,56 @@ where
     R: Resource + Serialize + DeserializeOwned,
     R: Clone + Sync + Send + Debug,
 {
-    fn filter_object(&self, _: &R) -> bool;
-    fn filter_api(&self, _: &GroupVersionKind) -> bool;
+    fn filter_object(&self, _: &R, _: &GroupVersionKind) -> Option<bool> {
+        None
+    }
 
     fn filter(&self, gvk: &GroupVersionKind, obj: &R) -> bool {
-        self.filter_api(gvk) && self.filter_object(obj)
+        self.filter_object(obj, gvk).unwrap_or(true)
     }
 }
 
-pub trait FilterDefinition<R>: Filter<R> + TryFrom<String> + Into<FilterType> + Clone
+impl<T, R, I> Filter<R> for I
+where
+    R: Resource + Serialize + DeserializeOwned,
+    R: Clone + Sync + Send + Debug,
+    T: Filter<R>,
+    I: IntoIterator<Item = T> + Clone + Sync + Send,
+{
+    fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
+        let mut f = self
+            .clone()
+            .into_iter()
+            .flat_map(|f| f.filter_object(obj, gvk))
+            .peekable();
+
+        f.peek()?;
+
+        Some(f.any(|accepted| accepted))
+    }
+}
+
+pub trait FilterDefinition<R>: Filter<R> + TryFrom<String> + Clone
 where
     R: Resource + Serialize + DeserializeOwned,
     R: Clone + Sync + Send + Debug,
 {
 }
 
-#[derive(Default)]
-pub struct List(pub Vec<FilterType>);
+#[derive(Default, Debug)]
+pub struct FilterList(pub Vec<FilterType>);
 
-#[derive(Clone)]
+#[derive(Default)]
+pub struct FilterGroup(pub Vec<FilterList>);
+
+#[derive(Clone, Debug)]
 pub enum FilterType {
-    NamespaceExclude(NamespaceExclude),
-    NamespaceInclude(NamespaceInclude),
-    KindInclude(KindInclude),
-    KindExclude(KindExclude),
-    GroupInclude(GroupInclude),
-    GroupExclude(GroupExclude),
+    NamespaceExclude(Vec<NamespaceExclude>),
+    NamespaceInclude(Vec<NamespaceInclude>),
+    KindInclude(Vec<KindInclude>),
+    KindExclude(Vec<KindExclude>),
+    GroupInclude(Vec<GroupInclude>),
+    GroupExclude(Vec<GroupExclude>),
 }
 
 impl From<&Self> for FilterType {
@@ -51,61 +75,53 @@ impl From<&Self> for FilterType {
     }
 }
 
-impl<R: ResourceThreadSafe> Filter<R> for List {
-    fn filter_object(&self, obj: &R) -> bool {
-        let no_excludes = self
+impl<R: ResourceThreadSafe> Filter<R> for FilterGroup {
+    fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
+        let mut filter = self
             .0
             .iter()
-            .map(|f| match f {
-                FilterType::NamespaceExclude(f) => f.filter_object(obj),
-                FilterType::KindExclude(f) => f.filter_object(obj),
-                FilterType::GroupExclude(f) => f.filter_object(obj),
-                FilterType::NamespaceInclude(_) => true,
-                FilterType::KindInclude(_) => true,
-                FilterType::GroupInclude(_) => true,
-            })
-            .all(|allowed| allowed);
+            .filter_map(|f| f.filter_object(obj, gvk))
+            .peekable();
 
-        let mut includes = self.0.iter().map(|f| match f {
-            FilterType::NamespaceInclude(f) => f.filter_object(obj),
-            FilterType::KindInclude(f) => f.filter_object(obj),
-            FilterType::GroupInclude(f) => f.filter_object(obj),
-            FilterType::NamespaceExclude(_) => false,
-            FilterType::KindExclude(_) => false,
-            FilterType::GroupExclude(_) => false,
-        });
+        filter.peek()?;
 
-        no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed))
-    }
-
-    fn filter_api(&self, gvk: &GroupVersionKind) -> bool {
-        let no_excludes = self
-            .0
-            .iter()
-            .map(|f| match f {
-                FilterType::NamespaceExclude(f) => Filter::<R>::filter_api(f, gvk),
-                FilterType::KindExclude(f) => Filter::<R>::filter_api(f, gvk),
-                FilterType::GroupExclude(f) => Filter::<R>::filter_api(f, gvk),
-                FilterType::NamespaceInclude(_)
-                | FilterType::KindInclude(_)
-                | FilterType::GroupInclude(_) => true,
-            })
-            .all(|allowed| allowed);
-
-        let mut includes = self.0.iter().map(|f| match f {
-            FilterType::NamespaceInclude(f) => Filter::<R>::filter_api(f, gvk),
-            FilterType::KindInclude(f) => Filter::<R>::filter_api(f, gvk),
-            FilterType::GroupInclude(f) => Filter::<R>::filter_api(f, gvk),
-            FilterType::NamespaceExclude(_)
-            | FilterType::GroupExclude(_)
-            | FilterType::KindExclude(_) => false,
-        });
-
-        no_excludes && (includes.len() == 0 || includes.any(|allowed| allowed))
+        Some(filter.any(|accepted| accepted))
     }
 }
 
-#[derive(Clone, Deserialize)]
+impl<R: ResourceThreadSafe> Filter<R> for FilterList {
+    fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
+        let mut excludes = self
+            .0
+            .iter()
+            .filter_map(|f| match f {
+                FilterType::NamespaceExclude(e) => e.filter_object(obj, gvk),
+                FilterType::KindExclude(e) => e.filter_object(obj, gvk),
+                FilterType::GroupExclude(e) => e.filter_object(obj, gvk),
+                FilterType::NamespaceInclude(_) => None,
+                FilterType::KindInclude(_) => None,
+                FilterType::GroupInclude(_) => None,
+            })
+            .peekable();
+
+        if excludes.peek().is_some() && excludes.filter(|&e| !e).any(|allowed| !allowed) {
+            return Some(false);
+        }
+
+        let mut includes = self.0.iter().filter_map(|f| match f {
+            FilterType::NamespaceExclude(_) => None,
+            FilterType::KindExclude(_) => None,
+            FilterType::GroupExclude(_) => None,
+            FilterType::NamespaceInclude(i) => i.filter_object(obj, gvk),
+            FilterType::KindInclude(i) => i.filter_object(obj, gvk),
+            FilterType::GroupInclude(i) => i.filter_object(obj, gvk),
+        });
+
+        Some(includes.all(|allowed| allowed))
+    }
+}
+
+#[derive(Clone, Deserialize, Debug)]
 #[serde(try_from = "String")]
 pub struct FilterRegex(pub Regex);
 
@@ -139,36 +155,73 @@ impl TryFrom<String> for FilterRegex {
 mod tests {
 
     use k8s_openapi::api::core::v1::Pod;
-    use kube_core::{ApiResource, DynamicObject};
+    use kube_core::{ApiResource, DynamicObject, TypeMeta};
 
     use crate::filters::namespace::{NamespaceExclude, NamespaceInclude};
 
     use super::*;
 
+    static POD: &str = r"---
+    apiVersion: v1
+    kind: Pod";
+
     #[test]
     fn filter_all_filters_allow() {
         let obj = DynamicObject::new("", &ApiResource::erase::<Pod>(&())).within("test");
 
-        assert!(List(vec![
-            FilterType::NamespaceInclude(NamespaceInclude::try_from("test".to_string()).unwrap()),
-            FilterType::NamespaceInclude(NamespaceInclude::try_from("other".to_string()).unwrap()),
-            FilterType::NamespaceInclude(NamespaceInclude::try_from("test".to_string()).unwrap())
-        ])
-        .filter_object(&obj));
+        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        assert_eq!(
+            FilterList(vec![FilterType::NamespaceInclude(vec![
+                NamespaceInclude::try_from("test".to_string()).unwrap(),
+                NamespaceInclude::try_from("other".to_string()).unwrap(),
+                NamespaceInclude::try_from("test".to_string()).unwrap(),
+            ]),])
+            .filter_object(
+                &obj,
+                &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            ),
+            Some(true)
+        );
 
-        assert!(!List(vec![
-            FilterType::NamespaceInclude(NamespaceInclude::try_from("test".to_string()).unwrap()),
-            FilterType::NamespaceExclude(NamespaceExclude::try_from("test".to_string()).unwrap()),
-        ])
-        .filter_object(&obj));
+        assert_eq!(
+            FilterList(vec![
+                FilterType::NamespaceInclude(vec![
+                    NamespaceInclude::try_from("test".to_string()).unwrap()
+                ]),
+                FilterType::NamespaceExclude(vec![
+                    NamespaceExclude::try_from("test".to_string()).unwrap()
+                ]),
+            ])
+            .filter_object(
+                &obj,
+                &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            ),
+            Some(false)
+        );
 
-        assert!(!List(vec![
-            FilterType::NamespaceExclude(NamespaceExclude::try_from("other".to_string()).unwrap()),
-            FilterType::NamespaceExclude(NamespaceExclude::try_from("test".to_string()).unwrap()),
-        ])
-        .filter_object(&obj));
+        assert_eq!(
+            FilterList(vec![
+                FilterType::NamespaceExclude(vec![
+                    NamespaceExclude::try_from("other".to_string()).unwrap()
+                ]),
+                FilterType::NamespaceExclude(vec![
+                    NamespaceExclude::try_from("test".to_string()).unwrap()
+                ]),
+            ])
+            .filter_object(
+                &obj,
+                &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            ),
+            Some(false)
+        );
 
-        assert!(List(vec![]).filter_object(&obj));
+        assert_eq!(
+            FilterList(vec![]).filter_object(
+                &obj,
+                &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+            ),
+            Some(true)
+        );
     }
 
     #[test]
