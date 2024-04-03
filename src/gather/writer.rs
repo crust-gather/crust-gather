@@ -342,7 +342,7 @@ mod tests {
 
             let mut data = String::new();
             file.read_to_string(&mut data).unwrap();
-            assert_eq!(data, "content with ***");
+            assert_eq!(data, "content with xxx");
         }
 
         check_zip_contents(File::open(archive).unwrap());
@@ -366,7 +366,7 @@ mod tests {
         assert!(archive.exists());
         assert!(archive.join("test.txt").exists());
         let data = fs::read_to_string(archive.join("test.txt")).unwrap();
-        assert_eq!(data, "content with ***");
+        assert_eq!(data, "content with xxx");
     }
 
     #[test]
