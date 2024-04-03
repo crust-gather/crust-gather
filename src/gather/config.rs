@@ -1,7 +1,9 @@
-use std::env;
 use std::fmt::Display;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{env, fs};
 
 use anyhow::{self, bail};
 use duration_string::DurationString;
@@ -24,15 +26,18 @@ use crate::scanners::nodes::Nodes;
 use super::representation::Representation;
 use super::writer::Writer;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Secrets(pub Vec<String>);
 
+#[derive(Default, Clone, Deserialize)]
+pub struct SecretsFile(pub PathBuf);
+
 impl Secrets {
-    /// Replaces any secrets in representation data with ***.
+    /// Replaces any secrets in representation data with xxx.
     pub fn strip(&self, repr: &Representation) -> Representation {
         let mut data = repr.data().to_string();
         for secret in &self.0 {
-            data = data.replace(secret.as_str(), "***");
+            data = data.replace(secret.as_str(), "xxx");
         }
 
         repr.clone().with_data(data.as_str())
@@ -48,6 +53,37 @@ impl From<Vec<String>> for Secrets {
                 .filter(|s| !s.is_empty())
                 .collect(),
         )
+    }
+}
+
+impl TryFrom<SecretsFile> for Secrets {
+    type Error = anyhow::Error;
+
+    fn try_from(file: SecretsFile) -> Result<Self, Self::Error> {
+        let file = file.0;
+        Ok(Self(
+            fs::read_to_string(file.as_path())?
+                .lines()
+                .map(Into::into)
+                .collect(),
+        ))
+    }
+}
+
+impl TryFrom<String> for SecretsFile {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match File::open(value.as_str()) {
+            Ok(_) => Ok(Self(Path::new(value.as_str()).into())),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl Display for SecretsFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 
@@ -240,7 +276,21 @@ mod tests {
         let secrets: Secrets = vec!["KEY".to_string()].into();
         let result = secrets.strip(&Representation::new().with_data(data.as_str()));
 
-        assert_eq!(result.data(), "omit *** string");
+        assert_eq!(result.data(), "omit xxx string");
+    }
+
+    #[test]
+    fn test_strip_secrets_from_file() {
+        let data = "omit password string with ip 10.10.10.10".to_string();
+
+        let tmp_dir = TempDir::new("secrets").expect("failed to create temp dir");
+        let file_path = tmp_dir.path().join("secrets");
+        fs::write(file_path.clone(), "password\n10.10.10.10").unwrap();
+        let secrets = SecretsFile(file_path);
+        let secrets: Secrets = secrets.try_into().unwrap();
+        let result = secrets.strip(&Representation::new().with_data(data.as_str()));
+
+        assert_eq!(result.data(), "omit xxx string with ip xxx");
     }
 
     #[tokio::test]

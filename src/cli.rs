@@ -12,7 +12,7 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        config::{Config, RunDuration},
+        config::{Config, RunDuration, Secrets, SecretsFile},
         server::Server,
         writer::{Archive, Encoding, KubeconfigFile, Writer},
     },
@@ -118,6 +118,7 @@ impl GatherSettings {
             } else {
                 other.secrets
             },
+            secrets_file: other.secrets_file.or(self.secrets_file.clone()),
             duration: other.duration.or(self.duration),
         }
     }
@@ -173,6 +174,23 @@ pub struct GatherSettings {
     #[arg(short, long = "secret", action = ArgAction::Append)]
     #[serde(default)]
     secrets: Vec<String>,
+
+    /// Secret file name with secret data to exclude in the collected artifacts.
+    /// Can be supplied only once.
+    ///
+    /// Example content of secrets.txt:
+    /// ```
+    /// 10.244.0.0
+    /// 172.18.0.3
+    /// password123
+    /// aws-access-key
+    /// ```
+    /// Example:
+    ///     --secrets-file=secrets.txt
+    #[arg(long = "secrets-file", value_name = "PATH",
+        value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg.to_string())?)})]
+    #[serde(default)]
+    secrets_file: Option<SecretsFile>,
 
     /// The duration to run the collection for.
     /// Defaults to 60 seconds.
@@ -293,11 +311,18 @@ impl TryFrom<String> for GatherCommands {
 
 impl GatherCommands {
     pub async fn load(&self) -> anyhow::Result<Config> {
+        let mut secrets: Secrets = match self.settings.secrets_file.clone() {
+            Some(file) => file.clone().try_into()?,
+            None => vec![].into(),
+        };
+
+        secrets.0.extend(self.settings.secrets.clone().into_iter());
+
         Ok(Config::new(
             self.client().await?,
             self.into(),
             (&self.settings).try_into()?,
-            self.settings.secrets.clone().into(),
+            secrets,
             self.settings.duration.unwrap_or_default(),
         ))
     }
