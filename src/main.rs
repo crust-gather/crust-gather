@@ -23,8 +23,11 @@ async fn main() -> anyhow::Result<()> {
                 .collect()
                 .await?
         }
-        cli::Commands::CollectFromConfig { config, overrides } => {
-            Into::<GatherCommands>::into(config.merge(overrides))
+        cli::Commands::CollectFromConfig { source, overrides } => {
+            source
+                .gather(overrides.client().await?)
+                .await?
+                .merge(overrides)
                 .load()
                 .await?
                 .collect()

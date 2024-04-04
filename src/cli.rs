@@ -1,8 +1,8 @@
 use std::fs::File;
 
 use clap::{arg, command, ArgAction, Parser, Subcommand};
-use k8s_openapi::serde::Deserialize;
-use kube::Client;
+use k8s_openapi::{api::core::v1::ConfigMap, serde::Deserialize};
+use kube::{api::ListParams, Api, Client, ResourceExt};
 
 use crate::{
     filters::{
@@ -12,9 +12,9 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        config::{Config, RunDuration, Secrets, SecretsFile},
+        config::{Config, ConfigFromConfigMap, KubeconfigFile, RunDuration, Secrets, SecretsFile},
         server::Server,
-        writer::{Archive, Encoding, KubeconfigFile, Writer},
+        writer::{Archive, Encoding, Writer},
     },
 };
 
@@ -46,25 +46,10 @@ pub enum Commands {
         config: GatherCommands,
     },
 
+    /// Collect resources from the Kubernetes cluster using the provided config file
     CollectFromConfig {
-        /// Parse the gather configuration from a file.
-        ///
-        /// Example file:
-        // ```yaml
-        /// filters:
-        /// - include_namespace:
-        ///   - default
-        ///   include_kind:
-        ///   - Pod
-        /// settings:
-        ///   secret:
-        ///   - FOO
-        ///   - BAR
-        ///   kubeconfig: ~/.kube/my_kubeconfig
-        /// ```
-        #[arg(short, long,
-            value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg.to_string())?)},)]
-        config: GatherCommands,
+        #[command(flatten)]
+        source: ConfigSource,
 
         #[command(flatten)]
         overrides: GatherSettings,
@@ -76,6 +61,91 @@ pub enum Commands {
         #[command(flatten)]
         serve: Server,
     },
+}
+
+#[derive(Parser, Clone, Deserialize)]
+#[group(required = true, multiple = false)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSource {
+    /// Parse the gather configuration from a file.
+    ///
+    /// Example file:
+    ///
+    /// filters:
+    /// - include_namespace:
+    ///   - default
+    ///   include_kind:
+    ///   - Pod
+    /// settings:
+    ///   secret:
+    ///   - FOO
+    ///   - BAR
+    ///
+    /// Example:
+    ///     --config=config.yaml
+    #[arg(short, long, verbatim_doc_comment,
+            value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg.to_string())?)},)]
+    config: Option<GatherCommands>,
+
+    /// Parse the gather configuration from an in-cluster config map specified by a name.
+    ///
+    /// Example content:
+    ///
+    /// apiVersion: v1
+    /// kind: ConfigMap
+    /// metadata:
+    ///   name: crust-gather-config
+    /// data: |
+    ///   filters:
+    ///   - include_namespace:
+    ///     - default
+    ///     include_kind:
+    ///     - Pod
+    ///   settings:
+    ///     secret:
+    ///     - FOO
+    ///     - BAR
+    ///
+    /// Example:
+    ///     --config-map=crust-gather-config
+    #[arg(long, verbatim_doc_comment)]
+    config_map: Option<ConfigFromConfigMap>,
+}
+
+impl ConfigSource {
+    pub async fn gather(&self, client: Client) -> anyhow::Result<GatherCommands> {
+        match self {
+            Self {
+                config: Some(config),
+                ..
+            } => Ok(config.clone()),
+            Self {
+                config_map: Some(config_map),
+                ..
+            } => {
+                let api: Api<ConfigMap> = Api::all(client);
+                let cm = api
+                    .list(&ListParams::default())
+                    .await?
+                    .iter()
+                    .filter(|cm| cm.name_any() == config_map.0)
+                    .find_map(|cm| self.config_from_cm(cm));
+                match cm {
+                    Some(commands) => Ok(commands),
+                    None => Err(anyhow::anyhow!("No configuration map found")),
+                }
+            }
+            Self { config: None, .. } => unreachable!("No config source is not allowed by parser"),
+        }
+    }
+
+    fn config_from_cm(&self, cm: &ConfigMap) -> Option<GatherCommands> {
+        // Retrieve the deserialized configuration from the ConfigMap data key
+        cm.data
+            .clone()?
+            .values()
+            .find_map(|v| serde_yaml::from_str(v).ok())
+    }
 }
 
 #[derive(Parser, Clone, Default, Deserialize)]
@@ -179,15 +249,14 @@ pub struct GatherSettings {
     /// Can be supplied only once.
     ///
     /// Example content of secrets.txt:
-    /// ```
     /// 10.244.0.0
     /// 172.18.0.3
     /// password123
     /// aws-access-key
-    /// ```
+    ///
     /// Example:
     ///     --secrets-file=secrets.txt
-    #[arg(long = "secrets-file", value_name = "PATH",
+    #[arg(long = "secrets-file", value_name = "PATH", verbatim_doc_comment,
         value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg.to_string())?)})]
     #[serde(default)]
     secrets_file: Option<SecretsFile>,
@@ -201,6 +270,23 @@ pub struct GatherSettings {
         value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
     #[serde(default)]
     duration: Option<RunDuration>,
+}
+
+impl GatherSettings {
+    pub async fn client(&self) -> anyhow::Result<Client> {
+        log::info!("Initializing client...");
+
+        Ok(match &self.kubeconfig {
+            Some(kubeconfig) => {
+                kubeconfig
+                    .client(self.insecure_skip_tls_verify.unwrap_or_default())
+                    .await?
+            }
+            None => {
+                KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await?
+            }
+        })
+    }
 }
 
 #[derive(Parser, Clone, Default, Deserialize)]
@@ -277,7 +363,7 @@ pub struct Filters {
     /// Example:
     ///     --include-group=/Node
     ///     --include-group=apps/Deployment|ReplicaSet
-    #[arg(long, value_name = "GROUP_KIND",
+    #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
             value_parser = |arg: &str| -> anyhow::Result<GroupInclude> {Ok(GroupInclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
@@ -294,7 +380,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-group=/Node
     ///     --exclude-group=apps/Deployment|ReplicaSet
-    #[arg(long, value_name = "GROUP_KIND",
+    #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
             value_parser = |arg: &str| -> anyhow::Result<GroupExclude> {Ok(GroupExclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
@@ -328,19 +414,7 @@ impl GatherCommands {
     }
 
     async fn client(&self) -> anyhow::Result<Client> {
-        log::info!("Initializing client...");
-
-        Ok(match &self.settings.kubeconfig {
-            Some(kubeconfig) => {
-                kubeconfig
-                    .client(self.settings.insecure_skip_tls_verify.unwrap_or_default())
-                    .await?
-            }
-            None => {
-                KubeconfigFile::infer(self.settings.insecure_skip_tls_verify.unwrap_or_default())
-                    .await?
-            }
-        })
+        self.settings.client().await
     }
 }
 

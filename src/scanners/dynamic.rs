@@ -86,7 +86,10 @@ mod test {
     use tokio_retry::{strategy::FixedInterval, Retry};
 
     use crate::{
-        filters::{filter::{FilterGroup, FilterList}, namespace::NamespaceInclude},
+        filters::{
+            filter::{FilterGroup, FilterList},
+            namespace::NamespaceInclude,
+        },
         gather::{
             config::Config,
             writer::{Archive, Encoding, Writer},

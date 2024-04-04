@@ -1,11 +1,6 @@
 #[cfg(feature = "archive")]
 use flate2::{write::GzEncoder, Compression};
 
-use kube::{
-    config::{self, KubeConfigOptions, Kubeconfig},
-    Client,
-};
-
 use serde::Deserialize;
 use std::{
     fmt::Display,
@@ -68,65 +63,6 @@ impl Display for Archive {
 impl From<&str> for Archive {
     fn from(value: &str) -> Self {
         Self(PathBuf::from(value))
-    }
-}
-
-#[derive(Default, Clone, Deserialize)]
-/// `KubeconfigFile` wraps a Kubeconfig struct used to instantiate a Kubernetes client.
-pub struct KubeconfigFile(config::Kubeconfig);
-
-impl KubeconfigFile {
-    /// Creates a new Kubernetes client from the `KubeconfigFile`.
-    pub async fn client(&self, insecure: bool) -> anyhow::Result<Client> {
-        let kubeconfig = match insecure {
-            true => KubeconfigFile::insecure(self.into()),
-            false => self.into(),
-        };
-
-        Ok(Client::try_from(
-            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
-                .await?,
-        )?)
-    }
-
-    /// Creates a new Kubernetes client from the inferred config.
-    pub async fn infer(insecure: bool) -> anyhow::Result<Client> {
-        let kubeconfig = match insecure {
-            true => KubeconfigFile::insecure(Kubeconfig::read()?),
-            false => Kubeconfig::read()?,
-        };
-
-        Ok(Client::try_from(
-            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
-        )?)
-    }
-
-    fn insecure(config: kube::config::Kubeconfig) -> kube::config::Kubeconfig {
-        let mut config = config.clone();
-        Kubeconfig{
-            clusters: config.clusters.iter_mut().map(|c| match c.cluster.as_mut() {
-                Some(cluster) => {
-                    cluster.insecure_skip_tls_verify = Some(true);
-                    c
-                },
-                _ => c,
-            }.clone()).collect(),
-            ..config
-        }
-    }
-}
-
-impl TryFrom<String> for KubeconfigFile {
-    type Error = anyhow::Error;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        Ok(Self(serde_yaml::from_reader(File::open(s)?)?))
-    }
-}
-
-impl From<&KubeconfigFile> for config::Kubeconfig {
-    fn from(val: &KubeconfigFile) -> Self {
-        val.0.clone()
     }
 }
 

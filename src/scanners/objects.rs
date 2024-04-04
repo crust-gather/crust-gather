@@ -112,7 +112,10 @@ mod test {
     use tokio_retry::Retry;
 
     use crate::{
-        filters::{filter::{FilterGroup, FilterList}, namespace::NamespaceInclude},
+        filters::{
+            filter::{FilterGroup, FilterList},
+            namespace::NamespaceInclude,
+        },
         gather::{
             config::Config,
             representation::ArchivePath,
