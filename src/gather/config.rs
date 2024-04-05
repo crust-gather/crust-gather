@@ -6,12 +6,16 @@ use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::{self, bail};
+
 use duration_string::DurationString;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{Event, Node, Pod};
-use kube::{discovery, Client};
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod};
+use kube::api::ListParams;
+use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::{discovery, Api, Client, ResourceExt};
 use kube_core::discovery::verbs::LIST;
 use kube_core::ApiResource;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::time::timeout;
 
@@ -84,6 +88,110 @@ impl TryFrom<String> for SecretsFile {
 impl Display for SecretsFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.0)
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ConfigFromConfigMap(pub String);
+
+impl ConfigFromConfigMap {
+    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<D> {
+        let api: Api<ConfigMap> = Api::all(client);
+        api.list(&ListParams::default())
+            .await?
+            .iter()
+            .filter(|cm| cm.name_any() == self.0)
+            .find_map(|cm| self.config_from_cm(cm))
+            .ok_or_else(|| anyhow::anyhow!("No configuration map found"))
+    }
+
+    fn config_from_cm<D: DeserializeOwned>(&self, cm: &ConfigMap) -> Option<D> {
+        // Retrieve the deserialized configuration from the ConfigMap data key
+        cm.data
+            .clone()?
+            .values()
+            .find_map(|v| serde_yaml::from_str(v).ok())
+    }
+}
+
+impl From<String> for ConfigFromConfigMap {
+    fn from(val: String) -> Self {
+        Self(val)
+    }
+}
+
+#[derive(Default, Clone)]
+/// `KubeconfigFile` wraps a Kubeconfig struct used to instantiate a Kubernetes client.
+pub struct KubeconfigFile(pub Kubeconfig);
+
+impl KubeconfigFile {
+    /// Creates a new Kubernetes client from the `KubeconfigFile`.
+    pub async fn client(&self, insecure: bool) -> anyhow::Result<Client> {
+        let kubeconfig = match insecure {
+            true => KubeconfigFile::insecure(self.into()),
+            false => self.into(),
+        };
+
+        Ok(Client::try_from(
+            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
+        )?)
+    }
+
+    /// Creates a new Kubernetes client from the inferred config.
+    pub async fn infer(insecure: bool) -> anyhow::Result<Client> {
+        let kubeconfig = match insecure {
+            true => KubeconfigFile::insecure(Kubeconfig::read()?),
+            false => Kubeconfig::read()?,
+        };
+
+        Ok(Client::try_from(
+            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
+        )?)
+    }
+
+    fn insecure(config: kube::config::Kubeconfig) -> kube::config::Kubeconfig {
+        let mut config = config.clone();
+        Kubeconfig {
+            clusters: config
+                .clusters
+                .iter_mut()
+                .map(|c| {
+                    match c.cluster.as_mut() {
+                        Some(cluster) => {
+                            cluster.insecure_skip_tls_verify = Some(true);
+                            c
+                        }
+                        _ => c,
+                    }
+                    .clone()
+                })
+                .collect(),
+            ..config
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for KubeconfigFile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        path.try_into().map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<String> for KubeconfigFile {
+    type Error = anyhow::Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Ok(Self(serde_yaml::from_reader(File::open(s)?)?))
+    }
+}
+
+impl From<&KubeconfigFile> for Kubeconfig {
+    fn from(val: &KubeconfigFile) -> Self {
+        val.0.clone()
     }
 }
 
