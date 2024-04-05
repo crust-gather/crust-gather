@@ -1,8 +1,9 @@
 use std::fs::File;
 
+use anyhow::anyhow;
 use clap::{arg, command, ArgAction, Parser, Subcommand};
-use k8s_openapi::{api::core::v1::ConfigMap, serde::Deserialize};
-use kube::{api::ListParams, Api, Client, ResourceExt};
+use k8s_openapi::serde::Deserialize;
+use kube::Client;
 
 use crate::{
     filters::{
@@ -12,7 +13,10 @@ use crate::{
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
-        config::{Config, ConfigFromConfigMap, KubeconfigFile, RunDuration, Secrets, SecretsFile},
+        config::{
+            Config, ConfigFromConfigMap, KubeconfigFile, RunDuration, Secrets,
+            SecretsFile,
+        },
         server::Server,
         writer::{Archive, Encoding, Writer},
     },
@@ -63,6 +67,31 @@ pub enum Commands {
     },
 }
 
+impl Commands {
+    pub async fn run(self) -> anyhow::Result<()> {
+        match self {
+            Commands::Collect { config } => {
+                Into::<GatherCommands>::into(config)
+                    .load()
+                    .await?
+                    .collect()
+                    .await
+            }
+            Commands::CollectFromConfig { source, overrides } => {
+                source
+                    .gather(overrides.origin_client().await?)
+                    .await?
+                    .merge(overrides)
+                    .load()
+                    .await?
+                    .collect()
+                    .await
+            }
+            Commands::Serve { serve } => serve.get_api()?.serve().await.map_err(|e| anyhow!(e)),
+        }
+    }
+}
+
 #[derive(Parser, Clone, Deserialize)]
 #[group(required = true, multiple = false)]
 #[serde(deny_unknown_fields)]
@@ -95,16 +124,17 @@ pub struct ConfigSource {
     /// kind: ConfigMap
     /// metadata:
     ///   name: crust-gather-config
-    /// data: |
-    ///   filters:
-    ///   - include_namespace:
-    ///     - default
-    ///     include_kind:
-    ///     - Pod
-    ///   settings:
-    ///     secret:
-    ///     - FOO
-    ///     - BAR
+    /// data:
+    ///   config: |
+    ///     filters:
+    ///     - include_namespace:
+    ///       - default
+    ///       include_kind:
+    ///       - Pod
+    ///     settings:
+    ///       secret:
+    ///       - FOO
+    ///       - BAR
     ///
     /// Example:
     ///     --config-map=crust-gather-config
@@ -122,29 +152,9 @@ impl ConfigSource {
             Self {
                 config_map: Some(config_map),
                 ..
-            } => {
-                let api: Api<ConfigMap> = Api::all(client);
-                let cm = api
-                    .list(&ListParams::default())
-                    .await?
-                    .iter()
-                    .filter(|cm| cm.name_any() == config_map.0)
-                    .find_map(|cm| self.config_from_cm(cm));
-                match cm {
-                    Some(commands) => Ok(commands),
-                    None => Err(anyhow::anyhow!("No configuration map found")),
-                }
-            }
+            } => config_map.get_config(client).await,
             Self { config: None, .. } => unreachable!("No config source is not allowed by parser"),
         }
-    }
-
-    fn config_from_cm(&self, cm: &ConfigMap) -> Option<GatherCommands> {
-        // Retrieve the deserialized configuration from the ConfigMap data key
-        cm.data
-            .clone()?
-            .values()
-            .find_map(|v| serde_yaml::from_str(v).ok())
     }
 }
 
@@ -178,6 +188,9 @@ impl GatherSettings {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             kubeconfig: other.kubeconfig.or(self.kubeconfig.clone()),
+            // kubeconfig_secret_label: other
+            //     .kubeconfig_secret_label
+            //     .or(self.kubeconfig_secret_label.clone()),
             insecure_skip_tls_verify: other
                 .insecure_skip_tls_verify
                 .or(self.insecure_skip_tls_verify),
@@ -274,18 +287,20 @@ pub struct GatherSettings {
 
 impl GatherSettings {
     pub async fn client(&self) -> anyhow::Result<Client> {
+        self.origin_client().await
+    }
+
+    pub async fn origin_client(&self) -> anyhow::Result<Client> {
         log::info!("Initializing client...");
 
-        Ok(match &self.kubeconfig {
+        match &self.kubeconfig {
             Some(kubeconfig) => {
                 kubeconfig
                     .client(self.insecure_skip_tls_verify.unwrap_or_default())
-                    .await?
+                    .await
             }
-            None => {
-                KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await?
-            }
-        })
+            None => KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await,
+        }
     }
 }
 
@@ -457,11 +472,11 @@ impl From<&Filters> for FilterList {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Write};
+    use std::{collections::BTreeMap, env, io::Write};
 
-    use k8s_openapi::api::core::v1::Namespace;
-    use kube::Api;
-    use kube_core::params::ListParams;
+    use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
+    use kube::{api::PostParams, Api};
+    use kube_core::{params::ListParams, ObjectMeta};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::fs;
@@ -573,6 +588,168 @@ mod tests {
 
         let ns_api: Api<Namespace> = Api::all(client);
         ns_api.list(&ListParams::default()).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collect() {
+        let test_env = kwok::TestEnvBuilder::default().build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+
+        let commands = GatherCommands {
+            settings: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                ..Default::default()
+            },
+            ..GatherCommands::default()
+        };
+        let config = commands.load().await.unwrap();
+
+        assert!(config.collect().await.is_ok());
+        assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
+        assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collect_from_config() {
+        let test_env = kwok::TestEnvBuilder::default().build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let tmp_dir = TempDir::new("config").expect("failed to create temp dir");
+
+        let config_path = tmp_dir.path().join("valid.yaml");
+        let mut valid = File::create(config_path.clone()).unwrap();
+        let valid_config = r"
+            filters:
+            - include_namespace:
+                - default
+            ";
+        valid.write_all(valid_config.as_bytes()).unwrap();
+
+        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+
+        let config_path = config_path.to_str();
+        let commands = Commands::CollectFromConfig {
+            source: ConfigSource {
+                config: Some(GatherCommands::try_from(String::from(config_path.unwrap())).unwrap()),
+                config_map: None,
+            },
+            overrides: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                ..Default::default()
+            },
+        };
+
+        assert!(commands.run().await.is_ok());
+        assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
+        assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(!tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collect_from_config_map() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .insecure_skip_tls_verify(true)
+            .build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let valid_config = r"
+            filters:
+            - include_namespace:
+                - default
+            ";
+        let cm_api: Api<ConfigMap> = Api::namespaced(test_env.client().await, "default");
+        cm_api
+            .create(
+                &PostParams::default(),
+                &ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("crust-gather-config".into()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([("config".into(), valid_config.into())])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+
+        let commands = Commands::CollectFromConfig {
+            source: ConfigSource {
+                config: None,
+                config_map: Some(ConfigFromConfigMap("crust-gather-config".into())),
+            },
+            overrides: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                ..Default::default()
+            },
+        };
+
+        assert!(commands.run().await.is_ok());
+        assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
+        assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(!tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
     }
 
     #[test]

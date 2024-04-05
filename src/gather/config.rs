@@ -6,13 +6,16 @@ use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::{self, bail};
+
 use duration_string::DurationString;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{Event, Node, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod};
+use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use kube::{discovery, Client};
+use kube::{discovery, Api, Client, ResourceExt};
 use kube_core::discovery::verbs::LIST;
 use kube_core::ApiResource;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::time::timeout;
 
@@ -91,6 +94,26 @@ impl Display for SecretsFile {
 #[derive(Clone, Deserialize)]
 pub struct ConfigFromConfigMap(pub String);
 
+impl ConfigFromConfigMap {
+    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<D> {
+        let api: Api<ConfigMap> = Api::all(client);
+        api.list(&ListParams::default())
+            .await?
+            .iter()
+            .filter(|cm| cm.name_any() == self.0)
+            .find_map(|cm| self.config_from_cm(cm))
+            .ok_or_else(|| anyhow::anyhow!("No configuration map found"))
+    }
+
+    fn config_from_cm<D: DeserializeOwned>(&self, cm: &ConfigMap) -> Option<D> {
+        // Retrieve the deserialized configuration from the ConfigMap data key
+        cm.data
+            .clone()?
+            .values()
+            .find_map(|v| serde_yaml::from_str(v).ok())
+    }
+}
+
 impl From<String> for ConfigFromConfigMap {
     fn from(val: String) -> Self {
         Self(val)
@@ -99,7 +122,7 @@ impl From<String> for ConfigFromConfigMap {
 
 #[derive(Default, Clone)]
 /// `KubeconfigFile` wraps a Kubeconfig struct used to instantiate a Kubernetes client.
-pub struct KubeconfigFile(Kubeconfig);
+pub struct KubeconfigFile(pub Kubeconfig);
 
 impl KubeconfigFile {
     /// Creates a new Kubernetes client from the `KubeconfigFile`.
