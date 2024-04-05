@@ -9,9 +9,10 @@ use serde::Deserialize;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
+#[derive(Default, Clone, Deserialize, Debug)]
 pub struct NamespaceName {
-    name: Option<String>,
-    namespace: Option<String>,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
 }
 
 impl NamespaceName {
@@ -23,6 +24,17 @@ impl NamespaceName {
         Self {
             name: obj.meta().name.clone(),
             namespace: obj.meta().namespace.clone(),
+        }
+    }
+}
+
+impl From<String> for NamespaceName {
+    fn from(value: String) -> Self {
+        match value.split_once('/') {
+            Some(("", name)) => NamespaceName::new(Some(name.into()), None),
+            Some((ns, "")) => NamespaceName::new(None, Some(ns.into())),
+            Some((ns, name)) => NamespaceName::new(Some(name.into()), Some(ns.into())),
+            None => NamespaceName::new(Some(value), None),
         }
     }
 }
