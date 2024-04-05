@@ -16,3 +16,4 @@ updates:
       dependencies:
         patterns:
           - "kube*"
+          - "http*"
