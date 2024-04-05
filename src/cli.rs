@@ -3,7 +3,7 @@ use std::fs::File;
 use anyhow::anyhow;
 use clap::{arg, command, ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::Deserialize;
-use kube::Client;
+use kube::{config::Kubeconfig, Client};
 
 use crate::{
     filters::{
@@ -14,8 +14,8 @@ use crate::{
     },
     gather::{
         config::{
-            Config, ConfigFromConfigMap, KubeconfigFile, RunDuration, Secrets,
-            SecretsFile,
+            Config, ConfigFromConfigMap, KubeconfigFile, KubeconfigSecretLabel,
+            KubeconfigSecretNamespaceName, RunDuration, Secrets, SecretsFile,
         },
         server::Server,
         writer::{Archive, Encoding, Writer},
@@ -188,9 +188,7 @@ impl GatherSettings {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             kubeconfig: other.kubeconfig.or(self.kubeconfig.clone()),
-            // kubeconfig_secret_label: other
-            //     .kubeconfig_secret_label
-            //     .or(self.kubeconfig_secret_label.clone()),
+            kubeconfig_secret: other.kubeconfig_secret.or(self.kubeconfig_secret.clone()),
             insecure_skip_tls_verify: other
                 .insecure_skip_tls_verify
                 .or(self.insecure_skip_tls_verify),
@@ -218,6 +216,10 @@ pub struct GatherSettings {
     #[arg(short, long, value_name = "PATH",
         value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
     kubeconfig: Option<KubeconfigFile>,
+
+    /// Collect kubeconfig from a secret.
+    #[command(flatten)]
+    kubeconfig_secret: Option<KubeconfigFromSecret>,
 
     /// Pass an insecure flag to kubeconfig file.
     /// If not provided, defaults to false and kubeconfig will be uses as-is.
@@ -287,7 +289,26 @@ pub struct GatherSettings {
 
 impl GatherSettings {
     pub async fn client(&self) -> anyhow::Result<Client> {
-        self.origin_client().await
+        let origin = self.origin_client().await?;
+        match &self.kubeconfig_secret {
+            Some(secret) => {
+                let kubeconfigs = secret.get_config(origin).await?;
+                for kubeconfig in kubeconfigs {
+                    match KubeconfigFile(kubeconfig)
+                        .client(self.insecure_skip_tls_verify.unwrap_or_default())
+                        .await
+                    {
+                        Ok(client) => return Ok(client),
+                        Err(_) => continue,
+                    };
+                }
+
+                Err(anyhow::anyhow!(
+                    "No kubeconfig found matching selector {secret:?}",
+                ))
+            }
+            None => Ok(origin),
+        }
     }
 
     pub async fn origin_client(&self) -> anyhow::Result<Client> {
@@ -300,6 +321,43 @@ impl GatherSettings {
                     .await
             }
             None => KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await,
+        }
+    }
+}
+
+#[derive(Parser, Clone, Deserialize, Debug)]
+#[group(required = false, multiple = false)]
+#[serde(deny_unknown_fields)]
+pub struct KubeconfigFromSecret {
+    /// Collect kubeconfig from a first secret matching the label.
+    /// Allows you to specify a label selector, and use the current cluster as a proxy to the
+    /// one, where a snapshot will be collected.
+    /// If not provided, --kubeconfig flag takes precedence.
+    ///
+    /// Example:
+    ///     --kubeconfig-secret-label=cluster.x-k8s.io/cluster-name=docker
+    #[arg(long, value_name = "key=value")]
+    #[serde(default)]
+    kubeconfig_secret_label: Option<KubeconfigSecretLabel>,
+
+    /// Collect kubeconfig from a secret.
+    /// Secret can be specified by namespace/name or just by name.
+    /// If not provided, --kubeconfig flag takes precedence.
+    ///
+    /// Example:
+    ///     --kubeconfig-secret-name=default/cluster-kubeconfig
+    #[arg(long, value_name = "NAMESPACE/NAME")]
+    #[serde(default)]
+    kubeconfig_secret_name: Option<KubeconfigSecretNamespaceName>,
+}
+
+impl KubeconfigFromSecret {
+    async fn get_config(&self, client: Client) -> anyhow::Result<Vec<Kubeconfig>> {
+        let (label, name) = (&self.kubeconfig_secret_label, &self.kubeconfig_secret_name);
+        match (label, name) {
+            (None, None) => Ok(vec![]),
+            (Some(label), _) => label.get_config(client).await,
+            (_, Some(name)) => name.get_config(client).await,
         }
     }
 }
@@ -474,7 +532,7 @@ impl From<&Filters> for FilterList {
 mod tests {
     use std::{collections::BTreeMap, env, io::Write};
 
-    use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
+    use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
     use kube::{api::PostParams, Api};
     use kube_core::{params::ListParams, ObjectMeta};
     use serial_test::serial;
@@ -745,6 +803,213 @@ mod tests {
             .join("default")
             .is_dir());
         assert!(!tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collect_kubeconfig_from_secret() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .insecure_skip_tls_verify(true)
+            .build();
+        let other_env = kwok::TestEnvBuilder::default().build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let other_kubeconfig = serde_yaml::to_string(&other_env.kubeconfig()).unwrap();
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let valid_config = r"
+        filters:
+        - include_namespace:
+            - default
+        ";
+        let cm_api: Api<ConfigMap> = Api::namespaced(test_env.client().await, "default");
+        cm_api
+            .create(
+                &PostParams::default(),
+                &ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("crust-gather-config".into()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([("config".into(), valid_config.into())])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let secret_api: Api<Secret> = Api::namespaced(test_env.client().await, "default");
+        secret_api
+            .create(
+                &PostParams::default(),
+                &Secret {
+                    metadata: ObjectMeta {
+                        name: Some("kubeconfig-secret".into()),
+                        labels: Some(BTreeMap::from([("kubeconfig".into(), "true".into())])),
+                        ..Default::default()
+                    },
+                    string_data: Some(BTreeMap::from([("config".into(), other_kubeconfig)])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+
+        let commands = Commands::CollectFromConfig {
+            source: ConfigSource {
+                config: None,
+                config_map: Some(ConfigFromConfigMap("crust-gather-config".into())),
+            },
+            overrides: GatherSettings {
+                kubeconfig_secret: Some(KubeconfigFromSecret {
+                    kubeconfig_secret_label: Some(KubeconfigSecretLabel("kubeconfig=true".into())),
+                    kubeconfig_secret_name: None,
+                }),
+                insecure_skip_tls_verify: Some(true),
+                file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                ..Default::default()
+            },
+        };
+
+        assert!(commands.run().await.is_ok());
+        assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
+        assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(!tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .join("configmap")
+            .is_dir());
+        assert!(!tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
+
+        let commands = Commands::CollectFromConfig {
+            source: ConfigSource {
+                config: None,
+                config_map: Some(ConfigFromConfigMap("crust-gather-config".into())),
+            },
+            overrides: GatherSettings {
+                insecure_skip_tls_verify: Some(true),
+                file: Some(
+                    tmp_dir
+                        .path()
+                        .join("collect-origin")
+                        .to_str()
+                        .unwrap()
+                        .into(),
+                ),
+                ..Default::default()
+            },
+        };
+
+        assert!(commands.run().await.is_ok());
+        assert!(tmp_dir
+            .path()
+            .join("collect-origin")
+            .join("cluster")
+            .is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect-origin")
+            .join("namespaces")
+            .is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect-origin")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(!tmp_dir
+            .path()
+            .join("collect-origin")
+            .join("namespaces")
+            .join("kube-system")
+            .is_dir());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collect_kubeconfig_from_secret_by_name() {
+        let test_env = kwok::TestEnvBuilder::default()
+            .insecure_skip_tls_verify(true)
+            .build();
+        let other_env = kwok::TestEnvBuilder::default().build();
+
+        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+
+        let other_kubeconfig = serde_yaml::to_string(&other_env.kubeconfig()).unwrap();
+        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
+        fs::write(test_env.kubeconfig_path(), kubeconfig)
+            .await
+            .unwrap();
+
+        let secret_api: Api<Secret> = Api::namespaced(test_env.client().await, "default");
+        secret_api
+            .create(
+                &PostParams::default(),
+                &Secret {
+                    metadata: ObjectMeta {
+                        name: Some("kubeconfig-secret".into()),
+                        ..Default::default()
+                    },
+                    string_data: Some(BTreeMap::from([("config".into(), other_kubeconfig)])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+
+        let commands = Commands::Collect {
+            config: GatherCommands {
+                settings: GatherSettings {
+                    kubeconfig_secret: Some(KubeconfigFromSecret {
+                        kubeconfig_secret_label: None,
+                        kubeconfig_secret_name: Some(KubeconfigSecretNamespaceName::from(
+                            "default/kubeconfig-secret".to_string(),
+                        )),
+                    }),
+                    insecure_skip_tls_verify: Some(true),
+                    file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+
+        assert!(commands.run().await.is_ok());
+        assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
+        assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
+        assert!(tmp_dir
+            .path()
+            .join("collect")
+            .join("namespaces")
+            .join("default")
+            .is_dir());
+        assert!(tmp_dir
             .path()
             .join("collect")
             .join("namespaces")

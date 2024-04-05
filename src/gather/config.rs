@@ -6,10 +6,10 @@ use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::{self, bail};
-
+use base64::prelude::*;
 use duration_string::DurationString;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{discovery, Api, Client, ResourceExt};
@@ -27,7 +27,7 @@ use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogSelection, Logs};
 use crate::scanners::nodes::Nodes;
 
-use super::representation::Representation;
+use super::representation::{NamespaceName, Representation};
 use super::writer::Writer;
 
 #[derive(Default, Clone, Debug)]
@@ -192,6 +192,95 @@ impl TryFrom<String> for KubeconfigFile {
 impl From<&KubeconfigFile> for Kubeconfig {
     fn from(val: &KubeconfigFile) -> Self {
         val.0.clone()
+    }
+}
+
+#[derive(Default, Clone, Deserialize, Debug)]
+/// `KubeconfigSecretLabel` wraps a Kubeconfig secret label used to search a secret to instantiate a Kubernetes client.
+pub struct KubeconfigSecretLabel(pub String);
+
+impl KubeconfigSecretLabel {
+    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<Vec<D>> {
+        let api: Api<Secret> = Api::all(client);
+        Ok(SecretSearch(
+            api.list(&ListParams {
+                label_selector: Some(self.0.clone()),
+                ..Default::default()
+            })
+            .await?
+            .items,
+        )
+        .lookup())
+    }
+}
+
+impl From<String> for KubeconfigSecretLabel {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Default, Clone, Deserialize, Debug)]
+/// `KubeconfigSecretNamespaceName` wraps a Kubeconfig secret namespace/name used to instantiate a Kubernetes client.
+pub struct KubeconfigSecretNamespaceName(pub NamespaceName);
+
+impl KubeconfigSecretNamespaceName {
+    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<Vec<D>> {
+        let search = match self.0.clone() {
+            NamespaceName {
+                name: Some(name),
+                namespace: Some(namespace),
+            } => {
+                let api: Api<Secret> = Api::namespaced(client, &namespace);
+                SecretSearch(vec![api.get(&name).await?])
+            }
+            NamespaceName {
+                name: Some(name), ..
+            } => {
+                let api: Api<Secret> = Api::all(client);
+                SecretSearch(
+                    api.list(&ListParams {
+                        ..Default::default()
+                    })
+                    .await?
+                    .items
+                    .into_iter()
+                    .filter(|s| s.name_any() == name)
+                    .collect(),
+                )
+            }
+            NamespaceName { .. } => SecretSearch(vec![]),
+        };
+
+        Ok(search.lookup())
+    }
+}
+
+impl From<String> for KubeconfigSecretNamespaceName {
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
+
+pub struct SecretSearch(Vec<Secret>);
+
+impl SecretSearch {
+    pub fn lookup<D: DeserializeOwned>(&self) -> Vec<D> {
+        self.0
+            .iter()
+            .filter_map(|s| self.config_from_secret(s))
+            .collect()
+    }
+
+    fn config_from_secret<D: DeserializeOwned>(&self, s: &Secret) -> Option<D> {
+        // Retrieve the deserialized configuration from the Secret data key
+        s.data
+            .clone()?
+            .values()
+            .filter_map(|v| serde_yaml::to_string(v).ok())
+            .filter_map(|v| BASE64_STANDARD.decode(v.trim_end()).ok())
+            .filter_map(|v| String::from_utf8(v).ok())
+            .find_map(|v| serde_yaml::from_str(&v).ok())
     }
 }
 
