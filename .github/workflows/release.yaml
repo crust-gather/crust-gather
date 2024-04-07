@@ -72,7 +72,7 @@ jobs:
 
     steps:
       - name: Checkout Git repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Linux & Windows
       - name: Install rust toolchain
