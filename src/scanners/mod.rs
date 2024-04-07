@@ -5,3 +5,4 @@ pub mod interface;
 pub mod logs;
 pub mod nodes;
 pub mod objects;
+pub mod versions;
