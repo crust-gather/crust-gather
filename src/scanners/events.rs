@@ -146,8 +146,6 @@ impl Collect<Event> for Events {
             &Representation::new()
                 .with_path(self.path(&Event::default()))
                 .with_data(format!(include_str!("templates/event-filter.html"), data).as_str()),
-        )?;
-
-        Ok(())
+        )
     }
 }

@@ -26,6 +26,7 @@ use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogSelection, Logs};
 use crate::scanners::nodes::Nodes;
+use crate::scanners::versions::Versions;
 
 use super::representation::{NamespaceName, Representation};
 use super::writer::Writer;
@@ -369,7 +370,7 @@ impl Config {
 
 enum Group {
     Nodes(ApiResource),
-    Logs(ApiResource),
+    Pods(ApiResource),
     Events(ApiResource),
     Dynamic(ApiResource),
 }
@@ -378,7 +379,7 @@ impl From<ApiResource> for Group {
     fn from(val: ApiResource) -> Self {
         match val {
             r if r == ApiResource::erase::<Event>(&()) => Self::Events(r),
-            r if r == ApiResource::erase::<Pod>(&()) => Self::Logs(r),
+            r if r == ApiResource::erase::<Pod>(&()) => Self::Pods(r),
             r if r == ApiResource::erase::<Node>(&()) => Self::Nodes(r),
             r => Self::Dynamic(r),
         }
@@ -388,20 +389,22 @@ impl From<ApiResource> for Group {
 #[derive(Debug, Clone)]
 enum Collectable {
     Dynamic(Dynamic),
-    Logs(Logs),
+    Pods(Logs),
     Events(Events),
     Nodes(Nodes),
     Info(Info),
+    Versions(Versions),
 }
 
 impl Collectable {
     async fn collect(&self) {
         match self {
             Self::Dynamic(o) => o.collect_retry(),
-            Self::Logs(l) => l.collect_retry(),
+            Self::Pods(l) => l.collect_retry(),
             Self::Events(e) => e.collect_retry(),
             Self::Nodes(n) => n.collect_retry(),
             Self::Info(i) => i.collect_retry(),
+            Self::Versions(v) => v.collect_retry(),
         }
         .await;
     }
@@ -415,9 +418,10 @@ impl Group {
                 Collectable::Info(Info::new(gather.clone())),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
-            Self::Logs(resource) => vec![
-                Collectable::Logs(Logs::new(gather.clone(), LogSelection::Current)),
-                Collectable::Logs(Logs::new(gather.clone(), LogSelection::Previous)),
+            Self::Pods(resource) => vec![
+                Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
+                Collectable::Pods(Logs::new(gather.clone(), LogSelection::Previous)),
+                Collectable::Versions(Versions::new(gather.clone())),
                 Collectable::Dynamic(Dynamic::new(gather, resource)),
             ],
             Self::Events(resource) => vec![
