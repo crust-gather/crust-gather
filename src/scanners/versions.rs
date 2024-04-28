@@ -57,7 +57,7 @@ impl Collect<Pod> for Versions {
             .list()
             .await?
             .iter()
-            .filter_map(|pod| pod.spec.clone().and_then(|s| Some((pod.meta(), s))))
+            .filter_map(|pod| pod.spec.clone().map(|s| (pod.meta(), s)))
             .flat_map(|(meta, spec)| {
                 spec.containers.into_iter().map(|container| Version {
                     name: meta.name.clone().unwrap_or_default(),

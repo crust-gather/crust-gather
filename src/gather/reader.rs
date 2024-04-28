@@ -17,7 +17,19 @@ use super::{
 };
 
 #[derive(Deserialize, Clone)]
+pub struct Destination {
+    server: String,
+}
+
+impl Destination {
+    pub fn get_server(&self) -> &str {
+        &self.server
+    }
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Get {
+    server: String,
     namespace: Option<String>,
     name: String,
     group: Option<String>,
@@ -26,6 +38,10 @@ pub struct Get {
 }
 
 impl Get {
+    pub fn get_server(&self) -> &str {
+        &self.server
+    }
+
     pub fn get_path(&self) -> ArchivePath {
         ArchivePath::new_path(
             NamespaceName::new(Some(self.name.clone()), self.namespace.clone()),
@@ -65,6 +81,7 @@ pub struct Log {
 
 #[derive(Deserialize, Clone)]
 pub struct List {
+    pub server: String,
     namespace: Option<String>,
     group: Option<String>,
     version: String,
@@ -72,6 +89,10 @@ pub struct List {
 }
 
 impl List {
+    pub fn get_server(&self) -> &str {
+        &self.server
+    }
+
     pub fn get_path(&self) -> ArchivePath {
         ArchivePath::new_path(
             NamespaceName::new(None, self.namespace.clone()),
@@ -197,15 +218,8 @@ impl FromIterator<TableEntry> for Table {
 pub struct Reader(Archive);
 
 impl Reader {
-    pub fn new(archive: &Archive) -> anyhow::Result<Self> {
-        if !archive.path().exists() {
-            bail!(
-                "Archive {} does not exists",
-                archive.path().to_str().unwrap()
-            );
-        }
-
-        Ok(Self(archive.clone()))
+    pub fn new(archive: &Archive) -> Self {
+        Self(archive.clone())
     }
 
     pub fn load_table(&self, list: List) -> anyhow::Result<serde_json::Value> {
