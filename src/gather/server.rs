@@ -1,4 +1,6 @@
-use std::{fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf};
+use std::{
+    collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
+};
 
 use actix_web::{
     error, get,
@@ -9,22 +11,22 @@ use actix_web::{
 };
 use clap::Parser;
 use k8s_openapi::serde_json::{self, json};
-use kube::config::Kubeconfig;
+use kube::config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
 use serde::Deserialize;
 
 use crate::gather::{
-    reader::{Get, List, Log, Reader},
+    reader::{Destination, Get, List, Log, Reader},
     writer::Archive,
 };
 
-use super::representation::ArchivePath;
+use super::{representation::ArchivePath, writer::ArchiveSearch};
 
 #[derive(Clone, Deserialize)]
 pub struct Socket(SocketAddr);
 
 impl Default for Socket {
     fn default() -> Self {
-        Self("127.0.0.1:8080".parse().unwrap())
+        Self("0.0.0.0:8080".parse().unwrap())
     }
 }
 
@@ -45,17 +47,20 @@ pub struct Server {
     #[arg(short, long, value_name = "KUBECONFIG")]
     kubeconfig: Option<PathBuf>,
 
-    /// The input archive path.
+    /// The input archive path. Will be used as a recursive search direcory for
+    /// snapshot locations.
+    ///
     /// Defaults to a new archive with name "crust-gather".
     ///
     /// Example:
-    ///     --file=./artifacts
+    ///     --archive=./artifacts
     #[arg(short, long, value_name = "PATH", default_value_t = Default::default())]
     #[serde(default)]
-    archive: Archive,
+    archive: ArchiveSearch,
 
     /// The socket address to bind the HTTP server to.
-    /// Defaults to 127.0.0.1:8080.
+    ///
+    /// Defaults to 0.0.0.0:8080.
     ///
     /// Example:
     ///     --socket=192.168.1.100:8088
@@ -67,75 +72,77 @@ pub struct Server {
 
 impl Server {
     pub fn get_api(&self) -> anyhow::Result<Api> {
-        Api::new(
-            self.archive.clone(),
-            self.socket.clone(),
-            self.kubeconfig.clone(),
-        )
+        let archives: Vec<_> = self.archive.clone().into();
+
+        Api::new(archives, self.socket.clone(), self.kubeconfig.clone())
     }
 }
 
 pub struct Api {
-    reader: Reader,
+    readers: HashMap<String, Reader>,
     socket: SocketAddr,
 }
 
 impl Api {
     pub fn new(
-        archive: Archive,
+        archives: impl IntoIterator<Item = Archive> + Clone,
         socket: Socket,
         kubeconfig: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let Socket(socket) = socket;
 
-        Api::place_kubeconfig(kubeconfig, socket)?;
+        let config = archives
+            .clone()
+            .into_iter()
+            .map(|a| Api::prepare_kubeconfig(&a, socket))
+            .try_fold(Kubeconfig::default(), Kubeconfig::merge)?;
+
+        let kubeconfig_path =
+            kubeconfig.unwrap_or(std::path::PathBuf::from(std::env::var("KUBECONFIG")?));
+
+        serde_yaml::to_writer(File::create(kubeconfig_path)?, &config)?;
+
+        let archives = archives
+            .into_iter()
+            .map(|a| (a.name().to_string_lossy().to_string(), Reader::new(&a)));
 
         Ok(Self {
-            reader: Reader::new(&archive)?,
+            readers: archives.collect(),
             socket,
         })
     }
 
-    fn place_kubeconfig(
-        kubeconfig_path: Option<PathBuf>,
-        socket: SocketAddr,
-    ) -> anyhow::Result<()> {
-        let kubeconfig_path = match kubeconfig_path {
-            Some(kubeconfig) => kubeconfig,
-            None => std::path::PathBuf::from(std::env::var("KUBECONFIG")?),
-        };
-
-        let kubeconfig: Kubeconfig = serde_json::from_value(json!({
-            "apiVersion": "v1",
-            "clusters": [{
-                "cluster": {
-                    "server": socket.to_string(),
-                },
-                "name": "snapshot",
+    fn prepare_kubeconfig(archive: &Archive, socket: SocketAddr) -> Kubeconfig {
+        let name = archive.name().to_string_lossy().to_string();
+        Kubeconfig {
+            current_context: Some(name.clone()),
+            auth_infos: vec![NamedAuthInfo {
+                name: name.clone(),
+                ..Default::default()
             }],
-            "contexts": [{
-                "context": {
-                    "cluster": "snapshot",
-                    "user": "snapshot",
-                },
-                "name": "snapshot",
+            contexts: vec![NamedContext {
+                name: name.clone(),
+                context: Some(Context {
+                    cluster: name.clone(),
+                    user: name.clone(),
+                    ..Default::default()
+                }),
             }],
-            "current-context": "snapshot",
-            "users": [{
-                "name": "snapshot",
+            clusters: vec![NamedCluster {
+                name: name.clone(),
+                cluster: Some(Cluster {
+                    server: Some(format!("http://{socket}/{name}")),
+                    ..Default::default()
+                }),
             }],
-        }))?;
-
-        Ok(serde_yaml::to_writer(
-            File::create(kubeconfig_path)?,
-            &kubeconfig,
-        )?)
+            ..Default::default()
+        }
     }
 
     pub async fn serve(self) -> std::io::Result<()> {
         HttpServer::new(move || {
             App::new()
-                .app_data(web::Data::new(self.reader.clone()))
+                .app_data(web::Data::new(self.readers.clone()))
                 .service(version)
                 .service(ssr_stub)
                 .service(api)
@@ -156,10 +163,15 @@ impl Api {
     }
 }
 
-#[get("version")]
-async fn version(reader: web::Data<Reader>) -> actix_web::Result<impl Responder> {
+#[get("{server}/version")]
+async fn version(
+    server: Path<Destination>,
+    reader: web::Data<HashMap<String, Reader>>,
+) -> actix_web::Result<impl Responder> {
     let version: serde_yaml::Value = serde_yaml::from_str(
         reader
+            .get(server.get_server())
+            .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
             .load_raw(ArchivePath::Custom("version.yaml".into()))
             .map_err(error::ErrorNotFound)?
             .as_str(),
@@ -169,7 +181,7 @@ async fn version(reader: web::Data<Reader>) -> actix_web::Result<impl Responder>
     Ok(web::Json(version))
 }
 
-#[post("apis/authorization.k8s.io/v1/selfsubjectaccessreviews")]
+#[post("{server}/apis/authorization.k8s.io/v1/selfsubjectaccessreviews")]
 async fn ssr_stub() -> impl Responder {
     web::Json(json!({
         "kind": "SelfSubjectAccessReview",
@@ -186,9 +198,14 @@ async fn ssr_stub() -> impl Responder {
     }))
 }
 
-#[get("api")]
-async fn api(reader: web::Data<Reader>) -> actix_web::Result<impl Responder> {
+#[get("{server}/api")]
+async fn api(
+    server: Path<Destination>,
+    reader: web::Data<HashMap<String, Reader>>,
+) -> actix_web::Result<impl Responder> {
     Ok(reader
+        .get(server.get_server())
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
         .load_raw(ArchivePath::Custom("api.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -198,9 +215,14 @@ async fn api(reader: web::Data<Reader>) -> actix_web::Result<impl Responder> {
         )))
 }
 
-#[get("apis")]
-async fn apis(reader: web::Data<Reader>) -> actix_web::Result<impl Responder> {
+#[get("{server}/apis")]
+async fn apis(
+    server: Path<Destination>,
+    reader: web::Data<HashMap<String, Reader>>,
+) -> actix_web::Result<impl Responder> {
     Ok(reader
+        .get(server.get_server())
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
         .load_raw(ArchivePath::Custom("apis.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -210,117 +232,125 @@ async fn apis(reader: web::Data<Reader>) -> actix_web::Result<impl Responder> {
         )))
 }
 
-#[get("api/{version}/{kind}")]
+#[get("{server}/api/{version}/{kind}")]
 async fn api_list(
     accept: Header<Accept>,
     list: Path<List>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(match accept.0.as_slice() {
-        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
-            .load_table(list.clone())
-            .map_err(error::ErrorNotFound)?,
-        _ => reader
-            .load_list(list.clone())
-            .map_err(error::ErrorNotFound)?,
-    }))
+    Ok(web::Json(
+        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+    ))
 }
 
-#[get("apis/{group}/{version}/{kind}")]
+#[get("{server}/apis/{group}/{version}/{kind}")]
 async fn apis_list(
     accept: Header<Accept>,
     list: Path<List>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(match accept.0.as_slice() {
-        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
-            .load_table(list.clone())
-            .map_err(error::ErrorNotFound)?,
-        _ => reader
-            .load_list(list.clone())
-            .map_err(error::ErrorNotFound)?,
-    }))
+    Ok(web::Json(
+        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+    ))
 }
 
-#[get("api/{version}/namespaces/{namespace}/{kind}")]
+#[get("{server}/api/{version}/namespaces/{namespace}/{kind}")]
 async fn api_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(match accept.0.as_slice() {
-        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
-            .load_table(list.clone())
-            .map_err(error::ErrorNotFound)?,
-        _ => reader
-            .load_list(list.clone())
-            .map_err(error::ErrorNotFound)?,
-    }))
+    Ok(web::Json(
+        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+    ))
 }
 
-#[get("apis/{group}/{version}/namespaces/{namespace}/{kind}")]
+#[get("{server}/apis/{group}/{version}/namespaces/{namespace}/{kind}")]
 async fn apis_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(match accept.0.as_slice() {
-        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
-            .load_table(list.clone())
-            .map_err(error::ErrorNotFound)?,
-        _ => reader
-            .load_list(list.clone())
-            .map_err(error::ErrorNotFound)?,
-    }))
+    Ok(web::Json(
+        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+    ))
 }
 
-#[get("api/{version}/{kind}/{name}")]
+fn list_items(
+    accept: Header<Accept>,
+    list: Path<List>,
+    reader: web::Data<HashMap<String, Reader>>,
+) -> anyhow::Result<serde_json::Value> {
+    let server = reader
+        .get(list.get_server())
+        .ok_or(anyhow::anyhow!("Server not found"))?;
+    Ok(match accept.0.as_slice() {
+        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
+            server.load_table(list.clone())?
+        }
+        _ => server.load_list(list.clone())?,
+    })
+}
+
+#[get("{server}/api/{version}/{kind}/{name}")]
 async fn cluster_get(
     get: Path<Get>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        reader.load(get.clone()).map_err(error::ErrorNotFound)?,
+        get_item(get, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
-#[get("apis/{group}/{version}/{kind}/{name}")]
+#[get("{server}/apis/{group}/{version}/{kind}/{name}")]
 async fn cluster_apis_get(
     get: Path<Get>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        reader.load(get.clone()).map_err(error::ErrorNotFound)?,
+        get_item(get, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
-#[get("api/{version}/namespaces/{namespace}/{kind}/{name}")]
+#[get("{server}/api/{version}/namespaces/{namespace}/{kind}/{name}")]
 async fn namespaced_get(
     get: Path<Get>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        reader.load(get.clone()).map_err(error::ErrorNotFound)?,
+        get_item(get, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
-#[get("apis/{group}/{version}/namespaces/{namespace}/{kind}/{name}")]
+#[get("{server}/apis/{group}/{version}/namespaces/{namespace}/{kind}/{name}")]
 async fn namespaced_apis_get(
     get: Path<Get>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        reader.load(get.clone()).map_err(error::ErrorNotFound)?,
+        get_item(get, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
-#[get("api/{version}/namespaces/{namespace}/{kind}/{name}/log")]
+#[get("{server}/api/{version}/namespaces/{namespace}/{kind}/{name}/log")]
 async fn logs_get(
     get: Path<Get>,
     query: Query<Log>,
-    reader: web::Data<Reader>,
+    reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     reader
+        .get(get.get_server())
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
         .load_raw(get.get_logs_path(query.deref()))
         .map_err(error::ErrorNotFound)
+}
+
+fn get_item(
+    get: Path<Get>,
+    reader: web::Data<HashMap<String, Reader>>,
+) -> anyhow::Result<serde_json::Value> {
+    reader
+        .get(get.get_server())
+        .ok_or(anyhow::anyhow!("Server not found"))?
+        .load(get.clone())
 }

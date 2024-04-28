@@ -3,6 +3,7 @@ use flate2::{write::GzEncoder, Compression};
 
 use serde::Deserialize;
 use std::{
+    ffi::OsStr,
     fmt::Display,
     fs::{DirBuilder, File},
     io::Write as _,
@@ -11,10 +12,57 @@ use std::{
 };
 #[cfg(feature = "archive")]
 use tar::{Builder, Header};
+use walkdir::WalkDir;
 #[cfg(feature = "archive")]
 use zip::{write::FileOptions, ZipWriter};
 
 use super::representation::{ArchivePath, Representation};
+
+#[derive(Clone, Deserialize)]
+pub struct ArchiveSearch(PathBuf);
+
+impl Default for ArchiveSearch {
+    fn default() -> Self {
+        Self("crust-gather".into())
+    }
+}
+
+impl From<ArchiveSearch> for PathBuf {
+    fn from(val: ArchiveSearch) -> Self {
+        val.0
+    }
+}
+
+impl Display for ArchiveSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.display())
+    }
+}
+
+impl From<&str> for ArchiveSearch {
+    fn from(value: &str) -> Self {
+        Self(PathBuf::from(value))
+    }
+}
+
+impl From<ArchiveSearch> for Vec<Archive> {
+    fn from(value: ArchiveSearch) -> Self {
+        WalkDir::new(value.0)
+            .max_depth(5)
+            .same_file_system(true)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|f| f.file_name() == "version.yaml")
+            .map(|f| {
+                f.path()
+                    .parent()
+                    .unwrap_or(PathBuf::from("snapshot").as_path())
+                    .to_path_buf()
+            })
+            .map(Into::into)
+            .collect()
+    }
+}
 
 #[derive(Clone, Deserialize)]
 pub struct Archive(PathBuf);
@@ -27,6 +75,14 @@ impl Archive {
 
     pub fn path(&self) -> PathBuf {
         self.0.clone()
+    }
+
+    pub fn name(&self) -> &OsStr {
+        self.0
+            .components()
+            .last()
+            .map(|c| c.as_os_str())
+            .unwrap_or(OsStr::new("snapshot"))
     }
 
     pub fn join(&self, path: ArchivePath) -> PathBuf {
@@ -51,6 +107,12 @@ impl Default for Archive {
 impl From<Archive> for PathBuf {
     fn from(val: Archive) -> Self {
         val.0
+    }
+}
+
+impl From<PathBuf> for Archive {
+    fn from(val: PathBuf) -> Archive {
+        Archive(val)
     }
 }
 

@@ -30,6 +30,7 @@ glob = "0.3.1"
 http = "1.1.0"
 serde_json_path = "0.6.4"
 base64 = "0.22.0"
+walkdir = "2.5.0"
 
 [features]
 archive = ["dep:tar", "dep:flate2", "dep:zip"]
