@@ -97,8 +97,10 @@ impl Api {
             .map(|a| Api::prepare_kubeconfig(&a, socket))
             .try_fold(Kubeconfig::default(), Kubeconfig::merge)?;
 
-        let kubeconfig_path =
-            kubeconfig.unwrap_or(std::path::PathBuf::from(std::env::var("KUBECONFIG")?));
+        let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
+            std::env::var("KUBECONFIG")
+                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?).to_string()),
+        ));
 
         serde_yaml::to_writer(File::create(kubeconfig_path)?, &config)?;
 
