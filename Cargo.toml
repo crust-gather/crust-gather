@@ -39,7 +39,7 @@ archive = ["dep:tar", "dep:flate2", "dep:zip"]
 xid = "1.0.0"
 tempdir = "0.3.7"
 serial_test = "3.0.0"
-serde_with = "3.4.0"
+serde_with = "3.8.1"
 
 [profile.release]
 strip = true
