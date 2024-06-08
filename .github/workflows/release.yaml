@@ -5,6 +5,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: ["main"]
+  merge_group:
 
 env:
   # Define the rust version to use
