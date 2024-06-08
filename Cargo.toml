@@ -36,7 +36,7 @@ walkdir = "2.5.0"
 archive = ["dep:tar", "dep:flate2", "dep:zip"]
 
 [dev-dependencies]
-xid = "1.0.0"
+xid = "1.1.1"
 tempdir = "0.3.7"
 serial_test = "3.1.1"
 serde_with = "3.8.1"

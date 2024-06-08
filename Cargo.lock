@@ -2992,9 +2992,9 @@ dependencies = [
 
 [[package]]
 name = "xid"
-version = "1.0.3"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9671fb9541acc3118f04c4a6768253091d55077653efed3a4b151493abfd4e"
+checksum = "3752a194518cdee5d019812fb7978c51d8f0b7cfe9ace5983df1780964bb84c0"
 dependencies = [
  "crc32fast",
  "hostname",
