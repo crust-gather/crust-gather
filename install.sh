@@ -322,8 +322,6 @@ is_build_available() {
     done
   )
 
-  echo $SUPPORTED_TARGETS
-  echo $target
   if [ "${good}" != "1" ]; then
     error "${arch} builds for ${platform} are not yet available for crust-gather"
     printf "\n" >&2
