@@ -1,6 +1,5 @@
 name: Dependency bump automerge
 on:
-  merge_group:
   pull_request:
     types: [opened, edited, synchronize, reopened, labeled, unlabeled]
     branches:
