@@ -360,7 +360,13 @@ impl Config {
             Err(e) => log::error!("{e}"),
         }
 
-        self.writer.lock().unwrap().finish()
+        self.finish()
+    }
+
+    fn finish(&self) -> anyhow::Result<()> {
+        let writer = &self.writer;
+        drop(writer.lock().unwrap());
+        Ok(())
     }
 
     async fn iterate_until_completion(&self, collectables: Vec<Collectable>) {

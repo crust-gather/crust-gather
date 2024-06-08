@@ -24,3 +24,8 @@ updates:
           - "kube*"
           - "http*"
           - "k8s-openapi"
+      zip:
+        patterns:
+          - "flate2"
+          - "zip"
+          - "tar"

@@ -14,7 +14,7 @@ use std::{
 use tar::{Builder, Header};
 use walkdir::WalkDir;
 #[cfg(feature = "archive")]
-use zip::{write::FileOptions, ZipWriter};
+use zip::{write::SimpleFileOptions, ZipWriter};
 
 use super::representation::{ArchivePath, Representation};
 
@@ -173,16 +173,17 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 
 impl Writer {
     /// Finish writing the archive, finalizing any compression and flushing buffers.
-    pub fn finish(&mut self) -> anyhow::Result<()> {
+    pub fn finish(self) -> anyhow::Result<()> {
         match self {
             Self::Path(_) => (),
             #[cfg(feature = "archive")]
-            Self::Gzip(_, builder) => builder.finish()?,
+            Self::Gzip(_, mut builder) => {
+                builder.finish()?;
+            }
             #[cfg(feature = "archive")]
-            Self::Zip(_, writer) => match writer.finish() {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            }?,
+            Self::Zip(_, writer) => {
+                writer.finish()?;
+            }
         };
         Ok(())
     }
@@ -218,12 +219,12 @@ impl Writer {
             Self::Zip(Archive(archive), writer) => {
                 let path = repr.path();
                 let path = path.parent().unwrap().to_str().unwrap();
-                writer.add_directory(path, FileOptions::default())?;
+                writer.add_directory(path, SimpleFileOptions::default())?;
 
                 let root_prefix = archive.file_stem().unwrap();
                 let file = PathBuf::from(root_prefix).join(archive_path);
                 let file = file.to_str().unwrap();
-                writer.start_file(file, FileOptions::default())?;
+                writer.start_file(file, SimpleFileOptions::default())?;
                 writer.write_all(data.as_bytes())?;
             }
         }
