@@ -80,6 +80,66 @@ pub struct Log {
     previous: Option<bool>,
 }
 
+#[derive(Deserialize, Clone, Debug)]
+pub struct Selector {
+    #[serde(rename = "labelSelector")]
+    label_selector: Option<String>,
+}
+
+impl Selector {
+    fn matches<R: Resource>(&self, res: R) -> Option<R> {
+        match &self.label_selector {
+            Some(selector) => selector
+                .split(',')
+                .map(|selector| Selector::matches_selector(&selector.to_string(), &res))
+                .all(|matches| matches.is_some())
+                .then_some(res),
+            None => Some(res),
+        }
+    }
+
+    fn matches_selector<R: Resource>(selector: &String, res: &R) -> Option<()> {
+        match selector {
+            selector if selector.contains("!=") => {
+                let (key, value) = selector.split_once("!=")?;
+                match &res.meta().labels {
+                    Some(labels) => {
+                        labels.get(key).map(|v| v == value).and_then(|_| None)?;
+                        Some(())
+                    }
+                    None => Some(()),
+                }
+            }
+            selector if selector.contains("=") => {
+                let (key, value) = selector.split_once("=")?;
+                res.meta()
+                    .labels
+                    .clone()
+                    .map(|labels| {
+                        let v = labels.get(key)?;
+                        (v == value).then_some(())
+                    })
+                    .flatten()
+            }
+            key if key.starts_with('!') => res // todo: split off
+                .meta()
+                .labels
+                .clone()
+                .map(|labels| {
+                    labels.get(&key.clone().split_off(1)).and_then(|_| None)?;
+                    Some(())
+                })
+                .flatten(),
+            key => res
+                .meta()
+                .labels
+                .clone()
+                .map(|labels| labels.get(key).and_then(|_| Some(())))
+                .flatten(),
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 pub struct List {
     pub server: String,
@@ -230,7 +290,7 @@ impl Reader {
         Self(archive.clone())
     }
 
-    pub fn load_table(&self, list: List) -> anyhow::Result<serde_json::Value> {
+    pub fn load_table(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
         let Reader(archive) = self;
 
         let crd_file = match list.get_crd_path() {
@@ -269,7 +329,9 @@ impl Reader {
         )?)?;
 
         for path in paths {
-            items.push(Reader::read(path?)?);
+            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+                items.push(obj);
+            }
         }
 
         Ok(json!({
@@ -295,7 +357,7 @@ impl Reader {
         Reader::read(archive.join(path))
     }
 
-    pub fn load_list(&self, list: List) -> anyhow::Result<serde_json::Value> {
+    pub fn load_list(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
         log::debug!("Reading list {}...", list.get_path());
 
         let Reader(archive) = self;
@@ -306,7 +368,9 @@ impl Reader {
         )?;
         let mut items = vec![];
         for path in paths {
-            items.push(Reader::read(path?)?);
+            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+                items.push(obj);
+            }
         }
 
         Ok(serde_json::to_value(ObjectValueList::new(list, items))?)
