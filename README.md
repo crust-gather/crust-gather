@@ -23,7 +23,11 @@
 
 [![asciicast](https://asciinema.org/a/632848.svg)](https://asciinema.org/a/632848)
 
-### Demo artifact serving
+## Helm charts demo
+
+[![asciicast](https://asciinema.org/a/AfbGJSUUtAItmQVp2EEC6j2vo.svg)](https://asciinema.org/a/AfbGJSUUtAItmQVp2EEC6j2vo)
+
+### Artifact serving
 
 One of the QoL features `crust-gather` provides is an ability to collect cluster snapshots during CI workflow run and serve the content like a k8s cluster after the originating cluster is removed. It can serve any number of clusters simulaniously, each cluster stored under separate context.
 

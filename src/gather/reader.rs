@@ -7,8 +7,9 @@ use k8s_openapi::{
     },
     serde_json::{self, json},
 };
-use kube_core::{PartialObjectMeta, Resource, TypeMeta};
-use serde::{Deserialize, Serialize};
+use kube::core::{PartialObjectMeta, Resource, TypeMeta};
+use kube_core::DynamicObject;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
 
 use super::{
@@ -126,14 +127,21 @@ impl List {
 pub struct ObjectValueList {
     #[serde(flatten)]
     type_meta: TypeMeta,
-    items: Vec<serde_json::Value>,
+    items: Vec<DynamicObject>,
 }
 
 impl ObjectValueList {
-    pub fn new(items: Vec<serde_json::Value>) -> Self {
+    pub fn new(list: List, items: Vec<DynamicObject>) -> Self {
+        // Doing best effort to convert arbitrary object list to a typed list.
+        // Works best for core types, generating SecretList instead of just List.
+        let mut kind = list
+            .kind
+            .strip_suffix('s')
+            .unwrap_or(list.kind.as_str())
+            .to_string();
         Self {
             type_meta: TypeMeta {
-                kind: "List".to_string(),
+                kind: format!("{}{kind}List", kind.remove(0).to_uppercase(),),
                 api_version: "v1".to_string(),
             },
             items,
@@ -200,11 +208,11 @@ impl Table {
         self.0.iter().map(|r| r.to_definition()).collect()
     }
 
-    fn rows(&self, items: Vec<serde_json::Value>) -> anyhow::Result<Vec<serde_json::Value>> {
+    fn rows(&self, items: Vec<impl Serialize>) -> anyhow::Result<Vec<serde_json::Value>> {
         items
             .iter()
             .map(|i| self.to_row(serde_json::to_value(i)?))
-            .collect::<anyhow::Result<Vec<serde_json::Value>>>()
+            .collect()
     }
 }
 
@@ -232,7 +240,7 @@ impl Reader {
             },
             None => CustomResourceDefinition::default(),
         };
-        let mut items: Vec<serde_json::Value> = vec![];
+        let mut items: Vec<DynamicObject> = vec![];
 
         let version = crd_file
             .spec
@@ -261,7 +269,7 @@ impl Reader {
         )?)?;
 
         for path in paths {
-            items.push(serde_yaml::from_reader(File::open(path?)?)?);
+            items.push(Reader::read(path?)?);
         }
 
         Ok(json!({
@@ -301,10 +309,10 @@ impl Reader {
             items.push(Reader::read(path?)?);
         }
 
-        Ok(serde_json::to_value(ObjectValueList::new(items))?)
+        Ok(serde_json::to_value(ObjectValueList::new(list, items))?)
     }
 
-    fn read(path: PathBuf) -> anyhow::Result<serde_json::Value> {
+    fn read<V: DeserializeOwned>(path: PathBuf) -> anyhow::Result<V> {
         Ok(serde_yaml::from_reader(File::open(path)?)?)
     }
 
