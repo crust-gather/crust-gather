@@ -4,39 +4,39 @@ kind: Plugin
 metadata:
   name: crust-gather
 spec:
-  version: v0.4.0
+  version: v0.4.1
   platforms:
     - bin: kubectl-crust-gather.exe
-      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.0/kubectl-crust-gather_0.4.0_windows_amd64.tar.gz
-      sha256: 444fe44931f1c3454b5d239685674bb84df8f37de232ac270b5c3b7b058ce232
+      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.1/kubectl-crust-gather_0.4.1_windows_amd64.tar.gz
+      sha256: 58ce646ad1a98f0e616e843d7364eab534bb3aed2841652f6017bad20fefea2a
       selector:
         matchLabels:
           os: windows
           arch: amd64
     - bin: kubectl-crust-gather
-      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.0/kubectl-crust-gather_0.4.0_linux_arm64.tar.gz
-      sha256: a1082ae814645f16249e36527f8a241ffb9809d6727a81a9ece1150ffc5fc42a
+      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.1/kubectl-crust-gather_0.4.1_linux_arm64.tar.gz
+      sha256: 3aa4a1e014f5e74a4ad899fe6972c89c9ea248a341b072fa99f3462a5ab3e449
       selector:
         matchLabels:
           os: linux
           arch: arm64
     - bin: kubectl-crust-gather
-      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.0/kubectl-crust-gather_0.4.0_linux_amd64.tar.gz
-      sha256: ec250f03a802d02329c50ed88fe4b4634501007ad038af94711cc3b5e772a982
+      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.1/kubectl-crust-gather_0.4.1_linux_amd64.tar.gz
+      sha256: d136b87e7af1ef92ebd45d0855b6b816fcd37491f6052c0b398d36f5707226d9
       selector:
         matchLabels:
           os: linux
           arch: amd64
     - bin: kubectl-crust-gather
-      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.0/kubectl-crust-gather_0.4.0_darwin_arm64.tar.gz
-      sha256: df09d44ed39f559f9e1038c23ed8180dd9857e668a5aa1a489b4ce5d64b336e5
+      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.1/kubectl-crust-gather_0.4.1_darwin_arm64.tar.gz
+      sha256: a50c4e693dcd9fc9203f24e95f18248fe66f9a73c45761a726540b3db88c486c
       selector:
         matchLabels:
           os: darwin
           arch: arm64
     - bin: kubectl-crust-gather
-      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.0/kubectl-crust-gather_0.4.0_darwin_amd64.tar.gz
-      sha256: 6b16a9d8c7fbf751565a337417c19ccc9e4315bea91b84d1bde789f7252b8df2
+      uri: https://github.com/crust-gather/crust-gather/releases/download/v0.4.1/kubectl-crust-gather_0.4.1_darwin_amd64.tar.gz
+      sha256: a50c4e693dcd9fc9203f24e95f18248fe66f9a73c45761a726540b3db88c486c
       selector:
         matchLabels:
           os: darwin
