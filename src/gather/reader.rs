@@ -14,6 +14,7 @@ use serde_json_path::JsonPath;
 
 use super::{
     representation::{ArchivePath, Container, LogGroup, NamespaceName},
+    selector::Selector,
     writer::Archive,
 };
 
@@ -230,7 +231,7 @@ impl Reader {
         Self(archive.clone())
     }
 
-    pub fn load_table(&self, list: List) -> anyhow::Result<serde_json::Value> {
+    pub fn load_table(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
         let Reader(archive) = self;
 
         let crd_file = match list.get_crd_path() {
@@ -269,7 +270,9 @@ impl Reader {
         )?)?;
 
         for path in paths {
-            items.push(Reader::read(path?)?);
+            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+                items.push(obj);
+            }
         }
 
         Ok(json!({
@@ -295,7 +298,7 @@ impl Reader {
         Reader::read(archive.join(path))
     }
 
-    pub fn load_list(&self, list: List) -> anyhow::Result<serde_json::Value> {
+    pub fn load_list(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
         log::debug!("Reading list {}...", list.get_path());
 
         let Reader(archive) = self;
@@ -306,7 +309,9 @@ impl Reader {
         )?;
         let mut items = vec![];
         for path in paths {
-            items.push(Reader::read(path?)?);
+            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+                items.push(obj);
+            }
         }
 
         Ok(serde_json::to_value(ObjectValueList::new(list, items))?)

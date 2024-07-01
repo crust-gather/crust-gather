@@ -19,7 +19,7 @@ use crate::gather::{
     writer::Archive,
 };
 
-use super::{representation::ArchivePath, writer::ArchiveSearch};
+use super::{representation::ArchivePath, selector::Selector, writer::ArchiveSearch};
 
 #[derive(Clone, Deserialize)]
 pub struct Socket(SocketAddr);
@@ -238,10 +238,11 @@ async fn apis(
 async fn api_list(
     accept: Header<Accept>,
     list: Path<List>,
+    query: Query<Selector>,
     reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+        list_items(accept, list, query, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
@@ -249,10 +250,11 @@ async fn api_list(
 async fn apis_list(
     accept: Header<Accept>,
     list: Path<List>,
+    query: Query<Selector>,
     reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+        list_items(accept, list, query, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
@@ -260,10 +262,11 @@ async fn apis_list(
 async fn api_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
+    query: Query<Selector>,
     reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+        list_items(accept, list, query, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
@@ -271,16 +274,18 @@ async fn api_namespaced_list(
 async fn apis_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
+    query: Query<Selector>,
     reader: web::Data<HashMap<String, Reader>>,
 ) -> actix_web::Result<impl Responder> {
     Ok(web::Json(
-        list_items(accept, list, reader).map_err(error::ErrorNotFound)?,
+        list_items(accept, list, query, reader).map_err(error::ErrorNotFound)?,
     ))
 }
 
 fn list_items(
     accept: Header<Accept>,
     list: Path<List>,
+    query: Query<Selector>,
     reader: web::Data<HashMap<String, Reader>>,
 ) -> anyhow::Result<serde_json::Value> {
     let server = reader
@@ -288,9 +293,9 @@ fn list_items(
         .ok_or(anyhow::anyhow!("Server not found"))?;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            server.load_table(list.clone())?
+            server.load_table(list.clone(), query.0)?
         }
-        _ => server.load_list(list.clone())?,
+        _ => server.load_list(list.clone(), query.0)?,
     })
 }
 
