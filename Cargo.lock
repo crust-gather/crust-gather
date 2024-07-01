@@ -652,7 +652,6 @@ dependencies = [
  "http 1.1.0",
  "k8s-openapi",
  "kube",
- "kube-core",
  "log",
  "logos",
  "regex",

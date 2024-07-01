@@ -533,8 +533,8 @@ mod tests {
     use std::{collections::BTreeMap, env, io::Write};
 
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
+    use kube::core::{params::ListParams, ObjectMeta};
     use kube::{api::PostParams, Api};
-    use kube_core::{params::ListParams, ObjectMeta};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::fs;

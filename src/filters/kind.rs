@@ -1,4 +1,4 @@
-use kube_core::GroupVersionKind;
+use kube::core::GroupVersionKind;
 use serde::Deserialize;
 
 use crate::scanners::interface::ResourceThreadSafe;
@@ -91,7 +91,7 @@ impl From<Vec<KindExclude>> for FilterType {
 mod tests {
 
     use k8s_openapi::{api::core::v1::Pod, Resource};
-    use kube_core::{ApiResource, DynamicObject, TypeMeta};
+    use kube::core::{ApiResource, DynamicObject, TypeMeta};
 
     use super::*;
 
