@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use kube_core::{GroupVersionKind, Resource};
+use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -155,7 +155,7 @@ impl TryFrom<String> for FilterRegex {
 mod tests {
 
     use k8s_openapi::api::core::v1::Pod;
-    use kube_core::{ApiResource, DynamicObject, TypeMeta};
+    use kube::core::{ApiResource, DynamicObject, TypeMeta};
 
     use crate::filters::namespace::{NamespaceExclude, NamespaceInclude};
 

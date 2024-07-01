@@ -6,8 +6,8 @@ use std::{
 use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
+use kube::core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt, TypeMeta};
 use kube::Api;
-use kube_core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt, TypeMeta};
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -147,8 +147,8 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
+    use kube::core::{params::PostParams, ApiResource};
     use kube::Api;
-    use kube_core::{params::PostParams, ApiResource};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::time::timeout;

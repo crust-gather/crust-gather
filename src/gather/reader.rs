@@ -7,8 +7,7 @@ use k8s_openapi::{
     },
     serde_json::{self, json},
 };
-use kube::core::{PartialObjectMeta, Resource, TypeMeta};
-use kube_core::DynamicObject;
+use kube::core::{DynamicObject, PartialObjectMeta, Resource, TypeMeta};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
 

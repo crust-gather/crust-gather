@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::bail;
-use kube_core::{Resource, TypeMeta};
+use kube::core::{Resource, TypeMeta};
 use serde::Deserialize;
 
 use crate::scanners::interface::ResourceThreadSafe;
@@ -247,7 +247,7 @@ impl Representation {
 mod tests {
 
     use k8s_openapi::api::core::v1::{Node, Pod};
-    use kube_core::{ObjectMeta, Resource};
+    use kube::core::{ObjectMeta, Resource};
 
     use super::*;
 

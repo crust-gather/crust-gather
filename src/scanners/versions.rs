@@ -5,8 +5,8 @@ use std::{
 
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
+use kube::core::{ApiResource, TypeMeta};
 use kube::{Api, Resource};
-use kube_core::{ApiResource, TypeMeta};
 use serde::Serialize;
 
 use crate::gather::{
