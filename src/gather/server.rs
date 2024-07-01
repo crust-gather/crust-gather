@@ -19,7 +19,7 @@ use crate::gather::{
     writer::Archive,
 };
 
-use super::{reader::Selector, representation::ArchivePath, writer::ArchiveSearch};
+use super::{representation::ArchivePath, selector::Selector, writer::ArchiveSearch};
 
 #[derive(Clone, Deserialize)]
 pub struct Socket(SocketAddr);

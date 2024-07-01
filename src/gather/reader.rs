@@ -14,6 +14,7 @@ use serde_json_path::JsonPath;
 
 use super::{
     representation::{ArchivePath, Container, LogGroup, NamespaceName},
+    selector::Selector,
     writer::Archive,
 };
 
@@ -78,66 +79,6 @@ impl Get {
 pub struct Log {
     container: Container,
     previous: Option<bool>,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct Selector {
-    #[serde(rename = "labelSelector")]
-    label_selector: Option<String>,
-}
-
-impl Selector {
-    fn matches<R: Resource>(&self, res: R) -> Option<R> {
-        match &self.label_selector {
-            Some(selector) => selector
-                .split(',')
-                .map(|selector| Selector::matches_selector(&selector.to_string(), &res))
-                .all(|matches| matches.is_some())
-                .then_some(res),
-            None => Some(res),
-        }
-    }
-
-    fn matches_selector<R: Resource>(selector: &String, res: &R) -> Option<()> {
-        match selector {
-            selector if selector.contains("!=") => {
-                let (key, value) = selector.split_once("!=")?;
-                match &res.meta().labels {
-                    Some(labels) => {
-                        labels.get(key).map(|v| v == value).and_then(|_| None)?;
-                        Some(())
-                    }
-                    None => Some(()),
-                }
-            }
-            selector if selector.contains("=") => {
-                let (key, value) = selector.split_once("=")?;
-                res.meta()
-                    .labels
-                    .clone()
-                    .map(|labels| {
-                        let v = labels.get(key)?;
-                        (v == value).then_some(())
-                    })
-                    .flatten()
-            }
-            key if key.starts_with('!') => res // todo: split off
-                .meta()
-                .labels
-                .clone()
-                .map(|labels| {
-                    labels.get(&key.clone().split_off(1)).and_then(|_| None)?;
-                    Some(())
-                })
-                .flatten(),
-            key => res
-                .meta()
-                .labels
-                .clone()
-                .map(|labels| labels.get(key).and_then(|_| Some(())))
-                .flatten(),
-        }
-    }
 }
 
 #[derive(Deserialize, Clone)]
