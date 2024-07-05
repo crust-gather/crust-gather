@@ -5,7 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use http::Request;
-use k8s_openapi::api::core::v1::Node;
+use k8s_openapi::{api::core::v1::Node, chrono::Utc};
 use kube::core::{ApiResource, TypeMeta};
 use kube::Api;
 
@@ -81,6 +81,9 @@ impl Collect<Node> for Info {
             Representation::new()
                 .with_path(ArchivePath::Custom("apis.json".into()))
                 .with_data(apis_versions.as_str()),
+            Representation::new()
+                .with_path(ArchivePath::Custom("collected.timestamp".into()))
+                .with_data(&Utc::now().to_string()),
         ];
 
         for repr in reprs {

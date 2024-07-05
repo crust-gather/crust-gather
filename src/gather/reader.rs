@@ -1,21 +1,36 @@
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs::File,
+    io::{self, BufRead as _, Read},
+    path::PathBuf,
+};
 
 use anyhow::bail;
+use json_patch::{patch, PatchOperation};
+use jsonptr::Pointer;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
         CustomResourceColumnDefinition, CustomResourceDefinition, CustomResourceDefinitionVersion,
     },
+    chrono::{DateTime, Utc},
     serde_json::{self, json},
 };
-use kube::core::{DynamicObject, PartialObjectMeta, Resource, TypeMeta};
+use kube::{
+    core::{DynamicObject, PartialObjectMeta, Resource, TypeMeta},
+    ResourceExt,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
+
+use crate::scanners::interface::{DELETED_ANNOTATION, LAST_SYNC_ANNOTATION};
 
 use super::{
     representation::{ArchivePath, Container, LogGroup, NamespaceName},
     selector::Selector,
     writer::Archive,
 };
+
+const LAST_SYNC_PATH: &[&str] = &["metadata", "annotations", LAST_SYNC_ANNOTATION];
+const DELETED_PATH: &[&str] = &["metadata", "annotations", DELETED_ANNOTATION];
 
 #[derive(Deserialize, Clone)]
 pub struct Destination {
@@ -223,15 +238,15 @@ impl FromIterator<TableEntry> for Table {
 }
 
 #[derive(Clone)]
-pub struct Reader(Archive);
+pub struct Reader(Archive, DateTime<Utc>);
 
 impl Reader {
-    pub fn new(archive: &Archive) -> Self {
-        Self(archive.clone())
+    pub fn new(archive: &Archive, at: &DateTime<Utc>) -> Self {
+        Self(archive.clone(), *at)
     }
 
     pub fn load_table(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
-        let Reader(archive) = self;
+        let Reader(archive, at) = self;
 
         let crd_file = match list.get_crd_path() {
             Some(crd_path) => match File::open(archive.join(crd_path)) {
@@ -240,7 +255,7 @@ impl Reader {
             },
             None => CustomResourceDefinition::default(),
         };
-        let mut items: Vec<DynamicObject> = vec![];
+        let mut items = vec![];
 
         let version = crd_file
             .spec
@@ -269,7 +284,10 @@ impl Reader {
         )?)?;
 
         for path in paths {
-            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+            if let Some(obj) = selector
+                .matches(Reader::read(path?, *at)?)
+                .filter(|obj: &DynamicObject| !obj.annotations().contains_key(DELETED_ANNOTATION))
+            {
                 items.push(obj);
             }
         }
@@ -285,7 +303,7 @@ impl Reader {
     pub fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
         log::debug!("Reading file {}...", path);
 
-        let Reader(archive) = self;
+        let Reader(archive, _) = self;
         Reader::read_raw(archive.join(path))
     }
 
@@ -293,14 +311,19 @@ impl Reader {
         let path = get.get_path();
         log::debug!("Reading file {}...", path);
 
-        let Reader(archive) = self;
-        Reader::read(archive.join(path))
+        let Reader(archive, at) = self;
+        let obj: DynamicObject = Reader::read(archive.join(path), *at)?;
+        if obj.annotations().contains_key(DELETED_ANNOTATION) {
+            bail!("Object was deleted")
+        }
+
+        serde_json::to_value(obj).map_err(Into::into)
     }
 
     pub fn load_list(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
         log::debug!("Reading list {}...", list.get_path());
 
-        let Reader(archive) = self;
+        let Reader(archive, at) = self;
         let path = archive.join(list.get_path());
         let paths = glob::glob(
             path.to_str()
@@ -308,16 +331,63 @@ impl Reader {
         )?;
         let mut items = vec![];
         for path in paths {
-            if let Some(obj) = selector.matches(Reader::read(path?)?) {
+            if let Some(obj) = selector
+                .matches(Reader::read(path?, *at)?)
+                .filter(|obj: &DynamicObject| !obj.annotations().contains_key(DELETED_ANNOTATION))
+            {
                 items.push(obj);
             }
         }
 
-        Ok(serde_json::to_value(ObjectValueList::new(list, items))?)
+        serde_json::to_value(ObjectValueList::new(list, items)).map_err(Into::into)
     }
 
-    fn read<V: DeserializeOwned>(path: PathBuf) -> anyhow::Result<V> {
-        Ok(serde_yaml::from_reader(File::open(path)?)?)
+    pub fn read<V: DeserializeOwned>(path: PathBuf, until: DateTime<Utc>) -> anyhow::Result<V> {
+        let object = File::open(path.clone())?;
+        match path.with_extension("patch").exists() {
+            false => serde_yaml::from_reader(object).map_err(Into::into),
+            true => {
+                let mut updated = serde_yaml::from_reader(object)?;
+                Reader::interpolate(&mut updated, path.with_extension("patch"), until)?;
+                serde_json::from_value(updated).map_err(Into::into)
+            }
+        }
+    }
+
+    fn read_lines(filename: PathBuf) -> io::Result<io::Lines<io::BufReader<File>>> {
+        let file = File::open(filename)?;
+        Ok(io::BufReader::new(file).lines())
+    }
+
+    // Goes through all json patches and applies them on the resource in order
+    fn interpolate(
+        target: &mut serde_json::Value,
+        patches_file: PathBuf,
+        until: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let mut patch_list = vec![];
+        for list in Reader::read_lines(patches_file)? {
+            let patches: Vec<PatchOperation> = serde_json::from_str(&list?)?;
+            for p in patches {
+                match p {
+                    PatchOperation::Replace(r)
+                        if r.path == Pointer::new(LAST_SYNC_PATH)
+                            || r.path == Pointer::new(DELETED_PATH) =>
+                    {
+                        let last_sync_timestamp: DateTime<Utc> =
+                            serde_json::from_value(r.value.clone())?;
+                        if last_sync_timestamp > until {
+                            break;
+                        }
+
+                        patch_list.push(PatchOperation::Replace(r));
+                    }
+                    p => patch_list.push(p),
+                };
+            }
+        }
+
+        patch(target, &patch_list).map_err(Into::into)
     }
 
     fn read_raw(path: PathBuf) -> anyhow::Result<String> {

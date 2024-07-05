@@ -82,7 +82,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     }
 
     fn get_api(&self) -> Api<R> {
-        log::info!(
+        log::debug!(
             "Collecting {} {} resources",
             self.resource.group,
             self.resource.kind
@@ -117,7 +117,7 @@ mod test {
             namespace::NamespaceInclude,
         },
         gather::{
-            config::Config,
+            config::{Config, GatherMode},
             representation::ArchivePath,
             writer::{Archive, Encoding, Writer},
         },
@@ -176,6 +176,7 @@ mod test {
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),
+                GatherMode::Collect,
                 "1m".to_string().try_into().unwrap(),
             ),
             ApiResource::erase::<Pod>(&()),
@@ -206,6 +207,7 @@ mod test {
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),
+                GatherMode::Collect,
                 "1m".to_string().try_into().unwrap(),
             ),
             ApiResource::erase::<Namespace>(&()),
@@ -232,6 +234,7 @@ mod test {
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
                 Default::default(),
+                GatherMode::Collect,
                 "1m".to_string().try_into().unwrap(),
             ),
             ApiResource::erase::<Pod>(&()),

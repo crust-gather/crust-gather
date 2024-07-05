@@ -1,7 +1,10 @@
 use anyhow::{self, bail};
 use async_trait::async_trait;
 use futures::future::join_all;
+use futures::{StreamExt, TryStreamExt as _};
+use k8s_openapi::chrono::Utc;
 use k8s_openapi::serde_json;
+use kube::api::WatchEvent;
 use kube::core::params::ListParams;
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind, ResourceExt, TypeMeta};
 use kube::Api;
@@ -9,10 +12,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
-use tokio_retry::Retry;
+use tokio_retry::{Retry, RetryIf};
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
@@ -26,6 +30,9 @@ trait_set! {
     pub trait ResourceReq = Base + ThreadSafe + SerDe;
     pub trait ResourceThreadSafe = ResourceReq + ResourceExt;
 }
+
+pub const LAST_SYNC_ANNOTATION: &str = "crust-gather.io/last-sync-timestamp";
+pub const DELETED_ANNOTATION: &str = "crust-gather.io/deleted";
 
 #[async_trait]
 /// Collect defines a trait for collecting Kubernetes object representations.
@@ -145,6 +152,24 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             .unwrap();
     }
 
+    /// Retries watching representations using an exponential backoff with jitter.
+    /// This helps handle transient errors and spreading load.
+    async fn watch_retry(&self) {
+        RetryIf::spawn(
+            Self::delay(),
+            || async { self.watch_collect().await },
+            |e: &anyhow::Error| {
+                log::error!(
+                    "Watch over {} failed, retrying: {e}",
+                    self.get_type_meta().kind
+                );
+                true
+            },
+        )
+        .await
+        .unwrap();
+    }
+
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     async fn write_with_retry(&self, object: &R) -> anyhow::Result<()> {
@@ -159,6 +184,58 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                 .lock()
                 .unwrap()
                 .store(&self.get_secrets().strip(&repr))?;
+        }
+
+        Ok(())
+    }
+
+    /// Collect objects from watch events, storing difference from original as a series of json pathes
+    async fn watch_collect(&self) -> anyhow::Result<()> {
+        let mut stream = self
+            .get_api()
+            .watch(&Default::default(), "0")
+            .await?
+            .boxed();
+
+        while let Some(e) = stream.try_next().await? {
+            match e {
+                WatchEvent::Added(obj) | WatchEvent::Modified(obj) => {
+                    let mut obj = obj.clone();
+                    obj.annotations_mut()
+                        .insert(LAST_SYNC_ANNOTATION.to_string(), Utc::now().to_string());
+                    self.sync_with_retry(&obj).await?
+                }
+                WatchEvent::Deleted(obj) => {
+                    let mut obj = obj.clone();
+                    obj.annotations_mut()
+                        .insert(DELETED_ANNOTATION.to_string(), Utc::now().to_string());
+                    self.sync_with_retry(&obj).await?
+                }
+                WatchEvent::Error(e) => log::error!(
+                    "Failed {} object watch: {e}",
+                    GroupVersionKind::try_from(self.get_type_meta())?.api_version()
+                ),
+                WatchEvent::Bookmark(_) => (),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Retries collecting representations using an exponential backoff with jitter.
+    /// This helps handle transient errors and spreading load.
+    async fn sync_with_retry(&self, object: &R) -> anyhow::Result<()> {
+        let representations = Retry::spawn(Self::delay(), || async {
+            self.representations(object).await
+        })
+        .await?;
+
+        let writer = self.get_writer();
+        for repr in representations {
+            writer
+                .lock()
+                .unwrap()
+                .sync(&self.get_secrets().strip(&repr))?;
         }
 
         Ok(())

@@ -1,6 +1,8 @@
 #[cfg(feature = "archive")]
 use flate2::{write::GzEncoder, Compression};
 
+use json_patch::diff;
+use k8s_openapi::{chrono::Utc, serde_json};
 use serde::Deserialize;
 use std::{
     ffi::OsStr,
@@ -15,6 +17,8 @@ use tar::{Builder, Header};
 use walkdir::WalkDir;
 #[cfg(feature = "archive")]
 use zip::{write::SimpleFileOptions, ZipWriter};
+
+use crate::gather::reader::Reader;
 
 use super::representation::{ArchivePath, Representation};
 
@@ -198,11 +202,13 @@ impl Writer {
         match self {
             Self::Path(Archive(archive)) => {
                 let file = archive.join(archive_path);
-                DirBuilder::new()
-                    .recursive(true)
-                    .create(file.parent().unwrap())?;
-                let mut file = File::create(file)?;
-                file.write_all(data.as_bytes())?;
+                if !file.exists() {
+                    DirBuilder::new()
+                        .recursive(true)
+                        .create(file.parent().unwrap())?;
+                    let mut file = File::create(file)?;
+                    file.write_all(data.as_bytes())?;
+                }
             }
             #[cfg(feature = "archive")]
             Self::Gzip(Archive(archive), builder) => {
@@ -226,6 +232,39 @@ impl Writer {
                 let file = file.to_str().unwrap();
                 writer.start_file(file, SimpleFileOptions::default())?;
                 writer.write_all(data.as_bytes())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a representation data to the archive under the representation path
+    pub fn sync(&mut self, repr: &Representation) -> anyhow::Result<()> {
+        log::debug!("Writing {}...", repr.path());
+
+        let archive_path: String = repr.path().try_into()?;
+
+        match self {
+            Self::Path(Archive(archive)) => {
+                let file_path = archive.join(archive_path);
+                self.store(repr)?;
+
+                // generate diff and write
+                let original = Reader::read(file_path.clone(), Utc::now())?;
+                let updated = serde_yaml::from_str(repr.data())?;
+                let mut patches = File::options()
+                    .create(true)
+                    .append(true)
+                    .open(file_path.with_extension("patch"))?;
+                serde_json::to_writer(patches.try_clone()?, &diff(&original, &updated))?;
+                patches.write_all(b"\n")?;
+            }
+            #[cfg(feature = "archive")]
+            Self::Gzip(Archive(_archive), _builder) => {
+                unimplemented!();
+            }
+            #[cfg(feature = "archive")]
+            Self::Zip(Archive(_archive), _writer) => {
+                unimplemented!();
             }
         }
         Ok(())
@@ -373,7 +412,7 @@ mod tests {
     fn test_try_into_nested_file_success() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let tmp_dir = tmp_dir.path();
-        let mut writer = Writer::new(
+        let writer = Writer::new(
             &Archive::new(tmp_dir.join("nested/output.zip")),
             &Encoding::Zip,
         )

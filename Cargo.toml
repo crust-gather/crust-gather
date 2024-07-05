@@ -31,6 +31,8 @@ serde_json_path = "0.6.4"
 base64 = "0.22.1"
 walkdir = "2.5.0"
 logos = "0.14.0"
+json-patch = "2.0.0"
+jsonptr = "0.4.7"
 
 [features]
 archive = ["dep:tar", "dep:flate2", "dep:zip"]
