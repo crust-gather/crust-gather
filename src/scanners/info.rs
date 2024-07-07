@@ -71,6 +71,7 @@ impl Collect<Node> for Info {
             )
             .await?;
 
+        let stamp = Utc::now().to_string();
         let reprs = vec![
             Representation::new()
                 .with_path(ArchivePath::Custom("version.yaml".into()))
@@ -83,7 +84,7 @@ impl Collect<Node> for Info {
                 .with_data(apis_versions.as_str()),
             Representation::new()
                 .with_path(ArchivePath::Custom("collected.timestamp".into()))
-                .with_data(&Utc::now().to_string()),
+                .with_data(&format!("\"{stamp}\"")),
         ];
 
         for repr in reprs {

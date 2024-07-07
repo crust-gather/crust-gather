@@ -44,7 +44,7 @@ impl Cli {
 #[derive(Subcommand, Clone)]
 pub enum Commands {
     /// Collect resources from the Kubernetes cluster using the provided
-    /// configuration options like namespaces, kinds, etc to include/exclude.
+    /// filtering options like namespaces, kinds, etc to include/exclude.
     Collect {
         #[command(flatten)]
         config: GatherCommands,
@@ -59,14 +59,14 @@ pub enum Commands {
         overrides: GatherSettings,
     },
 
-    /// Collect resources from the Kubernetes cluster using the provided
-    /// configuration options like namespaces, kinds, etc to include/exclude.
+    /// Record resource changes over time from the Kubernetes cluster using the provided
+    /// filtering options like namespaces, kinds, etc to include/exclude.
     Record {
         #[command(flatten)]
         config: GatherCommands,
     },
 
-    /// Collect resources from the Kubernetes cluster using the provided config file
+    /// Record resource changes over time from the Kubernetes cluster using the provided config file
     RecordFromConfig {
         #[command(flatten)]
         source: ConfigSource,

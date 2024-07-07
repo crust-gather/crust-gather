@@ -9,6 +9,7 @@ use std::{
     fmt::Display,
     fs::{DirBuilder, File},
     io::Write as _,
+    ops::Deref,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -244,19 +245,22 @@ impl Writer {
         let archive_path: String = repr.path().try_into()?;
 
         match self {
-            Self::Path(Archive(archive)) => {
-                let file_path = archive.join(archive_path);
-                self.store(repr)?;
+            Self::Path(archive) => {
+                let file_path = archive.0.join(archive_path);
 
                 // generate diff and write
-                let original = Reader::read(file_path.clone(), Utc::now())?;
+                let original = Reader::new(archive.clone(), Utc::now())?.read(file_path.clone())?;
                 let updated = serde_yaml::from_str(repr.data())?;
-                let mut patches = File::options()
-                    .create(true)
-                    .append(true)
-                    .open(file_path.with_extension("patch"))?;
-                serde_json::to_writer(patches.try_clone()?, &diff(&original, &updated))?;
-                patches.write_all(b"\n")?;
+                let patch = &diff(&original, &updated);
+                if !patch.deref().is_empty() {
+                    let mut patches = File::options()
+                        .create(true)
+                        .append(true)
+                        .open(file_path.with_extension("patch"))?;
+                    serde_json::to_writer(patches.try_clone()?, patch)?;
+                    patches.write_all(b"\n")?;
+                }
+                self.store(repr)?;
             }
             #[cfg(feature = "archive")]
             Self::Gzip(Archive(_archive), _builder) => {

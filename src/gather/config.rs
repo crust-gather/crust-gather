@@ -12,7 +12,7 @@ use futures::future::join_all;
 use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use kube::core::discovery::verbs::LIST;
+use kube::core::discovery::verbs::{LIST, WATCH};
 use kube::core::ApiResource;
 use kube::{discovery, Api, Client, ResourceExt};
 use serde::de::DeserializeOwned;
@@ -350,10 +350,14 @@ impl Config {
     /// Collect representations for resources from discovery to the specified archive file.
     pub async fn collect(&self) -> anyhow::Result<()> {
         let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
+        let mode = match self.mode {
+            GatherMode::Collect => LIST,
+            GatherMode::Record => WATCH,
+        };
         let collectables = discovery
             .groups()
             .flat_map(kube::discovery::ApiGroup::recommended_resources)
-            .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
+            .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
             .flat_map(|group: Group| group.into_collectable(self.clone()));
 
         match self.mode {

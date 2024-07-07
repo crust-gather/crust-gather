@@ -1,4 +1,4 @@
-use kube::Resource;
+use kube::ResourceExt;
 use logos::{Lexer, Logos, Span};
 use serde::Deserialize;
 
@@ -13,29 +13,34 @@ pub struct Selector {
 }
 
 impl Selector {
-    pub fn matches<R: Resource>(&self, res: R) -> Option<R> {
+    fn matches<R: ResourceExt>(&self, res: &R) -> Option<bool> {
         match &self.label_selector {
-            Some(selector) => Expressions::try_from(selector.clone())
-                .ok()?
-                .into_iter()
-                .map(|selector| Selector::matches_selector(&selector, &res))
-                .all(|matches| matches)
-                .then_some(res),
-            None => Some(res),
+            Some(selector) => Some(
+                Expressions::try_from(selector.clone())
+                    .ok()?
+                    .into_iter()
+                    .map(|selector| Selector::matches_selector(&selector, res))
+                    .all(|is_true| is_true),
+            ),
+            None => Some(true),
         }
     }
 
-    fn matches_selector<R: Resource>(selector: &Expression, res: &R) -> bool {
-        let labels = res.meta().labels.as_ref();
+    pub fn filter<R: ResourceExt>(&self, res: &R) -> bool {
+        self.matches(res).is_some_and(|is_true| is_true)
+    }
+
+    fn matches_selector<R: ResourceExt>(selector: &Expression, res: &R) -> bool {
+        let labels = res.labels();
         let not = |found: Option<()>| match found {
             Some(_) => None,
             None => Some(()),
         };
-        let exist = |key: &String| labels?.get(key).map(|_| ());
+        let exist = |key: &String| labels.get(key).map(|_| ());
         let value_in =
-            |key: &String, values: &Vec<String>| values.contains(labels?.get(key)?).then_some(());
+            |key: &String, values: &Vec<String>| values.contains(labels.get(key)?).then_some(());
         let matches = |key: &String, value: &String| {
-            let found = labels?.get(key)? == value;
+            let found = labels.get(key)? == value;
             found.then_some(())
         };
 

@@ -1,24 +1,30 @@
 use std::{
     collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
+    time::Duration,
 };
 
 use actix_web::{
     error, get,
-    http::header::{Accept, QualityItem, CONTENT_TYPE},
+    http::{
+        header::{Accept, QualityItem, CONTENT_TYPE},
+        KeepAlive,
+    },
     post,
-    web::{self, Header, Path, Query},
-    App, HttpServer, Responder,
+    web::{self, Bytes, Header, Path, Query},
+    App, HttpResponse, HttpServer, Responder,
 };
+use async_stream::stream;
 use clap::Parser;
 use k8s_openapi::{
-    chrono::Utc,
+    chrono::{DateTime, Utc},
     serde_json::{self, json},
 };
 use kube::config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
 use serde::Deserialize;
+use tokio::time::{sleep, Instant};
 
 use crate::gather::{
-    reader::{Destination, Get, List, Log, Reader},
+    reader::{Destination, Get, List, Log, Reader, Watch},
     writer::Archive,
 };
 
@@ -88,7 +94,8 @@ pub struct Api {
 
 #[derive(Clone)]
 struct ApiState {
-    readers: HashMap<String, Reader>,
+    archives: HashMap<String, Archive>,
+    serve_time: DateTime<Utc>,
 }
 
 impl Api {
@@ -112,16 +119,15 @@ impl Api {
 
         serde_yaml::to_writer(File::create(kubeconfig_path)?, &config)?;
 
-        let archives = archives.into_iter().map(|a| {
-            (
-                a.name().to_string_lossy().to_string(),
-                Reader::new(&a, &Utc::now()),
-            )
-        });
+        let mut readers = HashMap::new();
+        for archive in archives {
+            readers.insert(archive.name().to_string_lossy().to_string(), archive);
+        }
 
         Ok(Self {
             state: ApiState {
-                readers: archives.collect(),
+                archives: readers,
+                serve_time: Utc::now(),
             },
             socket,
         })
@@ -172,7 +178,9 @@ impl Api {
                 .service(namespaced_apis_get)
                 .service(logs_get)
         })
-        .bind(self.socket)?
+        .keep_alive(KeepAlive::Timeout(Duration::from_secs(30)))
+        .client_disconnect_timeout(Duration::from_secs(5))
+        .bind_auto_h2c(self.socket)?
         .run()
         .await
     }
@@ -183,15 +191,17 @@ async fn version(
     server: Path<Destination>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    let version: serde_yaml::Value = serde_yaml::from_str(
-        state
-            .readers
+    let version: serde_yaml::Value = serde_yaml::from_str({
+        let archive = state
+            .archives
             .get(server.get_server())
-            .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
+            .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+        Reader::new(archive.clone(), state.serve_time)
+            .map_err(error::ErrorNotFound)?
             .load_raw(ArchivePath::Custom("version.yaml".into()))
             .map_err(error::ErrorNotFound)?
-            .as_str(),
-    )
+            .as_str()
+    })
     .map_err(error::ErrorUnprocessableEntity)?;
 
     Ok(web::Json(version))
@@ -219,10 +229,12 @@ async fn api(
     server: Path<Destination>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(state
-        .readers
+    let archive = state
+        .archives
         .get(server.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+    Ok(Reader::new(archive.clone(), state.serve_time)
+        .map_err(error::ErrorNotFound)?
         .load_raw(ArchivePath::Custom("api.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -237,10 +249,12 @@ async fn apis(
     server: Path<Destination>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(state
-        .readers
+    let archive = state
+        .archives
         .get(server.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+    Ok(Reader::new(archive.clone(), state.serve_time)
+        .map_err(error::ErrorNotFound)?
         .load_raw(ArchivePath::Custom("apis.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -255,11 +269,13 @@ async fn api_list(
     accept: Header<Accept>,
     list: Path<List>,
     query: Query<Selector>,
+    watch: Query<Watch>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(
-        list_items(accept, list, query, state).map_err(error::ErrorNotFound)?,
-    ))
+    match watch.watch {
+        Some(true) => watch_response(accept, list, query, state),
+        None | Some(false) => list_response(accept, list, query, state),
+    }
 }
 
 #[get("{server}/apis/{group}/{version}/{kind}")]
@@ -267,11 +283,13 @@ async fn apis_list(
     accept: Header<Accept>,
     list: Path<List>,
     query: Query<Selector>,
+    watch: Query<Watch>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(
-        list_items(accept, list, query, state).map_err(error::ErrorNotFound)?,
-    ))
+    match watch.watch {
+        Some(true) => watch_response(accept, list, query, state),
+        None | Some(false) => list_response(accept, list, query, state),
+    }
 }
 
 #[get("{server}/api/{version}/namespaces/{namespace}/{kind}")]
@@ -279,11 +297,17 @@ async fn api_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
     query: Query<Selector>,
+    watch: Query<Watch>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(
-        list_items(accept, list, query, state).map_err(error::ErrorNotFound)?,
-    ))
+    match watch.watch {
+        Some(true) => watch_response(accept, list, query, state),
+        None | Some(false) => list_response(accept, list, query, state),
+    }
+}
+
+fn publish(val: serde_json::Value) -> Result<Bytes, anyhow::Error> {
+    Ok(Bytes::copy_from_slice(&serde_json::to_vec(&val)?))
 }
 
 #[get("{server}/apis/{group}/{version}/namespaces/{namespace}/{kind}")]
@@ -291,11 +315,13 @@ async fn apis_namespaced_list(
     accept: Header<Accept>,
     list: Path<List>,
     query: Query<Selector>,
+    watch: Query<Watch>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    Ok(web::Json(
-        list_items(accept, list, query, state).map_err(error::ErrorNotFound)?,
-    ))
+    match watch.watch {
+        Some(true) => watch_response(accept, list, query, state),
+        None | Some(false) => list_response(accept, list, query, state),
+    }
 }
 
 fn list_items(
@@ -304,16 +330,78 @@ fn list_items(
     query: Query<Selector>,
     state: web::Data<ApiState>,
 ) -> anyhow::Result<serde_json::Value> {
-    let server = state
-        .readers
+    let archive = state
+        .archives
         .get(list.get_server())
         .ok_or(anyhow::anyhow!("Server not found"))?;
+    let reader = Reader::new(archive.clone(), state.serve_time)?;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            server.load_table(list.clone(), query.0)?
+            reader.load_table(list.clone(), query.0)?
         }
-        _ => server.load_list(list.clone(), query.0)?,
+        _ => reader.list(list.clone(), query.0)?,
     })
+}
+
+fn watch_events(
+    accept: Header<Accept>,
+    list: List,
+    query: Query<Selector>,
+    reader: &Reader,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    Ok(match accept.0.as_slice() {
+        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
+            reader.watch_table_events(list.clone(), query.0)?
+        }
+        _ => reader.watch_events(list.clone(), query.0)?,
+    })
+}
+
+// Regular responder with list of objects
+fn list_response(
+    accept: Header<Accept>,
+    list: Path<List>,
+    query: Query<Selector>,
+    state: web::Data<ApiState>,
+) -> actix_web::Result<HttpResponse> {
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(serde_json::to_string(
+            &list_items(accept, list, query, state).map_err(error::ErrorNotFound)?,
+        )?))
+}
+
+// Streaming responder with watch events
+fn watch_response(
+    accept: Header<Accept>,
+    list: Path<List>,
+    query: Query<Selector>,
+    state: web::Data<ApiState>,
+) -> actix_web::Result<HttpResponse> {
+    let archive = state
+        .archives
+        .get(list.get_server())
+        .ok_or(anyhow::anyhow!("Server not found"))
+        .map_err(error::ErrorNotFound)?;
+    let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
+    let mut refresh = Instant::now();
+    let s = stream! {
+        loop {
+            for event in watch_events(accept.clone(), list.clone(), query.clone(), &reader)? {
+                yield publish(event);
+            }
+            let next_event_time = reader.next_patch_time.replace(Duration::MAX);
+            if next_event_time == Duration::MAX {
+                break;
+            }
+            sleep(next_event_time.checked_sub(refresh.elapsed()).unwrap_or_default()).await;
+            refresh = Instant::now();
+        }
+    };
+
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .streaming(s))
 }
 
 #[get("{server}/api/{version}/{kind}/{name}")]
@@ -362,18 +450,22 @@ async fn logs_get(
     query: Query<Log>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    state
-        .readers
+    let archive = state
+        .archives
         .get(get.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?
+        .ok_or(anyhow::anyhow!("Server not found"))
+        .map_err(error::ErrorNotFound)?;
+    let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
+    reader
         .load_raw(get.get_logs_path(query.deref()))
         .map_err(error::ErrorNotFound)
 }
 
 fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<serde_json::Value> {
-    state
-        .readers
+    let archive = state
+        .archives
         .get(get.get_server())
-        .ok_or(anyhow::anyhow!("Server not found"))?
-        .load(get.clone())
+        .ok_or(anyhow::anyhow!("Server not found"))?;
+    let reader = Reader::new(archive.clone(), state.serve_time)?;
+    reader.load(get.clone())
 }

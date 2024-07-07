@@ -33,6 +33,7 @@ walkdir = "2.5.0"
 logos = "0.14.0"
 json-patch = "2.0.0"
 jsonptr = "0.4.7"
+async-stream = "0.3.5"
 
 [features]
 archive = ["dep:tar", "dep:flate2", "dep:zip"]

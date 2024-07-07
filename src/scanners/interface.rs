@@ -12,7 +12,6 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
@@ -31,7 +30,8 @@ trait_set! {
     pub trait ResourceThreadSafe = ResourceReq + ResourceExt;
 }
 
-pub const LAST_SYNC_ANNOTATION: &str = "crust-gather.io/last-sync-timestamp";
+pub const ADDED_ANNOTATION: &str = "crust-gather.io/added";
+pub const UPDATED_ANNOTATION: &str = "crust-gather.io/updated";
 pub const DELETED_ANNOTATION: &str = "crust-gather.io/deleted";
 
 #[async_trait]
@@ -198,17 +198,24 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             .boxed();
 
         while let Some(e) = stream.try_next().await? {
+            let now = Utc::now().to_string();
             match e {
-                WatchEvent::Added(obj) | WatchEvent::Modified(obj) => {
+                WatchEvent::Added(obj) => {
                     let mut obj = obj.clone();
                     obj.annotations_mut()
-                        .insert(LAST_SYNC_ANNOTATION.to_string(), Utc::now().to_string());
+                        .insert(ADDED_ANNOTATION.to_string(), now);
+                    self.sync_with_retry(&obj).await?
+                }
+                WatchEvent::Modified(obj) => {
+                    let mut obj = obj.clone();
+                    obj.annotations_mut()
+                        .insert(UPDATED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?
                 }
                 WatchEvent::Deleted(obj) => {
                     let mut obj = obj.clone();
                     obj.annotations_mut()
-                        .insert(DELETED_ANNOTATION.to_string(), Utc::now().to_string());
+                        .insert(DELETED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?
                 }
                 WatchEvent::Error(e) => log::error!(
