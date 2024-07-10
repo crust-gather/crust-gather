@@ -54,13 +54,10 @@ impl Collect<DynamicObject> for Dynamic {
 
         Ok(vec![Representation::new()
             .with_path(self.path(object))
-            .with_data(
-                serde_yaml::to_string(&DynamicObject {
-                    types: Some(self.get_type_meta()),
-                    ..object.clone()
-                })?
-                .as_str(),
-            )])
+            .with_data(&serde_yaml::to_string(&DynamicObject {
+                types: Some(self.get_type_meta()),
+                ..object.clone()
+            })?)])
     }
 
     fn get_api(&self) -> Api<DynamicObject> {
@@ -85,6 +82,7 @@ mod test {
     use tokio::time::timeout;
     use tokio_retry::{strategy::FixedInterval, Retry};
 
+    use crate::gather::config::GatherMode;
     use crate::{
         filters::{
             filter::{FilterGroup, FilterList},
@@ -155,6 +153,7 @@ mod test {
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
                         .expect("failed to create builder"),
                     Default::default(),
+                    GatherMode::Collect,
                     "1m".to_string().try_into().unwrap(),
                 ),
                 ApiResource::erase::<Pod>(&()),

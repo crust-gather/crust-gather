@@ -12,7 +12,7 @@ use futures::future::join_all;
 use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use kube::core::discovery::verbs::LIST;
+use kube::core::discovery::verbs::{LIST, WATCH};
 use kube::core::ApiResource;
 use kube::{discovery, Api, Client, ResourceExt};
 use serde::de::DeserializeOwned;
@@ -311,12 +311,20 @@ impl Display for RunDuration {
     }
 }
 
+#[derive(Clone, Default, Deserialize)]
+pub enum GatherMode {
+    #[default]
+    Collect,
+    Record,
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub client: Client,
     pub filter: Arc<FilterGroup>,
     pub writer: Arc<Mutex<Writer>>,
     pub secrets: Secrets,
+    pub mode: GatherMode,
     duration: RunDuration,
 }
 
@@ -326,6 +334,7 @@ impl Config {
         filter: FilterGroup,
         writer: Writer,
         secrets: Secrets,
+        mode: GatherMode,
         duration: RunDuration,
     ) -> Self {
         Self {
@@ -333,31 +342,41 @@ impl Config {
             filter: Arc::new(filter),
             secrets,
             duration,
+            mode,
             writer: writer.into(),
         }
     }
 
     /// Collect representations for resources from discovery to the specified archive file.
     pub async fn collect(&self) -> anyhow::Result<()> {
-        log::info!("Collecting resources...");
+        let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
+        let mode = match self.mode {
+            GatherMode::Collect => LIST,
+            GatherMode::Record => WATCH,
+        };
+        let collectables = discovery
+            .groups()
+            .flat_map(kube::discovery::ApiGroup::recommended_resources)
+            .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
+            .flat_map(|group: Group| group.into_collectable(self.clone()));
 
-        match timeout(
-            self.duration.0.into(),
-            self.iterate_until_completion(
-                discovery::Discovery::new(self.client.clone())
-                    .run()
-                    .await?
-                    .groups()
-                    .flat_map(kube::discovery::ApiGroup::recommended_resources)
-                    .filter_map(|r| r.1.supports_operation(LIST).then_some(r.0.into()))
-                    .flat_map(|group: Group| group.into_collectable(self.clone()))
-                    .collect(),
-            ),
-        )
-        .await
-        {
-            Ok(()) => (),
-            Err(e) => log::error!("{e}"),
+        match self.mode {
+            GatherMode::Collect => {
+                log::info!("Collecting resources...");
+                match timeout(
+                    self.duration.0.into(),
+                    self.iterate_until_completion(collectables),
+                )
+                .await
+                {
+                    Ok(()) => (),
+                    Err(e) => log::error!("{e}"),
+                }
+            }
+            GatherMode::Record => {
+                log::info!("Recording resources...");
+                self.iterate_until_completion(collectables).await;
+            }
         }
 
         self.finish()
@@ -369,11 +388,12 @@ impl Config {
         Ok(())
     }
 
-    async fn iterate_until_completion(&self, collectables: Vec<Collectable>) {
-        join_all(collectables.iter().map(|c| async { c.collect().await })).await;
+    async fn iterate_until_completion(&self, collectables: impl Iterator<Item = Collectable>) {
+        join_all(collectables.map(|c| async move { c.collect().await })).await;
     }
 }
 
+#[derive(Clone)]
 enum Group {
     Nodes(ApiResource),
     Pods(ApiResource),
@@ -394,6 +414,7 @@ impl From<ApiResource> for Group {
 
 #[derive(Debug, Clone)]
 enum Collectable {
+    WatchDynamic(Dynamic),
     Dynamic(Dynamic),
     Pods(Logs),
     Events(Events),
@@ -405,6 +426,7 @@ enum Collectable {
 impl Collectable {
     async fn collect(&self) {
         match self {
+            Self::WatchDynamic(o) => o.watch_retry(),
             Self::Dynamic(o) => o.collect_retry(),
             Self::Pods(l) => l.collect_retry(),
             Self::Events(e) => e.collect_retry(),
@@ -418,25 +440,38 @@ impl Collectable {
 
 impl Group {
     fn into_collectable(self, gather: Config) -> Vec<Collectable> {
-        match self {
-            Self::Nodes(resource) => vec![
-                Collectable::Nodes(Nodes::from(gather.clone())),
-                Collectable::Info(Info::new(gather.clone())),
-                Collectable::Dynamic(Dynamic::new(gather, resource)),
-            ],
-            Self::Pods(resource) => vec![
-                Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
-                Collectable::Pods(Logs::new(gather.clone(), LogSelection::Previous)),
-                Collectable::Versions(Versions::new(gather.clone())),
-                Collectable::Dynamic(Dynamic::new(gather, resource)),
-            ],
-            Self::Events(resource) => vec![
-                Collectable::Events(Events::from(gather.clone())),
-                Collectable::Dynamic(Dynamic::new(gather, resource)),
-            ],
-            Self::Dynamic(resource) => {
-                vec![Collectable::Dynamic(Dynamic::new(gather, resource))]
-            }
+        match gather.mode {
+            GatherMode::Collect => match self {
+                Self::Nodes(resource) => vec![
+                    Collectable::Nodes(Nodes::from(gather.clone())),
+                    Collectable::Info(Info::new(gather.clone())),
+                    Collectable::Dynamic(Dynamic::new(gather, resource)),
+                ],
+                Self::Pods(resource) => vec![
+                    Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
+                    Collectable::Pods(Logs::new(gather.clone(), LogSelection::Previous)),
+                    Collectable::Versions(Versions::new(gather.clone())),
+                    Collectable::Dynamic(Dynamic::new(gather, resource)),
+                ],
+                Self::Events(resource) => vec![
+                    Collectable::Events(Events::from(gather.clone())),
+                    Collectable::Dynamic(Dynamic::new(gather, resource)),
+                ],
+                Self::Dynamic(resource) => {
+                    vec![Collectable::Dynamic(Dynamic::new(gather, resource))]
+                }
+            },
+            GatherMode::Record => match self {
+                Group::Nodes(resource)
+                | Group::Pods(resource)
+                | Group::Events(resource)
+                | Group::Dynamic(resource) => {
+                    vec![
+                        Collectable::Info(Info::new(gather.clone())),
+                        Collectable::WatchDynamic(Dynamic::new(gather.clone(), resource)),
+                    ]
+                }
+            },
         }
     }
 }
@@ -518,6 +553,7 @@ mod tests {
                 .expect("failed to create builder")
                 .into(),
             secrets: Default::default(),
+            mode: GatherMode::Collect,
             duration: "1m".to_string().try_into().unwrap(),
         };
 
@@ -542,6 +578,7 @@ mod tests {
                 .expect("failed to create builder")
                 .into(),
             duration: "1m".to_string().try_into().unwrap(),
+            mode: GatherMode::Collect,
             secrets: Default::default(),
         };
 
@@ -565,6 +602,7 @@ mod tests {
                 .expect("failed to create builder")
                 .into(),
             duration: "1m".to_string().try_into().unwrap(),
+            mode: GatherMode::Collect,
             secrets: Default::default(),
         };
 

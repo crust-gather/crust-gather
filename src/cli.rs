@@ -14,7 +14,7 @@ use crate::{
     },
     gather::{
         config::{
-            Config, ConfigFromConfigMap, KubeconfigFile, KubeconfigSecretLabel,
+            Config, ConfigFromConfigMap, GatherMode, KubeconfigFile, KubeconfigSecretLabel,
             KubeconfigSecretNamespaceName, RunDuration, Secrets, SecretsFile,
         },
         server::Server,
@@ -44,7 +44,7 @@ impl Cli {
 #[derive(Subcommand, Clone)]
 pub enum Commands {
     /// Collect resources from the Kubernetes cluster using the provided
-    /// configuration options like namespaces, kinds, etc to include/exclude.
+    /// filtering options like namespaces, kinds, etc to include/exclude.
     Collect {
         #[command(flatten)]
         config: GatherCommands,
@@ -52,6 +52,22 @@ pub enum Commands {
 
     /// Collect resources from the Kubernetes cluster using the provided config file
     CollectFromConfig {
+        #[command(flatten)]
+        source: ConfigSource,
+
+        #[command(flatten)]
+        overrides: GatherSettings,
+    },
+
+    /// Record resource changes over time from the Kubernetes cluster using the provided
+    /// filtering options like namespaces, kinds, etc to include/exclude.
+    Record {
+        #[command(flatten)]
+        config: GatherCommands,
+    },
+
+    /// Record resource changes over time from the Kubernetes cluster using the provided config file
+    RecordFromConfig {
         #[command(flatten)]
         source: ConfigSource,
 
@@ -88,6 +104,28 @@ impl Commands {
                     .await
             }
             Commands::Serve { serve } => serve.get_api()?.serve().await.map_err(|e| anyhow!(e)),
+            Commands::Record { config } => {
+                let config = GatherCommands {
+                    mode: GatherMode::Record,
+                    ..config
+                };
+                Into::<GatherCommands>::into(config)
+                    .load()
+                    .await?
+                    .collect()
+                    .await
+            }
+            Commands::RecordFromConfig { source, overrides } => {
+                let config = source
+                    .gather(overrides.origin_client().await?)
+                    .await?
+                    .merge(overrides);
+                let config = GatherCommands {
+                    mode: GatherMode::Record,
+                    ..config
+                };
+                config.load().await?.collect().await
+            }
         }
     }
 }
@@ -163,6 +201,10 @@ impl ConfigSource {
 pub struct GatherCommands {
     #[serde(default)]
     #[clap(skip)]
+    mode: GatherMode,
+
+    #[serde(default)]
+    #[clap(skip)]
     filters: Vec<Filters>,
 
     #[command(flatten)]
@@ -177,6 +219,7 @@ pub struct GatherCommands {
 impl GatherCommands {
     pub fn merge(&self, other: GatherSettings) -> Self {
         Self {
+            mode: self.mode.clone(),
             filter: self.filter.clone(),
             filters: self.filters.clone(),
             settings: self.settings.merge(other),
@@ -482,6 +525,7 @@ impl GatherCommands {
             self.into(),
             (&self.settings).try_into()?,
             secrets,
+            self.mode.clone(),
             self.settings.duration.unwrap_or_default(),
         ))
     }
@@ -495,8 +539,6 @@ impl TryInto<Writer> for &GatherSettings {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<Writer, Self::Error> {
-        log::info!("Opening archive...");
-
         Writer::new(
             &self.file.clone().unwrap_or_default(),
             self.encoding.as_ref().map_or(&Encoding::Path, |e| e),

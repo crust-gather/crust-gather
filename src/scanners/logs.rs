@@ -81,7 +81,7 @@ impl Collect<Pod> for Logs {
 
     /// Collects container logs representations.
     async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
-        log::info!(
+        log::debug!(
             "Collecting {} logs for {}/{}",
             self.group,
             pod.namespace().unwrap_or_default(),
@@ -154,6 +154,7 @@ mod test {
     use tokio::time::timeout;
     use tokio_retry::{strategy::FixedInterval, Retry};
 
+    use crate::gather::config::GatherMode;
     use crate::{
         filters::{
             filter::{FilterGroup, FilterList},
@@ -217,6 +218,7 @@ mod test {
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
                         .expect("failed to create builder"),
                     Default::default(),
+                    GatherMode::Collect,
                     "1m".to_string().try_into().unwrap(),
                 ),
                 ApiResource::erase::<Pod>(&()),
