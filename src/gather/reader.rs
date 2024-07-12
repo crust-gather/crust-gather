@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
 use jsonptr::Pointer;
 use k8s_openapi::{
@@ -181,9 +181,12 @@ struct TablePath {
 
 impl TablePath {
     fn new(column: &CustomResourceColumnDefinition) -> anyhow::Result<Self> {
+        let json_path = format!("${}", column.json_path.replace(r"\.", r"."));
+        let json_path = JsonPath::parse(&json_path)
+            .map_err(|e| anyhow!("unable to parse json path for {json_path}: {e:?}",))?;
         Ok(Self {
             column: column.clone(),
-            json_path: JsonPath::parse(format!("${}", column.json_path).as_str())?,
+            json_path,
         })
     }
 
