@@ -6,8 +6,11 @@ use std::{
 use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
-use kube::core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt, TypeMeta};
 use kube::Api;
+use kube::{
+    api::TypeMeta,
+    core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt},
+};
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -59,7 +62,7 @@ impl Debug for Logs {
 impl Logs {
     pub fn new(config: Config, group: LogSelection) -> Self {
         Self {
-            collectable: Objects::new_typed(config, ApiResource::erase::<Pod>(&())),
+            collectable: Objects::new_typed(config),
             group,
         }
     }
@@ -120,7 +123,7 @@ impl Collect<Pod> for Logs {
                 Representation::new()
                     .with_path(ArchivePath::logs_path(
                         pod,
-                        self.get_type_meta(),
+                        TypeMeta::resource::<Pod>(),
                         match self.group {
                             LogSelection::Current => LogGroup::Current(Container(container.name)),
                             LogSelection::Previous => LogGroup::Previous(Container(container.name)),
@@ -137,8 +140,8 @@ impl Collect<Pod> for Logs {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 }
 
@@ -147,7 +150,7 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::core::{params::PostParams, ApiResource};
+    use kube::core::params::PostParams;
     use kube::Api;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -211,18 +214,15 @@ mod test {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
-            collectable: Objects::new_typed(
-                Config::new(
-                    test_env.client().await,
-                    FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
-                    Writer::new(&Archive::new(file_path), &Encoding::Path)
-                        .expect("failed to create builder"),
-                    Default::default(),
-                    GatherMode::Collect,
-                    "1m".to_string().try_into().unwrap(),
-                ),
-                ApiResource::erase::<Pod>(&()),
-            ),
+            collectable: Objects::new_typed(Config::new(
+                test_env.client().await,
+                FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
+                Writer::new(&Archive::new(file_path), &Encoding::Path)
+                    .expect("failed to create builder"),
+                Default::default(),
+                GatherMode::Collect,
+                "1m".to_string().try_into().unwrap(),
+            )),
             group: LogSelection::Current,
         }
         .representations(&pod)

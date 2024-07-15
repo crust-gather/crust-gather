@@ -9,12 +9,15 @@ use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{
     Container, HostPathVolumeSource, Node, Pod, PodSpec, Toleration, Volume, VolumeMount,
 };
-use kube::core::{
-    params::{DeleteParams, WatchParams},
-    subresource::AttachParams,
-    ApiResource, ErrorResponse, ObjectMeta, ResourceExt, TypeMeta, WatchEvent,
-};
 use kube::Api;
+use kube::{
+    api::TypeMeta,
+    core::{
+        params::{DeleteParams, WatchParams},
+        subresource::AttachParams,
+        ApiResource, ErrorResponse, ObjectMeta, ResourceExt, WatchEvent,
+    },
+};
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -38,7 +41,7 @@ impl Debug for Nodes {
 impl From<Config> for Nodes {
     fn from(value: Config) -> Self {
         Self {
-            collectable: Objects::new_typed(value, ApiResource::erase::<Node>(&())),
+            collectable: Objects::new_typed(value),
         }
     }
 }
@@ -105,13 +108,13 @@ impl Collect<Node> for Nodes {
                     "-c",
                     "chroot /host /bin/sh <<\"EOT\"\njournalctl -u kubelet\n\"EOT\"",
                 ],
-                ArchivePath::logs_path(node, self.get_type_meta(), LogGroup::Node),
+                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::Node),
             )
             .await?,
             self.get_representation(
                 pod_name.as_str(),
                 vec!["sh", "-c", "cat /host/var/log/kubelet.log"],
-                ArchivePath::logs_path(node, self.get_type_meta(), LogGroup::NodePath),
+                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::NodePath),
             )
             .await?,
         ];
@@ -126,8 +129,8 @@ impl Collect<Node> for Nodes {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 }
 

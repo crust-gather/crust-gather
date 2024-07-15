@@ -6,7 +6,7 @@ use k8s_openapi::chrono::Utc;
 use k8s_openapi::serde_json;
 use kube::api::WatchEvent;
 use kube::core::params::ListParams;
-use kube::core::{ApiResource, DynamicObject, GroupVersionKind, ResourceExt, TypeMeta};
+use kube::core::{DynamicObject, GroupVersionKind, ResourceExt};
 use kube::Api;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -19,7 +19,7 @@ use tokio_retry::{Retry, RetryIf};
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
-use crate::gather::representation::{ArchivePath, Representation};
+use crate::gather::representation::{ArchivePath, Representation, TypeMetaGetter};
 use crate::gather::writer::Writer;
 
 trait_set! {
@@ -58,7 +58,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     ///
     /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
     fn path(&self, obj: &R) -> ArchivePath {
-        ArchivePath::to_path(obj, self.get_type_meta())
+        ArchivePath::to_path(obj, self.resource().to_type_meta())
     }
 
     /// Filters objects based on their GroupVersionKind and the object itself.
@@ -70,13 +70,13 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
         log::debug!(
             "Collecting representation for {} {}/{}",
-            self.get_type_meta().kind,
+            self.resource().to_type_meta().kind,
             object.namespace().unwrap_or_default(),
             object.name_any(),
         );
 
         let data = DynamicObject {
-            types: Some(self.get_type_meta()),
+            types: Some(self.resource().to_type_meta()),
             metadata: Default::default(),
             data: serde_json::to_value(object)?,
         };
@@ -89,17 +89,10 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Returns the Kubernetes API client for the resource type this scanner handles.
     fn get_api(&self) -> Api<R>;
 
-    /// Returns the TypeMeta for the API resource type this scanner handles.
+    /// Returns the TypeMetaGetter for the API resource type this scanner handles.
     /// Used to set the TypeMeta on the returned objects in the list,
     /// as the API server does not provide this data in the response.
-    fn get_type_meta(&self) -> TypeMeta;
-
-    /// Returns the ApiResource with the resource type for object
-    fn get_api_resource(&self) -> anyhow::Result<ApiResource> {
-        Ok(ApiResource::from_gvk(&GroupVersionKind::try_from(
-            self.get_type_meta(),
-        )?))
-    }
+    fn resource(&self) -> impl TypeMetaGetter;
 
     /// Lists Kubernetes objects of the type handled by this scanner, and set
     /// the get_type_meta() information on the objects. Objects are filtered
@@ -122,7 +115,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                 Err(e) => {
                     log::error!(
                         "Unable to filter object {:?}: {:?}",
-                        self.get_type_meta(),
+                        self.resource().to_type_meta(),
                         e
                     );
                     None
@@ -161,7 +154,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             |e: &anyhow::Error| {
                 log::error!(
                     "Watch over {} failed, retrying: {e}",
-                    self.get_type_meta().kind
+                    self.resource().to_type_meta().kind
                 );
                 true
             },
@@ -220,7 +213,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                 }
                 WatchEvent::Error(e) => log::error!(
                     "Failed {} object watch: {e}",
-                    GroupVersionKind::try_from(self.get_type_meta())?.api_version()
+                    GroupVersionKind::try_from(self.resource().to_type_meta())?.api_version()
                 ),
                 WatchEvent::Bookmark(_) => (),
             }

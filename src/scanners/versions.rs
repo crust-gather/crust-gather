@@ -5,7 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
-use kube::core::{ApiResource, TypeMeta};
+use kube::core::ApiResource;
 use kube::{Api, Resource};
 use serde::Serialize;
 
@@ -33,7 +33,7 @@ pub struct Versions {
 impl Versions {
     pub fn new(config: Config) -> Self {
         Self {
-            collectable: Objects::new_typed(config, ApiResource::erase::<Pod>(&())),
+            collectable: Objects::new_typed(config),
         }
     }
 }
@@ -79,8 +79,8 @@ impl Collect<Pod> for Versions {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 }
 

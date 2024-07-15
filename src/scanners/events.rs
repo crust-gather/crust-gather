@@ -5,7 +5,7 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::Time,
     chrono::{DateTime, Utc},
 };
-use kube::core::{ApiResource, TypeMeta};
+use kube::core::ApiResource;
 use kube::Api;
 use std::{
     fmt::Debug,
@@ -34,7 +34,7 @@ impl Debug for Events {
 impl From<Config> for Events {
     fn from(value: Config) -> Self {
         Self {
-            collectable: Objects::new_typed(value, ApiResource::erase::<Event>(&())),
+            collectable: Objects::new_typed(value),
         }
     }
 }
@@ -130,8 +130,8 @@ impl Collect<Event> for Events {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 
     async fn collect(&self) -> anyhow::Result<()> {

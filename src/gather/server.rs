@@ -390,7 +390,7 @@ fn watch_response(
             for event in watch_events(accept.clone(), list.clone(), query.clone(), &reader)? {
                 yield publish(event);
             }
-            let next_event_time = reader.next_patch_time.replace(Duration::MAX);
+            let next_event_time = reader.pop_next_event_time();
             if next_event_time == Duration::MAX {
                 break;
             }

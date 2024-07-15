@@ -4,10 +4,18 @@ use std::{
 };
 
 use anyhow::bail;
-use kube::core::{Resource, TypeMeta};
+use kube::{
+    api::{ApiResource, ObjectMeta},
+    core::TypeMeta,
+};
 use serde::Deserialize;
 
 use crate::scanners::interface::ResourceThreadSafe;
+
+pub trait NamespacedName {
+    fn name(&self) -> Option<String>;
+    fn namespace(&self) -> Option<String>;
+}
 
 #[derive(Default, Clone, Deserialize, Debug)]
 pub struct NamespaceName {
@@ -15,16 +23,29 @@ pub struct NamespaceName {
     pub namespace: Option<String>,
 }
 
+impl NamespacedName for NamespaceName {
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
+    }
+}
+
+impl NamespacedName for &ObjectMeta {
+    fn name(&self) -> Option<String> {
+        self.name.to_owned()
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.namespace.to_owned()
+    }
+}
+
 impl NamespaceName {
     pub fn new(name: Option<String>, namespace: Option<String>) -> Self {
         Self { name, namespace }
-    }
-
-    pub fn new_from_object(obj: &impl Resource) -> Self {
-        Self {
-            name: obj.meta().name.clone(),
-            namespace: obj.meta().namespace.clone(),
-        }
     }
 }
 
@@ -35,6 +56,25 @@ impl From<String> for NamespaceName {
             Some((ns, "")) => NamespaceName::new(None, Some(ns.into())),
             Some((ns, name)) => NamespaceName::new(Some(name.into()), Some(ns.into())),
             None => NamespaceName::new(Some(value), None),
+        }
+    }
+}
+
+pub trait TypeMetaGetter {
+    fn to_type_meta(&self) -> TypeMeta;
+}
+
+impl TypeMetaGetter for TypeMeta {
+    fn to_type_meta(&self) -> TypeMeta {
+        self.clone()
+    }
+}
+
+impl TypeMetaGetter for ApiResource {
+    fn to_type_meta(&self) -> TypeMeta {
+        TypeMeta {
+            api_version: self.api_version.clone(),
+            kind: self.kind.clone(),
         }
     }
 }
@@ -88,40 +128,36 @@ impl ArchivePath {
     }
 
     pub fn to_path<R: ResourceThreadSafe>(resource: &R, type_meta: TypeMeta) -> Self {
-        ArchivePath::new_path(NamespaceName::new_from_object(resource), type_meta)
+        ArchivePath::new_path(resource.meta(), type_meta)
     }
 
-    pub fn new_path(namespace_name: NamespaceName, type_meta: TypeMeta) -> Self {
+    pub fn new_path(namespace_name: impl NamespacedName, type_meta: TypeMeta) -> Self {
         let (api_version, kind) = (
             type_meta.api_version.to_lowercase().replace('/', "-"),
             type_meta.kind.to_lowercase(),
         );
 
-        match namespace_name {
-            NamespaceName {
-                name: Some(name),
-                namespace: Some(namespace),
-            } => ArchivePath::Namespaced(
+        match (namespace_name.name(), namespace_name.namespace()) {
+            (Some(name), Some(namespace)) => ArchivePath::Namespaced(
                 format!("namespaces/{namespace}/{api_version}/{kind}/{name}.yaml").into(),
             ),
-            NamespaceName {
-                name: Some(name),
-                namespace: None,
-            } => ArchivePath::Cluster(format!("cluster/{api_version}/{kind}/{name}.yaml").into()),
-            NamespaceName {
-                name: None,
-                namespace: Some(namespace),
-            } => ArchivePath::NamespacedList(
+            (Some(name), None) => {
+                ArchivePath::Cluster(format!("cluster/{api_version}/{kind}/{name}.yaml").into())
+            }
+            (None, Some(namespace)) => ArchivePath::NamespacedList(
                 format!("namespaces/{namespace}/{api_version}/{kind}/*.yaml").into(),
             ),
-            NamespaceName {
-                name: None,
-                namespace: None,
-            } => ArchivePath::ClusterList(format!("**/{api_version}/{kind}/*.yaml").into()),
+            (None, None) => {
+                ArchivePath::ClusterList(format!("**/{api_version}/{kind}/*.yaml").into())
+            }
         }
     }
 
-    pub fn new_logs(namespace_name: NamespaceName, type_meta: TypeMeta, logs: LogGroup) -> Self {
+    pub fn new_logs(
+        namespace_name: impl NamespacedName,
+        type_meta: TypeMeta,
+        logs: LogGroup,
+    ) -> Self {
         match ArchivePath::new_path(namespace_name, type_meta) {
             ArchivePath::Namespaced(path) | ArchivePath::Cluster(path) => match logs {
                 LogGroup::Current(Container(container)) => {
@@ -144,7 +180,7 @@ impl ArchivePath {
         type_meta: TypeMeta,
         logs: LogGroup,
     ) -> Self {
-        ArchivePath::new_logs(NamespaceName::new_from_object(resource), type_meta, logs)
+        ArchivePath::new_logs(resource.meta(), type_meta, logs)
     }
 
     pub fn parent(&self) -> Option<&Path> {
@@ -261,13 +297,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let type_meta = TypeMeta {
-            api_version: Pod::api_version(&()).to_string(),
-            kind: Pod::kind(&()).to_string(),
-        };
         let log_group = LogGroup::Current(Container("container".into()));
 
-        let result = ArchivePath::logs_path(&resource, type_meta, log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Pod>(), log_group);
 
         assert_eq!(
             result,
@@ -285,13 +317,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let type_meta = TypeMeta {
-            api_version: Pod::api_version(&()).to_string(),
-            kind: Pod::kind(&()).to_string(),
-        };
         let log_group = LogGroup::Previous(Container("container".into()));
 
-        let result = ArchivePath::logs_path(&resource, type_meta, log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Pod>(), log_group);
 
         assert_eq!(
             result,
@@ -308,13 +336,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let type_meta = TypeMeta {
-            api_version: Node::api_version(&()).to_string(),
-            kind: Node::kind(&()).to_string(),
-        };
         let log_group = LogGroup::Node;
 
-        let result = ArchivePath::logs_path(&resource, type_meta, log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
 
         assert_eq!(
             result,
@@ -331,13 +355,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let type_meta = TypeMeta {
-            api_version: Node::api_version(&()).to_string(),
-            kind: Node::kind(&()).to_string(),
-        };
         let log_group = LogGroup::NodePath;
 
-        let result = ArchivePath::logs_path(&resource, type_meta, log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
 
         assert_eq!(
             result,
@@ -348,12 +368,7 @@ mod tests {
     #[test]
     fn test_cluster_list_path() {
         let resource = Node::default();
-        let type_meta = TypeMeta {
-            api_version: Node::api_version(&()).to_string(),
-            kind: Node::kind(&()).to_string(),
-        };
-
-        let result = ArchivePath::new_path(NamespaceName::new_from_object(&resource), type_meta);
+        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Node>());
 
         assert_eq!(result, ArchivePath::ClusterList("**/v1/node/*.yaml".into()));
     }
@@ -367,12 +382,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let type_meta = TypeMeta {
-            api_version: Pod::api_version(&()).to_string(),
-            kind: Pod::kind(&()).to_string(),
-        };
 
-        let result = ArchivePath::new_path(NamespaceName::new_from_object(&resource), type_meta);
+        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>());
 
         assert_eq!(
             result,

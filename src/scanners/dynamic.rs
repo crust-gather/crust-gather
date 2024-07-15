@@ -4,12 +4,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kube::core::{ApiResource, DynamicObject, ResourceExt, TypeMeta};
+use kube::core::{ApiResource, DynamicObject, ResourceExt};
 use kube::Api;
 
 use crate::gather::{
     config::{Config, Secrets},
-    representation::Representation,
+    representation::{Representation, TypeMetaGetter},
     writer::Writer,
 };
 
@@ -47,7 +47,7 @@ impl Collect<DynamicObject> for Dynamic {
     async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         log::debug!(
             "Collecting representation for {} {}/{}",
-            self.get_type_meta().kind,
+            self.resource().to_type_meta().kind,
             object.namespace().unwrap_or_default(),
             object.name_any(),
         );
@@ -55,7 +55,7 @@ impl Collect<DynamicObject> for Dynamic {
         Ok(vec![Representation::new()
             .with_path(self.path(object))
             .with_data(&serde_yaml::to_string(&DynamicObject {
-                types: Some(self.get_type_meta()),
+                types: Some(self.resource().to_type_meta()),
                 ..object.clone()
             })?)])
     }
@@ -64,8 +64,8 @@ impl Collect<DynamicObject> for Dynamic {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 }
 
