@@ -2,12 +2,13 @@ use crate::{
     filters::filter::Filter,
     gather::{
         config::{Config, Secrets},
+        representation::TypeMetaGetter,
         writer::Writer,
     },
 };
 use async_trait::async_trait;
 
-use kube::core::{ApiResource, GroupVersionKind, Resource, TypeMeta};
+use kube::core::{ApiResource, GroupVersionKind, Resource};
 use kube::Api;
 
 use std::{
@@ -51,15 +52,16 @@ where
 
 impl<R> Objects<R>
 where
-    R: Resource<DynamicType = ()> + ResourceReq,
+    R: ResourceThreadSafe,
+    R::DynamicType: Default,
 {
-    pub fn new_typed(config: Config, resource: ApiResource) -> Self {
+    pub fn new_typed(config: Config) -> Self {
         Self {
             api: Api::all(config.client),
             filter: config.filter,
             writer: config.writer,
             secrets: config.secrets,
-            resource,
+            resource: ApiResource::erase::<R>(&Default::default()),
         }
     }
 }
@@ -76,9 +78,10 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     }
 
     fn filter(&self, obj: &R) -> anyhow::Result<bool> {
-        Ok(self
-            .filter
-            .filter(&GroupVersionKind::try_from(self.get_type_meta())?, obj))
+        Ok(self.filter.filter(
+            &GroupVersionKind::try_from(self.resource().to_type_meta())?,
+            obj,
+        ))
     }
 
     fn get_api(&self) -> Api<R> {
@@ -90,11 +93,8 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
         self.api.clone()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        TypeMeta {
-            kind: self.resource.kind.clone(),
-            api_version: self.resource.api_version.clone(),
-        }
+    fn resource(&self) -> ApiResource {
+        self.resource.clone()
     }
 }
 

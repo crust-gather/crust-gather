@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use http::Request;
 use k8s_openapi::{api::core::v1::Node, chrono::Utc};
-use kube::core::{ApiResource, TypeMeta};
+use kube::core::ApiResource;
 use kube::Api;
 
 use crate::gather::{
@@ -25,7 +25,7 @@ pub struct Info {
 impl Info {
     pub fn new(config: Config) -> Self {
         Self {
-            collectable: Objects::new_typed(config, ApiResource::erase::<Node>(&())),
+            collectable: Objects::new_typed(config),
         }
     }
 }
@@ -98,7 +98,7 @@ impl Collect<Node> for Info {
         self.collectable.get_api()
     }
 
-    fn get_type_meta(&self) -> TypeMeta {
-        self.collectable.get_type_meta()
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
     }
 }

@@ -29,7 +29,9 @@ use serde_json_path::JsonPath;
 use crate::scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION};
 
 use super::{
-    representation::{ArchivePath, Container, LogGroup, NamespaceName},
+    representation::{
+        ArchivePath, Container, LogGroup, NamespaceName, NamespacedName, TypeMetaGetter,
+    },
     selector::Selector,
     writer::Archive,
 };
@@ -65,33 +67,43 @@ impl Get {
     }
 
     pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(
-            NamespaceName::new(Some(self.name.clone()), self.namespace.clone()),
-            match self.group.clone() {
-                Some(group) => TypeMeta {
-                    api_version: format!("{}/{}", group, self.version),
-                    kind: self.kind.trim_end_matches('s').to_string(),
-                },
-                None => TypeMeta {
-                    api_version: self.version.clone(),
-                    kind: self.kind.trim_end_matches('s').to_string(),
-                },
-            },
-        )
+        ArchivePath::new_path(self, self.to_type_meta())
     }
 
     pub fn get_logs_path(&self, log: &Log) -> ArchivePath {
         ArchivePath::new_logs(
-            NamespaceName::new(Some(self.name.clone()), self.namespace.clone()),
-            TypeMeta {
-                api_version: self.version.clone(),
-                kind: self.kind.trim_end_matches('s').to_string(),
-            },
+            self,
+            self.to_type_meta(),
             match log.previous {
                 Some(true) => LogGroup::Previous(log.container.clone()),
                 _ => LogGroup::Current(log.container.clone()),
             },
         )
+    }
+}
+
+impl TypeMetaGetter for Get {
+    fn to_type_meta(&self) -> TypeMeta {
+        match self.group.clone() {
+            Some(group) => TypeMeta {
+                api_version: format!("{}/{}", group, self.version),
+                kind: self.kind.trim_end_matches('s').to_string(),
+            },
+            None => TypeMeta {
+                api_version: self.version.clone(),
+                kind: self.kind.trim_end_matches('s').to_string(),
+            },
+        }
+    }
+}
+
+impl NamespacedName for &Get {
+    fn name(&self) -> Option<String> {
+        self.name.clone().into()
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
     }
 }
 
@@ -101,7 +113,7 @@ pub struct Log {
     previous: Option<bool>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct List {
     pub server: String,
     namespace: Option<String>,
@@ -116,31 +128,41 @@ impl List {
     }
 
     pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(
-            NamespaceName::new(None, self.namespace.clone()),
-            match self.group.clone() {
-                Some(group) => TypeMeta {
-                    api_version: format!("{}/{}", group, self.version),
-                    kind: self.kind.trim_end_matches('s').to_string(),
-                },
-                None => TypeMeta {
-                    api_version: self.version.clone(),
-                    kind: self.kind.trim_end_matches('s').to_string(),
-                },
-            },
-        )
+        ArchivePath::new_path(self, self.to_type_meta())
     }
 
     pub fn get_crd_path(&self) -> Option<ArchivePath> {
         self.group.clone().map(|group| {
             ArchivePath::new_path(
                 NamespaceName::new(Some(format!("{}.{}", self.kind, group)), None),
-                TypeMeta {
-                    api_version: CustomResourceDefinition::api_version(&()).to_string(),
-                    kind: CustomResourceDefinition::kind(&()).to_string(),
-                },
+                TypeMeta::resource::<CustomResourceDefinition>(),
             )
         })
+    }
+}
+
+impl TypeMetaGetter for List {
+    fn to_type_meta(&self) -> TypeMeta {
+        match self.group.clone() {
+            Some(group) => TypeMeta {
+                api_version: format!("{}/{}", group, self.version),
+                kind: self.kind.trim_end_matches('s').to_string(),
+            },
+            None => TypeMeta {
+                api_version: self.version.clone(),
+                kind: self.kind.trim_end_matches('s').to_string(),
+            },
+        }
+    }
+}
+
+impl NamespacedName for &List {
+    fn name(&self) -> Option<String> {
+        None
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
     }
 }
 
@@ -333,10 +355,10 @@ impl<T: Resource + Serialize> GatherObject for T {}
 
 #[derive(Clone)]
 pub struct Reader {
-    pub archive: Archive,
-    pub diff: Duration,
-    pub next_patch_time: Cell<Duration>,
-    pub objects_state: RefCell<HashMap<PathBuf, DynamicObject>>,
+    archive: Archive,
+    diff: Duration,
+    objects_state: RefCell<HashMap<PathBuf, DynamicObject>>,
+    next_patch_time: Cell<Duration>,
 }
 
 impl Reader {
@@ -365,6 +387,10 @@ impl Reader {
 
     fn archive_time(&self) -> DateTime<Utc> {
         Utc::now() - self.diff
+    }
+
+    pub fn pop_next_event_time(&self) -> Duration {
+        self.next_patch_time.replace(Duration::MAX)
     }
 
     fn table(&self, list: List, selector: Selector) -> anyhow::Result<Table> {
