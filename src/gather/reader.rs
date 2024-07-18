@@ -416,7 +416,7 @@ impl Reader {
         let mut events = vec![];
         for object in self
             .objects(list.get_path())?
-            .filter(|obj| selector.filter(obj))
+            .filter(|obj| selector.matches(obj.labels()))
         {
             let crd_path = self.archive.join(list.get_crd_path().unwrap_or_default());
             let event = object.table_watch_event(crd_path, &list.version)?;
@@ -435,7 +435,7 @@ impl Reader {
         log::trace!("Watching list {}...", list.get_path());
 
         self.objects(list.get_path())?
-            .filter(|obj| selector.filter(obj))
+            .filter(|obj| selector.matches(obj.labels()))
             .map(|obj| obj.watch_event())
             .map(|ev| serde_json::to_value(ev).map_err(Into::into))
             .collect()
@@ -501,8 +501,8 @@ impl Reader {
         )?;
         let mut items = vec![];
         for path in paths {
-            let obj = self.read(path?)?;
-            if selector.filter(&obj) {
+            let obj: DynamicObject = self.read(path?)?;
+            if selector.matches(obj.labels()) {
                 items.push(obj);
             }
         }

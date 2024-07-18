@@ -1,10 +1,19 @@
-use kube::ResourceExt;
+use std::collections::BTreeMap;
+
+use kube::core::{Expression, SelectorExt as _};
 use logos::{Lexer, Logos, Span};
 use serde::Deserialize;
 
-type Error = (String, Span);
+use thiserror::Error;
 
-type Result<T> = std::result::Result<T, Error>;
+/// Indicates failure of conversion to Expression
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ParseError {
+    #[error("failed to parse value as expression: '{0}' at {1:?}")]
+    StringParse(String, Span),
+}
+
+type Result<T> = std::result::Result<T, ParseError>;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Selector {
@@ -13,57 +22,27 @@ pub struct Selector {
 }
 
 impl Selector {
-    fn matches<R: ResourceExt>(&self, res: &R) -> Option<bool> {
+    pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
         match &self.label_selector {
-            Some(selector) => Some(
-                Expressions::try_from(selector.clone())
-                    .ok()?
+            Some(selector) => match Expressions::try_from(selector.clone()) {
+                Ok(expr) => expr
                     .into_iter()
-                    .map(|selector| Selector::matches_selector(&selector, res))
+                    .map(|ParsedExpression::Expression(e)| e.matches(labels))
                     .all(|is_true| is_true),
-            ),
-            None => Some(true),
-        }
-    }
-
-    pub fn filter<R: ResourceExt>(&self, res: &R) -> bool {
-        self.matches(res).is_some_and(|is_true| is_true)
-    }
-
-    fn matches_selector<R: ResourceExt>(selector: &Expression, res: &R) -> bool {
-        let labels = res.labels();
-        let not = |found: Option<()>| match found {
-            Some(_) => None,
-            None => Some(()),
-        };
-        let exist = |key: &String| labels.get(key).map(|_| ());
-        let value_in =
-            |key: &String, values: &Vec<String>| values.contains(labels.get(key)?).then_some(());
-        let matches = |key: &String, value: &String| {
-            let found = labels.get(key)? == value;
-            found.then_some(())
-        };
-
-        match selector {
-            Expression::Set(set) => match set {
-                Set::Exist(key) => exist(key),
-                Set::NotExist(key) => not(exist(key)),
-                Set::In(key, values) => value_in(key, values),
-                Set::NotIn(key, values) => not(value_in(key, values)),
+                Err(e) => {
+                    log::error!("{e}");
+                    false
+                }
             },
-            Expression::Equality(equality) => match equality {
-                Equality::Equal(key, value) => matches(key, value),
-                Equality::NotEqual(key, value) => not(matches(key, value)),
-            },
+            None => true,
         }
-        .is_some()
     }
 }
 
-pub struct Expressions(Vec<Expression>);
+pub struct Expressions(Vec<ParsedExpression>);
 
 impl IntoIterator for Expressions {
-    type Item = Expression;
+    type Item = ParsedExpression;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -73,24 +52,22 @@ impl IntoIterator for Expressions {
 
 #[derive(Logos, Debug, PartialEq)]
 #[logos(skip r"[, \t\n\f]+")]
-pub enum Expression {
+pub enum ParsedExpression {
     #[regex(r"\w+\s+in\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
     #[regex(r"\w+\s+notin\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
     #[regex(r"\!\w+", |lex| parse_set(lex.slice()))]
     #[regex(r"\w+", |lex| parse_set(lex.slice()))]
-    Set(Set),
-
     #[regex(r"\w+\s*=\s*\w+", |lex| parse_equality(lex.slice()))]
     #[regex(r"\w+\s*==\s*\w+", |lex| parse_equality(lex.slice()))]
     #[regex(r"\w+\s*!=\s*\w+", |lex| parse_equality(lex.slice()))]
-    Equality(Equality),
+    Expression(Expression),
 }
 
 impl TryFrom<String> for Expressions {
-    type Error = Error;
+    type Error = ParseError;
 
     fn try_from(selector: String) -> Result<Self> {
-        let mut lexer = Expression::lexer(selector.as_str());
+        let mut lexer = ParsedExpression::lexer(selector.as_str());
         let mut expressions = vec![];
         while let Some(value) = parse_expression(&mut lexer)? {
             expressions.push(value);
@@ -98,12 +75,6 @@ impl TryFrom<String> for Expressions {
 
         Ok(Expressions(expressions))
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Equality {
-    Equal(String, String),
-    NotEqual(String, String),
 }
 
 #[derive(Logos, Debug, PartialEq)]
@@ -116,14 +87,6 @@ enum EqualityToken {
     NotEqual,
     #[regex(r"\w+", |lex| lex.slice().to_owned())]
     Value(String),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Set {
-    Exist(String),
-    NotExist(String),
-    In(String, Vec<String>),
-    NotIn(String, Vec<String>),
 }
 
 #[derive(Logos, Debug, PartialEq)]
@@ -153,52 +116,60 @@ enum ValuesListToken {
 }
 
 /// Parse selector expression
-pub fn parse_expression(lexer: &mut Lexer<'_, Expression>) -> Result<Option<Expression>> {
+pub fn parse_expression(
+    lexer: &mut Lexer<'_, ParsedExpression>,
+) -> Result<Option<ParsedExpression>> {
     lexer
         .next()
         .map(|token| match token {
-            Ok(Expression::Equality(eq)) => Ok(Expression::Equality(eq)),
-            Ok(Expression::Set(set)) => Ok(Expression::Set(set)),
-            _ => Err(("unexpected expression".to_owned(), lexer.span())),
+            Ok(ex) => Ok(ex),
+            _ => Err(ParseError::StringParse(
+                lexer.slice().to_owned(),
+                lexer.span(),
+            )),
         })
         .transpose()
 }
 
 /// Parse an equality based expression.
-fn parse_equality(source: &str) -> Option<Equality> {
+fn parse_equality(source: &str) -> Option<Expression> {
     let mut lexer = EqualityToken::lexer(source);
     let key = lexer.next()?.ok()?;
     let op = lexer.next()?.ok()?;
     let value = lexer.next()?.ok()?;
     match (key, op, value) {
         (EqualityToken::Value(key), EqualityToken::Equal, EqualityToken::Value(value)) => {
-            Some(Equality::Equal(key, value))
+            Some(Expression::Equal(key, value))
         }
         (EqualityToken::Value(key), EqualityToken::NotEqual, EqualityToken::Value(value)) => {
-            Some(Equality::NotEqual(key, value))
+            Some(Expression::NotEqual(key, value))
         }
         _ => None,
     }
 }
 
 /// Parse a set based expression.
-fn parse_set(source: &str) -> Option<Set> {
+fn parse_set(source: &str) -> Option<Expression> {
     let mut lexer = SetToken::lexer(source);
     let key = lexer.next()?.ok()?;
     match key {
         SetToken::Not => match lexer.next()?.ok()? {
-            SetToken::Value(value) => Some(Set::NotExist(value)),
+            SetToken::Value(value) => Some(Expression::DoesNotExist(value)),
             _ => None,
         },
         SetToken::Value(key) => {
             let op = match lexer.next() {
                 Some(op) => op.ok()?,
-                None => return Some(Set::Exist(key)),
+                None => return Some(Expression::Exists(key)),
             };
             let value = lexer.next()?.ok()?;
             match (op, value) {
-                (SetToken::In, SetToken::ValuesList(values)) => Some(Set::In(key, values)),
-                (SetToken::NotIn, SetToken::ValuesList(values)) => Some(Set::NotIn(key, values)),
+                (SetToken::In, SetToken::ValuesList(values)) => {
+                    Some(Expression::In(key, values.into_iter().collect()))
+                }
+                (SetToken::NotIn, SetToken::ValuesList(values)) => {
+                    Some(Expression::NotIn(key, values.into_iter().collect()))
+                }
                 (_, _) => None,
             }
         }
@@ -221,9 +192,12 @@ fn parse_value_list(source: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use kube::core::Expression;
     use logos::Logos;
 
-    use super::{parse_expression, parse_value_list, Equality, Expression, Set};
+    use crate::gather::selector::ParseError;
+
+    use super::{parse_expression, parse_value_list, ParsedExpression};
 
     #[test]
     fn values_lexer() {
@@ -239,61 +213,66 @@ mod tests {
     #[test]
     fn expression_lexer() {
         let data = "a==b,,b=c,c!=d,a in (a,b, c), a notin (a), c,!a,a()d";
-        let mut lexer = Expression::lexer(data);
+        let mut lexer = ParsedExpression::lexer(data);
         assert_eq!(
-            Some(Expression::Equality(Equality::Equal(
+            Some(ParsedExpression::Expression(Expression::Equal(
                 "a".into(),
                 "b".into()
             ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Equality(Equality::Equal(
+            Some(ParsedExpression::Expression(Expression::Equal(
                 "b".into(),
                 "c".into()
             ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Equality(Equality::NotEqual(
+            Some(ParsedExpression::Expression(Expression::NotEqual(
                 "c".into(),
                 "d".into()
             ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Set(Set::In(
+            Some(ParsedExpression::Expression(Expression::In(
                 "a".into(),
-                vec!["a".into(), "b".into(), "c".into()]
+                ["a".into(), "b".into(), "c".into()].into()
             ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Set(Set::NotIn("a".into(), vec!["a".into()]))),
+            Some(ParsedExpression::Expression(Expression::NotIn(
+                "a".into(),
+                ["a".into()].into()
+            ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Set(Set::Exist("c".into()))),
+            Some(ParsedExpression::Expression(Expression::Exists("c".into()))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Set(Set::NotExist("a".into()))),
+            Some(ParsedExpression::Expression(Expression::DoesNotExist(
+                "a".into()
+            ))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(Expression::Set(Set::Exist("a".into()))),
+            Some(ParsedExpression::Expression(Expression::Exists("a".into()))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Some(("unexpected expression".into(), 49..50)),
-            parse_expression(&mut lexer).err()
+            Err(ParseError::StringParse("(".into(), 49..50)),
+            parse_expression(&mut lexer)
         );
         assert_eq!(
-            Some(("unexpected expression".into(), 50..51)),
-            parse_expression(&mut lexer).err()
+            Err(ParseError::StringParse(")".into(), 50..51)),
+            parse_expression(&mut lexer)
         );
         assert_eq!(
-            Some(Expression::Set(Set::Exist("d".into()))),
+            Some(ParsedExpression::Expression(Expression::Exists("d".into()))),
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(None, parse_expression(&mut lexer).unwrap());
