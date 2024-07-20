@@ -8,6 +8,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::core::ApiResource;
 use kube::{Api, Resource};
 use serde::Serialize;
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -15,7 +16,10 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
 
 #[derive(Clone, Debug, Serialize)]
 struct Version {
@@ -48,14 +52,15 @@ impl Collect<Pod> for Versions {
         self.collectable.get_writer()
     }
 
-    fn filter(&self, _: &Pod) -> anyhow::Result<bool> {
+    fn filter(&self, _: &Pod) -> Result<bool, CollectError> {
         Ok(true)
     }
 
+    #[instrument(skip_all, err)]
     async fn collect(&self) -> anyhow::Result<()> {
-        let data = self
-            .list()
-            .await?
+        let pods = self.list().await?;
+
+        let data = pods
             .iter()
             .filter_map(|pod| pod.spec.clone().map(|s| (pod.meta(), s)))
             .flat_map(|(meta, spec)| {

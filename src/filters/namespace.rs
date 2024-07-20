@@ -1,5 +1,6 @@
 use kube::core::GroupVersionKind;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -15,6 +16,7 @@ pub struct NamespaceInclude {
 /// list. Returns true if the object's namespace is in the allowed namespaces,
 /// or the namespace list is empty or the resource is cluster-scoped.
 impl<R: ResourceThreadSafe> Filter<R> for NamespaceInclude {
+    #[instrument(skip_all, fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
         let empty = obj.namespace().unwrap_or_default().is_empty();
         let included = self.namespace.matches(&obj.namespace().unwrap_or_default());
@@ -22,10 +24,9 @@ impl<R: ResourceThreadSafe> Filter<R> for NamespaceInclude {
             (true, _) => None,
             (false, true) => Some(true),
             (false, false) => {
-                log::debug!(
-                    "NamespaceExclude filter excluded {}/{} as it is not present in the namespace list {}",
-                    obj.name_any(),
-                    obj.meta().clone().namespace.unwrap(), self.namespace);
+                tracing::debug!(
+                    "NamespaceExclude filter excluded object as it is not present in the namespace list"
+                );
                 Some(false)
             }
         }
@@ -75,6 +76,7 @@ impl From<Vec<NamespaceExclude>> for FilterType {
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for NamespaceExclude {
+    #[instrument(fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
         let empty = obj.namespace().unwrap_or_default().is_empty();
         let excluded = !self.namespace.matches(&obj.namespace().unwrap_or_default());
@@ -82,10 +84,7 @@ impl<R: ResourceThreadSafe> Filter<R> for NamespaceExclude {
             (true, _) => None,
             (false, true) => Some(true),
             (false, false) => {
-                log::debug!(
-                    "NamespaceExclude filter excluded {}/{} as it is not present in the namespace list {}",
-                    obj.name_any(),
-                    obj.meta().clone().namespace.unwrap(), self.namespace);
+                tracing::debug!("NamespaceExclude filter excluded object as it is not present in the namespace list");
                 Some(false)
             }
         }

@@ -25,6 +25,7 @@ use kube::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
+use tracing::instrument;
 
 use crate::scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION};
 
@@ -393,8 +394,9 @@ impl Reader {
         self.next_patch_time.replace(Duration::MAX)
     }
 
+    #[instrument(skip_all, fields(table = list.get_path().to_string()))]
     fn table(&self, list: List, selector: Selector) -> anyhow::Result<Table> {
-        log::trace!("Reading table {}...", list.get_path());
+        tracing::trace!("Reading table...");
 
         Table::new(
             self.archive.join(list.get_crd_path().unwrap_or_default()),
@@ -406,12 +408,13 @@ impl Reader {
     }
 
     // Watch events as a series of table representation for objects
+    #[instrument(skip_all, fields(table = list.get_path().to_string()))]
     pub fn watch_table_events(
         &self,
         list: List,
         selector: Selector,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        log::trace!("Watching table {}...", list.get_path());
+        tracing::trace!("Watching table...");
 
         let mut events = vec![];
         for object in self
@@ -427,12 +430,13 @@ impl Reader {
     }
 
     // Watch events as a series of json enoded objects
+    #[instrument(skip_all, fields(object = list.get_path().to_string()))]
     pub fn watch_events(
         &self,
         list: List,
         selector: Selector,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        log::trace!("Watching list {}...", list.get_path());
+        tracing::trace!("Watching list...");
 
         self.objects(list.get_path())?
             .filter(|obj| selector.matches(obj.labels()))
@@ -510,17 +514,18 @@ impl Reader {
         Ok(items.into_iter())
     }
 
+    #[instrument(skip_all, fields(path = path.to_string()))]
     pub fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
-        log::debug!("Reading file {}...", path);
+        tracing::debug!("Reading file...");
 
         Reader::read_raw(self.archive.join(path))
     }
 
+    #[instrument(skip_all, fields(path = get.get_path().to_string()))]
     pub fn load(&self, get: Get) -> anyhow::Result<serde_json::Value> {
-        let path = get.get_path();
-        log::debug!("Reading file {}...", path);
+        tracing::debug!("Reading file...");
 
-        let obj: DynamicObject = self.read(self.archive.join(path))?;
+        let obj: DynamicObject = self.read(self.archive.join(get.get_path()))?;
         if obj.deleted() {
             bail!("Object was deleted")
         }
@@ -528,8 +533,9 @@ impl Reader {
         serde_json::to_value(obj).map_err(Into::into)
     }
 
+    #[instrument(skip_all, fields(object = list.get_path().to_string()))]
     pub fn list(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
-        log::trace!("Reading list {}...", list.get_path());
+        tracing::trace!("Reading list...");
 
         let path = self.archive.join(list.get_path());
 

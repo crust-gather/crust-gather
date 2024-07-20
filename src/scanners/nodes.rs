@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::bail;
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{
@@ -15,9 +14,11 @@ use kube::{
     core::{
         params::{DeleteParams, WatchParams},
         subresource::AttachParams,
-        ApiResource, ErrorResponse, ObjectMeta, ResourceExt, WatchEvent,
+        ApiResource, ObjectMeta, ResourceExt, WatchEvent,
     },
 };
+use thiserror::Error;
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -25,7 +26,20 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
+
+/// Failure of debug pod
+#[derive(Debug, Error)]
+pub enum DebugPodError {
+    #[error("Failed to create pod: {0:?}")]
+    Create(kube::Error),
+
+    #[error("Failed to get pod: {0:?}")]
+    Get(kube::Error),
+}
 
 #[derive(Clone)]
 pub struct Nodes {
@@ -56,46 +70,70 @@ impl Collect<Node> for Nodes {
         self.collectable.get_writer()
     }
 
-    fn filter(&self, obj: &Node) -> anyhow::Result<bool> {
+    fn filter(&self, obj: &Node) -> Result<bool, CollectError> {
         self.collectable.filter(obj)
     }
 
     /// Collects container logs representations.
+    #[instrument(skip_all, fields(node = node.name_any()), err)]
     async fn representations(&self, node: &Node) -> anyhow::Result<Vec<Representation>> {
-        let node_name = node.name_any();
-        log::info!("Collecting node logs for {}", node.name_any());
+        tracing::info!("Collecting node logs");
 
+        let node_name = node.name_any();
         let pod = Self::get_template_pod(node_name);
         let pod_name = pod.name_any();
-        let api: Api<Pod> = Api::default_namespaced(self.get_api().into());
+        self.get_or_create(pod).await?;
 
-        log::info!("Creating debug pod {pod_name}");
-        match api.get(pod_name.as_str()).await {
-            Ok(pod) => pod,
-            Err(kube::Error::Api(ErrorResponse { code: 404, .. })) => {
-                match api.create(&Default::default(), &pod).await {
-                    Ok(pod) => pod,
-                    Err(e) => {
-                        log::error!("Failed to create pod {pod_name}: {e}");
-                        bail!(e)
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to get pod {pod_name}: {e}");
-                bail!(e)
-            }
+        self.collect_logs(node, pod_name).await
+    }
+
+    fn get_api(&self) -> Api<Node> {
+        self.collectable.get_api()
+    }
+
+    fn resource(&self) -> ApiResource {
+        self.collectable.resource()
+    }
+}
+
+impl Nodes {
+    #[instrument(skip_all, fields(pod_name = pod.name_any()), err)]
+    async fn get_or_create(&self, pod: Pod) -> anyhow::Result<()> {
+        let api = Api::default_namespaced(self.get_api().into());
+
+        let found = api
+            .get_opt(pod.name_any().as_str())
+            .await
+            .map_err(DebugPodError::Get)?;
+
+        if found.is_none() {
+            tracing::info!("Creating debug pod");
+            api.create(&Default::default(), &pod)
+                .await
+                .map_err(DebugPodError::Create)?;
         };
 
-        log::info!("Waiting for pod {pod_name} to be running");
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(pod_name = pod_name), err)]
+    async fn collect_logs(
+        &self,
+        node: &Node,
+        pod_name: String,
+    ) -> anyhow::Result<Vec<Representation>> {
+        tracing::info!("Waiting for pod to be running");
+
         let wp = WatchParams::default()
             .fields(format!("metadata.name={pod_name}").as_str())
             .timeout(10);
+
+        let api = Api::default_namespaced(self.get_api().into());
         let mut stream = api.watch(&wp, "0").await?.boxed();
         while let Some(WatchEvent::Modified(Pod { status, .. })) = stream.try_next().await? {
             let s = status.as_ref().expect("status exists on pod");
             if s.phase.clone().unwrap_or_default() == "Running" {
-                log::info!("Attaching to {pod_name}");
+                tracing::info!("Attaching to pod");
                 break;
             }
         }
@@ -125,16 +163,7 @@ impl Collect<Node> for Nodes {
         Ok(representations.into_iter().flatten().collect())
     }
 
-    fn get_api(&self) -> Api<Node> {
-        self.collectable.get_api()
-    }
-
-    fn resource(&self) -> ApiResource {
-        self.collectable.resource()
-    }
-}
-
-impl Nodes {
+    #[instrument(skip_all, fields(node = path.to_string()))]
     async fn get_representation(
         &self,
         pod_name: &str,
@@ -157,7 +186,7 @@ impl Nodes {
 
         match out.as_str() {
             "" => {
-                log::debug!("Node {path} is unavailable.");
+                tracing::debug!("Node debug output is unavailable.");
                 Ok(None)
             }
             data => Ok(Some(Representation::new().with_path(path).with_data(data))),

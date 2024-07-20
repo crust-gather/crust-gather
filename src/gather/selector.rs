@@ -5,6 +5,7 @@ use logos::{Lexer, Logos, Span};
 use serde::Deserialize;
 
 use thiserror::Error;
+use tracing::instrument;
 
 /// Indicates failure of conversion to Expression
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -24,16 +25,13 @@ pub struct Selector {
 impl Selector {
     pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
         match &self.label_selector {
-            Some(selector) => match Expressions::try_from(selector.clone()) {
-                Ok(expr) => expr
-                    .into_iter()
-                    .map(|ParsedExpression::Expression(e)| e.matches(labels))
-                    .all(|is_true| is_true),
-                Err(e) => {
-                    log::error!("{e}");
-                    false
-                }
-            },
+            Some(selector) => Expressions::try_from(selector.clone())
+                .map(|expr| {
+                    expr.into_iter()
+                        .map(|ParsedExpression::Expression(e)| e.matches(labels))
+                        .all(|is_true| is_true)
+                })
+                .unwrap_or_default(),
             None => true,
         }
     }
@@ -66,6 +64,7 @@ pub enum ParsedExpression {
 impl TryFrom<String> for Expressions {
     type Error = ParseError;
 
+    #[instrument(err)]
     fn try_from(selector: String) -> Result<Self> {
         let mut lexer = ParsedExpression::lexer(selector.as_str());
         let mut expressions = vec![];

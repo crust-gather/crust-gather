@@ -10,13 +10,14 @@ use async_trait::async_trait;
 
 use kube::core::{ApiResource, GroupVersionKind, Resource};
 use kube::Api;
+use tracing::instrument;
 
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},
 };
 
-use super::interface::{Collect, ResourceReq, ResourceThreadSafe};
+use super::interface::{Collect, CollectError, ResourceReq, ResourceThreadSafe};
 
 #[derive(Clone)]
 pub struct Objects<R: Resource> {
@@ -77,19 +78,21 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
         self.writer.clone()
     }
 
-    fn filter(&self, obj: &R) -> anyhow::Result<bool> {
+    #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
+    fn filter(&self, obj: &R) -> Result<bool, CollectError> {
         Ok(self.filter.filter(
-            &GroupVersionKind::try_from(self.resource().to_type_meta())?,
+            &GroupVersionKind::try_from(self.resource().to_type_meta())
+                .map_err(CollectError::GroupVersion)?,
             obj,
         ))
     }
 
+    #[instrument(skip_all, fields(
+        kind = self.resource().to_type_meta().kind,
+        apiVersion = self.resource().to_type_meta().api_version,
+    ))]
     fn get_api(&self) -> Api<R> {
-        log::debug!(
-            "Collecting {} {} resources",
-            self.resource.group,
-            self.resource.kind
-        );
+        tracing::debug!("Collecting resources");
         self.api.clone()
     }
 

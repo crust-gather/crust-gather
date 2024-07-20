@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use kube::core::GroupVersionKind;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -27,15 +28,13 @@ pub struct GroupInclude {
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
+    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, group_list = self.group.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = self.group.matches(gvk);
 
         if !accepted {
-            log::debug!(
-                "GroupInclude filter excluded {}/{} as it is not present in the group list {}",
-                gvk.group,
-                gvk.kind,
-                self.group,
+            tracing::debug!(
+                "GroupInclude filter excluded object as it is not present in the group list",
             );
         }
 
@@ -96,15 +95,13 @@ pub struct GroupExclude {
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
+    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, exclude = self.group.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = !self.group.matches(gvk);
 
         if !accepted {
-            log::debug!(
-                "GroupExclude filter excluded {}/{} as it is present in the exclude group list {}",
-                gvk.group,
-                gvk.kind,
-                self.group,
+            tracing::debug!(
+                "GroupExclude filter excluded object as it is present in the exclude group list",
             );
         }
 
