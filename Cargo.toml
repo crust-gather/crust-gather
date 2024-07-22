@@ -14,7 +14,7 @@ anyhow = "1.0.86"
 async-trait = "0.1.81"
 tar = { version = "0.4.41", optional = true }
 flate2 = { version = "1.0.30", optional = true }
-zip = { version = "2.1.4", optional = true }
+zip = { version = "2.1.5", optional = true }
 build_html = "2.5.0"
 log = "0.4.22"
 env_logger = "0.11.0"
