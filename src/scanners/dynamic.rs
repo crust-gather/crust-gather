@@ -6,6 +6,7 @@ use std::{
 use async_trait::async_trait;
 use kube::core::{ApiResource, DynamicObject, ResourceExt};
 use kube::Api;
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -13,7 +14,10 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
 
 #[derive(Clone, Debug)]
 pub struct Dynamic {
@@ -38,19 +42,20 @@ impl Collect<DynamicObject> for Dynamic {
         self.collectable.get_writer()
     }
 
-    fn filter(&self, obj: &DynamicObject) -> anyhow::Result<bool> {
+    fn filter(&self, obj: &DynamicObject) -> Result<bool, CollectError> {
         self.collectable.filter(obj)
     }
 
     /// Converts the provided DynamicObject into a vector of Representation
     /// with YAML object data and output path for the object.
+    #[instrument(skip_all, fields(
+        kind = self.resource().to_type_meta().kind,
+        apiVersion = self.resource().to_type_meta().api_version,
+        name = object.name_any(),
+        namespace = object.namespace(),
+    ), err)]
     async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
-        log::debug!(
-            "Collecting representation for {} {}/{}",
-            self.resource().to_type_meta().kind,
-            object.namespace().unwrap_or_default(),
-            object.name_any(),
-        );
+        tracing::debug!("Collecting representations");
 
         Ok(vec![Representation::new()
             .with_path(self.path(object))

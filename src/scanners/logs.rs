@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
@@ -11,6 +10,8 @@ use kube::{
     api::TypeMeta,
     core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt},
 };
+use thiserror::Error;
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -18,7 +19,15 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
+
+/// Failure to collect logs
+#[derive(Debug, Error)]
+#[error("Failed to collect logs: {0:?}")]
+pub struct LogsError(kube::Error);
 
 #[derive(Clone, PartialEq)]
 pub enum LogSelection {
@@ -78,18 +87,14 @@ impl Collect<Pod> for Logs {
         self.collectable.get_writer()
     }
 
-    fn filter(&self, obj: &Pod) -> anyhow::Result<bool> {
+    fn filter(&self, obj: &Pod) -> Result<bool, CollectError> {
         self.collectable.filter(obj)
     }
 
     /// Collects container logs representations.
+    #[instrument(skip_all, fields(name = pod.name_any(), namespace = pod.namespace(), group=self.group.to_string()), err)]
     async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
-        log::debug!(
-            "Collecting {} logs for {}/{}",
-            self.group,
-            pod.namespace().unwrap_or_default(),
-            pod.name_any(),
-        );
+        tracing::debug!("Collecting logs");
 
         let mut representations = vec![];
 
@@ -102,22 +107,21 @@ impl Collect<Pod> for Logs {
                 pod.name_any().as_str(),
                 &LogParams {
                     container: Some(container.name.clone()),
+                    since_time: Some(Default::default()),
                     ..self.group.clone().into()
                 },
             )
             .await
             {
-                Ok(logs) => logs,
+                Ok(logs) => Ok(logs),
                 // If a 400 error occurs, returns the current representations, as that indicates no logs exist.
                 Err(kube::Error::Api(ErrorResponse { code: 400, .. })) => {
-                    log::info!("No {} logs found for pod {}", self.group, pod.name_any());
+                    tracing::info!("No logs found");
                     return Ok(representations);
                 }
-                Err(e) => {
-                    log::error!("Failed to collect logs: {:?}", e);
-                    bail!(e)
-                }
-            };
+                e => e,
+            }
+            .map_err(LogsError)?;
 
             representations.push(
                 Representation::new()

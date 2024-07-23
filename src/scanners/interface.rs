@@ -1,21 +1,24 @@
-use anyhow::{self, bail};
+use anyhow;
 use async_trait::async_trait;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt as _};
 use k8s_openapi::chrono::Utc;
 use k8s_openapi::serde_json;
 use kube::api::WatchEvent;
+use kube::core::gvk::ParseGroupVersionError;
 use kube::core::params::ListParams;
-use kube::core::{DynamicObject, GroupVersionKind, ResourceExt};
+use kube::core::{DynamicObject, ErrorResponse, ResourceExt};
 use kube::Api;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
+use thiserror::Error;
+use tracing::instrument;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
-use tokio_retry::{Retry, RetryIf};
+use tokio_retry::Retry;
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
@@ -28,6 +31,31 @@ trait_set! {
     pub trait SerDe = Serialize + DeserializeOwned;
     pub trait ResourceReq = Base + ThreadSafe + SerDe;
     pub trait ResourceThreadSafe = ResourceReq + ResourceExt;
+}
+
+/// Indicates failure of conversion to Expression
+#[derive(Debug, Error)]
+pub enum CollectError {
+    #[error("Failed to list resources: {0}")]
+    List(kube::Error),
+
+    #[error("Unable to parse froup versoin for object: {0}")]
+    GroupVersion(ParseGroupVersionError),
+}
+
+#[derive(Debug, Error)]
+pub enum WatchError {
+    #[error("Failed to watch object: {0}")]
+    Watch(#[from] kube::Error),
+
+    #[error("Failed to sync object: {0}")]
+    Sync(#[from] anyhow::Error),
+
+    #[error("Failed to stream object events: {0}")]
+    Stream(#[from] ErrorResponse),
+
+    #[error("Unable to parse froup versoin for object: {0}")]
+    GroupVersion(#[from] ParseGroupVersionError),
 }
 
 pub const ADDED_ANNOTATION: &str = "crust-gather.io/added";
@@ -63,17 +91,18 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
 
     /// Filters objects based on their GroupVersionKind and the object itself.
     /// Returns true if the object should be included, false otherwise.
-    fn filter(&self, object: &R) -> anyhow::Result<bool>;
+    fn filter(&self, object: &R) -> Result<bool, CollectError>;
 
     /// Converts the provided DynamicObject into a vector of Representation
     /// with YAML object data and output path for the object.
+    #[instrument(skip_all, fields(
+        kind = self.resource().to_type_meta().kind,
+        apiVersion = self.resource().to_type_meta().api_version,
+        name = object.name_any(),
+        namespace = object.namespace(),
+    ), err)]
     async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
-        log::debug!(
-            "Collecting representation for {} {}/{}",
-            self.resource().to_type_meta().kind,
-            object.namespace().unwrap_or_default(),
-            object.name_any(),
-        );
+        tracing::debug!("Collecting representation");
 
         let data = DynamicObject {
             types: Some(self.resource().to_type_meta()),
@@ -97,34 +126,23 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Lists Kubernetes objects of the type handled by this scanner, and set
     /// the get_type_meta() information on the objects. Objects are filtered
     /// before getting added to the result.
+    #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
     async fn list(&self) -> anyhow::Result<Vec<R>> {
-        let data = match self.get_api().list(&ListParams::default()).await {
-            Ok(items) => items,
-            Err(e) => {
-                log::error!("Failed to list resources: {:?}", e);
-                bail!(e)
-            }
-        };
+        let data = self
+            .get_api()
+            .list(&ListParams::default())
+            .await
+            .map_err(CollectError::List)?;
 
         Ok(data
             .items
             .into_iter()
-            .filter_map(|o| match self.filter(&o) {
-                Ok(true) => Some(o),
-                Ok(false) => None,
-                Err(e) => {
-                    log::error!(
-                        "Unable to filter object {:?}: {:?}",
-                        self.resource().to_type_meta(),
-                        e
-                    );
-                    None
-                }
-            })
+            .filter_map(|o| self.filter(&o).ok()?.then_some(o))
             .collect())
     }
 
     /// Lists all object and collects representations for them.
+    #[instrument(skip_all, err)]
     async fn collect(&self) -> anyhow::Result<()> {
         join_all(
             self.list()
@@ -148,19 +166,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Retries watching representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     async fn watch_retry(&self) {
-        RetryIf::spawn(
-            Self::delay(),
-            || async { self.watch_collect().await },
-            |e: &anyhow::Error| {
-                log::error!(
-                    "Watch over {} failed, retrying: {e}",
-                    self.resource().to_type_meta().kind
-                );
-                true
-            },
-        )
-        .await
-        .unwrap();
+        Retry::spawn(Self::delay(), || async { self.watch_collect().await })
+            .await
+            .unwrap();
     }
 
     /// Retries collecting representations using an exponential backoff with jitter.
@@ -183,7 +191,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     }
 
     /// Collect objects from watch events, storing difference from original as a series of json pathes
-    async fn watch_collect(&self) -> anyhow::Result<()> {
+    #[instrument(skip_all, err)]
+    async fn watch_collect(&self) -> Result<(), WatchError> {
         let mut stream = self
             .get_api()
             .watch(&Default::default(), "0")
@@ -211,10 +220,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                         .insert(DELETED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?
                 }
-                WatchEvent::Error(e) => log::error!(
-                    "Failed {} object watch: {e}",
-                    GroupVersionKind::try_from(self.resource().to_type_meta())?.api_version()
-                ),
+                WatchEvent::Error(e) => Err(WatchError::Stream(e))?,
                 WatchEvent::Bookmark(_) => (),
             }
         }

@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use clap::{arg, command, ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::Deserialize;
 use kube::{config::Kubeconfig, Client};
+use tracing::level_filters::LevelFilter;
 
 use crate::{
     filters::{
@@ -22,6 +23,11 @@ use crate::{
     },
 };
 
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt as _;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -29,7 +35,7 @@ pub struct Cli {
     ///
     /// OneOf: OFF, ERROR, WARN, INFO, DEBUG, TRACE
     #[arg(short, long, default_value = "INFO", global = true)]
-    verbosity: log::LevelFilter,
+    verbosity: LevelFilter,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -37,7 +43,10 @@ pub struct Cli {
 
 impl Cli {
     pub fn init(&self) {
-        env_logger::builder().filter_level(self.verbosity).init();
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env().add_directive(self.verbosity.into()))
+            .init();
     }
 }
 
@@ -355,7 +364,7 @@ impl GatherSettings {
     }
 
     pub async fn origin_client(&self) -> anyhow::Result<Client> {
-        log::info!("Initializing client...");
+        tracing::info!("Initializing client...");
 
         match &self.kubeconfig {
             Some(kubeconfig) => {

@@ -7,6 +7,7 @@ use k8s_openapi::{
 };
 use kube::core::ApiResource;
 use kube::Api;
+use tracing::instrument;
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},
@@ -18,7 +19,7 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{interface::{Collect, CollectError}, objects::Objects};
 
 #[derive(Clone)]
 pub struct Events {
@@ -53,13 +54,13 @@ impl Collect<Event> for Events {
         ArchivePath::Custom("event-filter.html".into())
     }
 
-    fn filter(&self, obj: &Event) -> anyhow::Result<bool> {
+    fn filter(&self, obj: &Event) -> Result<bool, CollectError> {
         self.collectable.filter(obj)
     }
 
     /// Generates an HTML table representations for an Event object.
     async fn representations(&self, event: &Event) -> anyhow::Result<Vec<Representation>> {
-        log::info!("Collecting events");
+        tracing::info!("Collecting events");
 
         let mut representations = vec![];
         let row = TableRow::new()
@@ -134,6 +135,7 @@ impl Collect<Event> for Events {
         self.collectable.resource()
     }
 
+    #[instrument(skip_all, err)]
     async fn collect(&self) -> anyhow::Result<()> {
         let mut data = String::new();
         for obj in self.list().await? {

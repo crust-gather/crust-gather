@@ -1,5 +1,6 @@
 use kube::core::GroupVersionKind;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -12,15 +13,13 @@ pub struct KindInclude {
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for KindInclude {
+    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, kind_list = self.kind.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = self.kind.matches(&gvk.kind);
 
         if !accepted {
-            log::debug!(
-                "KindInclude filter excluded {}/{} as it is not present in the kind list {}",
-                gvk.group,
-                gvk.kind,
-                self.kind,
+            tracing::debug!(
+                "KindInclude filter excluded object as it is not present in the kind list"
             );
         }
 
@@ -53,15 +52,13 @@ pub struct KindExclude {
 }
 
 impl<R: ResourceThreadSafe> Filter<R> for KindExclude {
+    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, exclude = self.kinds.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
         let accepted = !self.kinds.matches(&gvk.kind);
 
         if !accepted {
-            log::debug!(
-                "KindExclude filter excluded {}/{} as it is present in the exclude kind list {}",
-                gvk.group,
-                gvk.kind,
-                self.kinds
+            tracing::debug!(
+                "KindExclude filter excluded object as it is present in the exclude kind list",
             );
         }
 

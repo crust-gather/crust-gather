@@ -17,6 +17,6 @@ async fn main() -> anyhow::Result<()> {
 
     cli.command.run().await?;
 
-    log::info!("Done");
+    tracing::info!("Done");
     Ok(())
 }

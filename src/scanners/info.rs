@@ -8,6 +8,7 @@ use http::Request;
 use k8s_openapi::{api::core::v1::Node, chrono::Utc};
 use kube::core::ApiResource;
 use kube::Api;
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -15,7 +16,7 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::Collect, objects::Objects};
+use super::{interface::{Collect, CollectError}, objects::Objects};
 
 #[derive(Clone, Debug)]
 pub struct Info {
@@ -40,10 +41,11 @@ impl Collect<Node> for Info {
         self.collectable.get_writer()
     }
 
-    fn filter(&self, _: &Node) -> anyhow::Result<bool> {
+    fn filter(&self, _: &Node) -> Result<bool, CollectError> {
         Ok(true)
     }
 
+    #[instrument(skip_all, err)]
     async fn collect(&self) -> anyhow::Result<()> {
         let c = self.get_api().into_client();
 

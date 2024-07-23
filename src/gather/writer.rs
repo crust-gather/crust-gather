@@ -15,6 +15,7 @@ use std::{
 };
 #[cfg(feature = "archive")]
 use tar::{Builder, Header};
+use tracing::instrument;
 use walkdir::WalkDir;
 #[cfg(feature = "archive")]
 use zip::{write::SimpleFileOptions, ZipWriter};
@@ -194,8 +195,9 @@ impl Writer {
     }
 
     /// Adds a representation data to the archive under the representation path
+    #[instrument(skip_all, fields(repr = repr.path().to_string()))]
     pub fn store(&mut self, repr: &Representation) -> anyhow::Result<()> {
-        log::debug!("Writing {}...", repr.path());
+        tracing::debug!("Writing...");
 
         let archive_path: String = repr.path().try_into()?;
         let data = repr.data();
@@ -239,8 +241,9 @@ impl Writer {
     }
 
     /// Adds a representation data to the archive under the representation path
+    #[instrument(skip_all, fields(repr = repr.path().to_string()))]
     pub fn sync(&mut self, repr: &Representation) -> anyhow::Result<()> {
-        log::debug!("Writing {}...", repr.path());
+        tracing::debug!("Writing...");
 
         let archive_path: String = repr.path().try_into()?;
 

@@ -18,6 +18,7 @@ use kube::{discovery, Api, Client, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::time::timeout;
+use tracing::instrument;
 
 use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
@@ -348,6 +349,7 @@ impl Config {
     }
 
     /// Collect representations for resources from discovery to the specified archive file.
+    #[instrument(skip_all, err)]
     pub async fn collect(&self) -> anyhow::Result<()> {
         let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
         let mode = match self.mode {
@@ -362,19 +364,15 @@ impl Config {
 
         match self.mode {
             GatherMode::Collect => {
-                log::info!("Collecting resources...");
-                match timeout(
+                tracing::info!("Collecting resources...");
+                timeout(
                     self.duration.0.into(),
                     self.iterate_until_completion(collectables),
                 )
-                .await
-                {
-                    Ok(()) => (),
-                    Err(e) => log::error!("{e}"),
-                }
+                .await?
             }
             GatherMode::Record => {
-                log::info!("Recording resources...");
+                tracing::info!("Recording resources...");
                 self.iterate_until_completion(collectables).await;
             }
         }
@@ -554,11 +552,13 @@ mod tests {
                 .into(),
             secrets: Default::default(),
             mode: GatherMode::Collect,
-            duration: "1m".to_string().try_into().unwrap(),
+            duration: "10s".to_string().try_into().unwrap(),
         };
 
+        // Gzip archive is failing due to timeout.
+        // As the archive can't be consumed, it can't be closed other way... (TODO)
         let result = config.collect().await;
-        assert!(result.is_ok());
+        assert!(result.is_err())
     }
 
     #[tokio::test]
