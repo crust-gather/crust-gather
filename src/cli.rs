@@ -522,12 +522,13 @@ impl TryFrom<String> for GatherCommands {
 
 impl GatherCommands {
     pub async fn load(&self) -> anyhow::Result<Config> {
+        let env_secrets: Secrets = self.settings.secrets.clone().into();
         let mut secrets: Secrets = match self.settings.secrets_file.clone() {
             Some(file) => file.clone().try_into()?,
             None => vec![].into(),
         };
 
-        secrets.0.extend(self.settings.secrets.clone().into_iter());
+        secrets.0.extend(env_secrets.0.into_iter());
 
         Ok(Config::new(
             self.client().await?,
