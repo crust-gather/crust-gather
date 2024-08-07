@@ -44,6 +44,9 @@ impl Secrets {
         let mut data = repr.data().to_string();
         for secret in &self.0 {
             data = data.replace(secret.as_str(), "xxx");
+            let b64 = BASE64_STANDARD.encode(secret);
+            data = data.replace(b64.as_str(), "xxx");
+            data = data.replace(BASE64_STANDARD.encode(b64).as_str(), "xxx");
         }
 
         repr.clone().with_data(data.as_str())
@@ -513,6 +516,24 @@ mod tests {
         env::set_var("KEY", "password");
 
         let data = "omit password string".to_string();
+        let secrets: Secrets = vec!["KEY".to_string()].into();
+        let result = secrets.strip(&Representation::new().with_data(data.as_str()));
+
+        assert_eq!(result.data(), "omit xxx string");
+    }
+
+    #[test]
+    fn test_strip_b64_secrets() {
+        env::set_var("KEY", "password");
+
+        let data = "omit cGFzc3dvcmQ= string".to_string();
+        let secrets: Secrets = vec!["KEY".to_string()].into();
+        let result = secrets.strip(&Representation::new().with_data(data.as_str()));
+
+        assert_eq!(result.data(), "omit xxx string");
+
+        // Double encoded
+        let data = "omit Y0dGemMzZHZjbVE9 string".to_string();
         let secrets: Secrets = vec!["KEY".to_string()].into();
         let result = secrets.strip(&Representation::new().with_data(data.as_str()));
 
