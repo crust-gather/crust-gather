@@ -1,6 +1,6 @@
 use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
+    cell::{Cell, LazyCell, RefCell},
+    collections::{BTreeMap, HashMap},
     fs::File,
     io::{self, BufRead as _, Read},
     path::PathBuf,
@@ -13,7 +13,8 @@ use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
 use jsonptr::Pointer;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
-        CustomResourceColumnDefinition, CustomResourceDefinition,
+        CustomResourceColumnDefinition, CustomResourceDefinition, CustomResourceDefinitionSpec,
+        CustomResourceDefinitionVersion,
     },
     chrono::{DateTime, Utc},
     serde_json::{self, json},
@@ -25,7 +26,7 @@ use kube::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION};
 
@@ -40,6 +41,42 @@ use super::{
 const ADDED_PATH: &[&str] = &["metadata", "annotations", ADDED_ANNOTATION];
 const UPDATED_PATH: &[&str] = &["metadata", "annotations", UPDATED_ANNOTATION];
 const DELETED_PATH: &[&str] = &["metadata", "annotations", DELETED_ANNOTATION];
+
+const PREDEFINED_TABLES: LazyCell<BTreeMap<String, Vec<CustomResourceColumnDefinition>>> =
+    LazyCell::new(|| {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "events".into(),
+            vec![
+                CustomResourceColumnDefinition {
+                    name: "lastTimestamp".into(),
+                    json_path: ".lastTimestamp".into(),
+                    ..Default::default()
+                },
+                CustomResourceColumnDefinition {
+                    name: "type".into(),
+                    json_path: ".type".into(),
+                    ..Default::default()
+                },
+                CustomResourceColumnDefinition {
+                    name: "reason".into(),
+                    json_path: ".reason".into(),
+                    ..Default::default()
+                },
+                CustomResourceColumnDefinition {
+                    name: "object".into(),
+                    json_path: ".metadata.name".into(),
+                    ..Default::default()
+                },
+                CustomResourceColumnDefinition {
+                    name: "message".into(),
+                    json_path: ".message".into(),
+                    ..Default::default()
+                },
+            ],
+        );
+        map
+    });
 
 #[derive(Deserialize, Clone)]
 pub struct Destination {
@@ -196,7 +233,7 @@ impl ObjectValueList {
 #[derive(Clone)]
 pub struct Table(Vec<TablePath>, Vec<serde_json::Value>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TablePath {
     column: CustomResourceColumnDefinition,
     json_path: JsonPath,
@@ -225,7 +262,7 @@ impl TablePath {
 }
 
 impl Table {
-    fn new(crd_path: PathBuf, version: &str, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
+    fn new(crd_path: PathBuf, list: List, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
         let mut data = vec![TablePath {
             column: CustomResourceColumnDefinition {
                 name: "Name".to_string(),
@@ -235,7 +272,7 @@ impl Table {
             json_path: JsonPath::parse("$.metadata.name").unwrap(),
         }];
 
-        data.extend(Table::table_entries(crd_path, version)?);
+        data.extend(Table::table_entries(crd_path, list)?);
         let items: anyhow::Result<Vec<serde_json::Value>> = items
             .into_iter()
             .map(|i| serde_json::to_value(i).map_err(Into::into))
@@ -243,13 +280,30 @@ impl Table {
         Ok(Self(data, items?))
     }
 
-    fn table_entries(crd_path: PathBuf, version: &str) -> anyhow::Result<Vec<TablePath>> {
+    fn table_entries(crd_path: PathBuf, list: List) -> anyhow::Result<Vec<TablePath>> {
         let crd: CustomResourceDefinition = match crd_path.is_file() {
             true => serde_yaml::from_reader(File::open(crd_path)?)?,
-            false => Default::default(),
+            false => match PREDEFINED_TABLES.get(&list.kind.clone()) {
+                Some(columns) => CustomResourceDefinition {
+                    spec: CustomResourceDefinitionSpec {
+                        versions: vec![CustomResourceDefinitionVersion {
+                            name: list.version.clone(),
+                            additional_printer_columns: Some(columns.clone()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                None => Default::default(),
+            },
         };
 
-        let crd_version = crd.spec.versions.iter().find(|crd| crd.name == version);
+        let crd_version = crd
+            .spec
+            .versions
+            .iter()
+            .find(|crd| crd.name == list.version);
 
         let table_entries = crd_version
             .map(|version| version.additional_printer_columns.clone())
@@ -258,7 +312,21 @@ impl Table {
             .transpose()?
             .unwrap_or_default();
 
-        Ok(table_entries)
+        Ok(match PREDEFINED_TABLES.get(&list.kind.clone()) {
+            Some(_) => table_entries,
+            None => {
+                let mut data = vec![TablePath {
+                    column: CustomResourceColumnDefinition {
+                        name: "Name".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    json_path: JsonPath::parse("$.metadata.name").unwrap(),
+                }];
+                data.extend(table_entries);
+                data
+            }
+        })
     }
 
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
@@ -344,10 +412,10 @@ trait GatherObject: ResourceExt + Sized + Serialize {
     fn table_watch_event(
         &self,
         crd_path: PathBuf,
-        version: &str,
+        list: List,
     ) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::to_value(self.event()(
-            Table::new(crd_path, version, vec![&self])?.to_value()?,
+            Table::new(crd_path, list, vec![&self])?.to_value()?,
         ))?)
     }
 }
@@ -400,7 +468,7 @@ impl Reader {
 
         Table::new(
             self.archive.join(list.get_crd_path().unwrap_or_default()),
-            &list.version,
+            list.clone(),
             self.items(self.archive.join(list.get_path()), selector)?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
@@ -422,7 +490,7 @@ impl Reader {
             .filter(|obj| selector.matches(obj.labels()))
         {
             let crd_path = self.archive.join(list.get_crd_path().unwrap_or_default());
-            let event = object.table_watch_event(crd_path, &list.version)?;
+            let event = object.table_watch_event(crd_path, list.clone())?;
             events.push(event)
         }
 
