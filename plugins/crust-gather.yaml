@@ -5,6 +5,7 @@ metadata:
   name: crust-gather
 spec:
   version: v0.5.2
+  homepage: https://github.com/crust-gather/crust-gather
   platforms:
     - bin: kubectl-crust-gather.exe
       uri: https://github.com/crust-gather/crust-gather/releases/download/v0.5.2/kubectl-crust-gather_0.5.2_windows_amd64.tar.gz

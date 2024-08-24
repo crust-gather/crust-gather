@@ -20,6 +20,12 @@ archives:
   builds:
   - kubectl-crust-gather
   name_template: "kubectl-{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+- id: kubectl-crust-gather-krew
+  builds:
+  - kubectl-crust-gather
+  name_template: "kubectl-{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  files:
+  - LICENSE
 
 release:
   prerelease: auto
