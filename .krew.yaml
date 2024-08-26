@@ -5,34 +5,34 @@ metadata:
   name: crust-gather
 spec:
   version: {{ .TagName }}
-  homepage: https://github.com/Danil-Grigorev/crust-gather
+  homepage: https://github.com/crust-gather/crust-gather
   platforms:
   - bin: kubectl-crust-gather.exe
-    {{addURIAndSha "https://github.com/Danil-Grigorev/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_windows_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/crust-gather/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_windows_amd64.tar.gz" .TagName }}
     selector:
       matchLabels:
         os: windows
         arch: amd64
   - bin: kubectl-crust-gather
-    {{addURIAndSha "https://github.com/Danil-Grigorev/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_linux_arm64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/crust-gather/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_linux_arm64.tar.gz" .TagName }}
     selector:
       matchLabels:
         os: linux
         arch: arm64
   - bin: kubectl-crust-gather
-    {{addURIAndSha "https://github.com/Danil-Grigorev/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_linux_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/crust-gather/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_linux_amd64.tar.gz" .TagName }}
     selector:
       matchLabels:
         os: linux
         arch: amd64
   - bin: kubectl-crust-gather
-    {{addURIAndSha "https://github.com/Danil-Grigorev/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_darwin_arm64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/crust-gather/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_darwin_arm64.tar.gz" .TagName }}
     selector:
       matchLabels:
         os: darwin
         arch: arm64
   - bin: kubectl-crust-gather
-    {{addURIAndSha "https://github.com/Danil-Grigorev/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_darwin_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/crust-gather/crust-gather/releases/download/{{ .TagName }}/kubectl-crust-gather_{{ .TagName }}_darwin_amd64.tar.gz" .TagName }}
     selector:
       matchLabels:
         os: darwin
