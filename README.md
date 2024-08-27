@@ -2,7 +2,7 @@
 
 ## Description
 
-`crust-gather` is a `kubectl` plugin that provides functionality similar to the `oc adm inspect` command.
+`crust-gather` is a `kubectl` plugin that provides functionality, which allows to collect full or partial cluster state and serve it via an api server.
 
 ## Some key features:
 
