@@ -27,9 +27,10 @@ use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogSelection, Logs};
 use crate::scanners::nodes::Nodes;
+use crate::scanners::user_logs::UserLogs;
 use crate::scanners::versions::Versions;
 
-use super::representation::{NamespaceName, Representation};
+use super::representation::{CustomLog, NamespaceName, Representation};
 use super::writer::Writer;
 
 #[derive(Default, Clone, Debug)]
@@ -329,6 +330,7 @@ pub struct Config {
     pub writer: Arc<Mutex<Writer>>,
     pub secrets: Secrets,
     pub mode: GatherMode,
+    pub additional_logs: Vec<CustomLog>,
     duration: RunDuration,
 }
 
@@ -339,6 +341,7 @@ impl Config {
         writer: Writer,
         secrets: Secrets,
         mode: GatherMode,
+        additional_logs: Vec<CustomLog>,
         duration: RunDuration,
     ) -> Self {
         Self {
@@ -347,6 +350,7 @@ impl Config {
             secrets,
             duration,
             mode,
+            additional_logs,
             writer: writer.into(),
         }
     }
@@ -420,6 +424,7 @@ enum Collectable {
     Pods(Logs),
     Events(Events),
     Nodes(Nodes),
+    UserLogs(UserLogs),
     Info(Info),
     Versions(Versions),
 }
@@ -432,6 +437,7 @@ impl Collectable {
             Self::Pods(l) => l.collect_retry(),
             Self::Events(e) => e.collect_retry(),
             Self::Nodes(n) => n.collect_retry(),
+            Self::UserLogs(u) => u.collect_retry(),
             Self::Info(i) => i.collect_retry(),
             Self::Versions(v) => v.collect_retry(),
         }
@@ -446,7 +452,8 @@ impl Group {
                 Self::Nodes(resource) => vec![
                     Collectable::Nodes(Nodes::from(gather.clone())),
                     Collectable::Info(Info::new(gather.clone())),
-                    Collectable::Dynamic(Dynamic::new(gather, resource)),
+                    Collectable::Dynamic(Dynamic::new(gather.clone(), resource)),
+                    Collectable::UserLogs(UserLogs::from(gather)),
                 ],
                 Self::Pods(resource) => vec![
                     Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
@@ -574,6 +581,7 @@ mod tests {
             secrets: Default::default(),
             mode: GatherMode::Collect,
             duration: "10s".to_string().try_into().unwrap(),
+            additional_logs: Default::default(),
         };
 
         // Gzip archive is failing due to timeout.
@@ -601,6 +609,7 @@ mod tests {
             duration: "1m".to_string().try_into().unwrap(),
             mode: GatherMode::Collect,
             secrets: Default::default(),
+            additional_logs: Default::default(),
         };
 
         let result = config.collect().await;
@@ -625,6 +634,7 @@ mod tests {
             duration: "1m".to_string().try_into().unwrap(),
             mode: GatherMode::Collect,
             secrets: Default::default(),
+            additional_logs: Default::default(),
         };
 
         let result = config.collect().await;

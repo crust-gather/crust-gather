@@ -10,7 +10,7 @@ use kube::{
 };
 use serde::Deserialize;
 
-use crate::scanners::interface::ResourceThreadSafe;
+use crate::{filters::log::UserLog, scanners::interface::ResourceThreadSafe};
 
 pub trait NamespacedName {
     fn name(&self) -> Option<String>;
@@ -89,11 +89,27 @@ impl From<String> for Container {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CustomLog {
+    pub path: String,
+    pub command: String,
+}
+
+impl From<UserLog> for CustomLog {
+    fn from(value: UserLog) -> Self {
+        Self {
+            path: value.name,
+            command: value.command,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum LogGroup {
     Current(Container),
     Previous(Container),
-    Node,
-    NodePath,
+    Kubelet,
+    KubeletLegacy,
+    Custom(CustomLog),
 }
 
 impl fmt::Display for LogGroup {
@@ -101,8 +117,9 @@ impl fmt::Display for LogGroup {
         match self {
             Self::Current(container) => write!(formatter, "{container:?}/current.log"),
             Self::Previous(container) => write!(formatter, "{container:?}/previous.log"),
-            Self::Node => write!(formatter, "kubelet.log"),
-            Self::NodePath => write!(formatter, "kubelet-log-path.log"),
+            Self::Kubelet => write!(formatter, "kubelet.log"),
+            Self::KubeletLegacy => write!(formatter, "kubelet-log-path.log"),
+            Self::Custom(CustomLog { path, .. }) => write!(formatter, "{path}"),
         }
     }
 }
@@ -166,9 +183,12 @@ impl ArchivePath {
                 LogGroup::Previous(Container(container)) => {
                     ArchivePath::Logs(path.with_extension("").join(container).join("previous.log"))
                 }
-                LogGroup::Node => ArchivePath::Logs(path.with_extension("").join("kubelet.log")),
-                LogGroup::NodePath => {
+                LogGroup::Kubelet => ArchivePath::Logs(path.with_extension("").join("kubelet.log")),
+                LogGroup::KubeletLegacy => {
                     ArchivePath::Logs(path.with_extension("").join("kubelet-log-path.log"))
+                }
+                LogGroup::Custom(CustomLog { path: log_file, .. }) => {
+                    ArchivePath::Logs(path.with_extension("").join(log_file))
                 }
             },
             other => other,
@@ -336,7 +356,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let log_group = LogGroup::Node;
+        let log_group = LogGroup::Kubelet;
 
         let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
 
@@ -355,7 +375,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let log_group = LogGroup::NodePath;
+        let log_group = LogGroup::KubeletLegacy;
 
         let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
 

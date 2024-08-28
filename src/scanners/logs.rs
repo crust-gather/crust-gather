@@ -225,6 +225,7 @@ mod test {
                     .expect("failed to create builder"),
                 Default::default(),
                 GatherMode::Collect,
+                Default::default(),
                 "1m".to_string().try_into().unwrap(),
             )),
             group: LogSelection::Current,
