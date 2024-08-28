@@ -26,7 +26,7 @@ use kube::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json_path::JsonPath;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION};
 

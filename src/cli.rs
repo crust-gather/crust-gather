@@ -11,6 +11,7 @@ use crate::{
         filter::{FilterGroup, FilterList, FilterType},
         group::{GroupExclude, GroupInclude},
         kind::{KindExclude, KindInclude},
+        log::UserLog,
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
@@ -212,6 +213,11 @@ pub struct GatherCommands {
     #[clap(skip)]
     mode: GatherMode,
 
+    #[command(flatten)]
+    #[serde(flatten)]
+    #[serde(default)]
+    additional_logs: AdditionalLogs,
+
     #[serde(default)]
     #[clap(skip)]
     filters: Vec<Filters>,
@@ -232,6 +238,7 @@ impl GatherCommands {
             filter: self.filter.clone(),
             filters: self.filters.clone(),
             settings: self.settings.merge(other),
+            additional_logs: self.additional_logs.clone(),
         }
     }
 }
@@ -416,6 +423,42 @@ impl KubeconfigFromSecret {
 
 #[derive(Parser, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AdditionalLogs {
+    /// Additional logs to include into collection.
+    ///
+    /// This follows similar pattern to kubelet logs collection. Provided command is executed in a privileged pod
+    /// which allows to collect logs from the workloads running directly on the node, and store them in the specified
+    /// file. In the CLI invocation the name of the file and command needs to be separated by ':'.
+    ///
+    /// --additional-logs specified multiple times allows to collect multiple logs files.
+    ///
+    /// Example:
+    ///     --additional-logs="my-binary.log:sh -c cat /host/var/log/my-binary.log"
+    #[arg(long, alias("additional-logs"), value_name = "FILE:COMMAND",
+            value_parser = |arg: &str| -> anyhow::Result<UserLog> {Ok(UserLog::try_from(arg.to_string())?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    logs: Vec<UserLog>,
+
+    /// Additional logs to include into collection.
+    ///
+    /// This follows similar pattern to kubelet logs collection. Provided command is executed in a privileged pod
+    /// which allows to collect logs from the workloads running directly on the node, and store them in the specified
+    /// file.
+    ///
+    /// Example config file:
+    /// additional_logs:
+    /// - name: test.txt
+    ///   command: echo "hi"
+    /// - name: test2.txt
+    ///   command: echo "hi"
+    #[clap(skip)]
+    #[serde(default)]
+    additional_logs: Vec<UserLog>,
+}
+
+#[derive(Parser, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Filters {
     /// Namespace to include in the resource collection.
     ///
@@ -536,6 +579,13 @@ impl GatherCommands {
             (&self.settings).try_into()?,
             secrets,
             self.mode.clone(),
+            self.additional_logs
+                .logs
+                .clone()
+                .into_iter()
+                .chain(self.additional_logs.additional_logs.clone().into_iter())
+                .map(Into::into)
+                .collect(),
             self.settings.duration.unwrap_or_default(),
         ))
     }

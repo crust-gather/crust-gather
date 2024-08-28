@@ -1,67 +1,61 @@
 use std::{
     fmt::{self, Debug},
+    ops::Deref,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use k8s_openapi::api::core::v1::{
-    Container, HostPathVolumeSource, Node, Pod, PodSpec, Toleration, Volume, VolumeMount,
-};
+use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::Api;
 use kube::{
     api::TypeMeta,
     core::{
         params::{DeleteParams, WatchParams},
         subresource::AttachParams,
-        ApiResource, ObjectMeta, ResourceExt, WatchEvent,
+        ApiResource, ResourceExt, WatchEvent,
     },
 };
-use thiserror::Error;
 use tracing::instrument;
 
-use crate::gather::{
-    config::{Config, Secrets},
-    representation::{ArchivePath, LogGroup, Representation},
-    writer::Writer,
+use crate::{
+    gather::{
+        config::{Config, Secrets},
+        representation::{ArchivePath, CustomLog, LogGroup, Representation},
+        writer::Writer,
+    },
+    scanners::nodes::Nodes,
 };
 
 use super::{
     interface::{Collect, CollectError},
+    nodes::DebugPodError,
     objects::Objects,
 };
 
-/// Failure of debug pod
-#[derive(Debug, Error)]
-pub enum DebugPodError {
-    #[error("Failed to create pod: {0:?}")]
-    Create(kube::Error),
-
-    #[error("Failed to get pod: {0:?}")]
-    Get(kube::Error),
-}
-
 #[derive(Clone)]
-pub struct Nodes {
+pub struct UserLogs {
     pub collectable: Objects<Node>,
+    pub logs: Vec<CustomLog>,
 }
 
-impl Debug for Nodes {
+impl Debug for UserLogs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Nodes").finish()
+        f.debug_struct("UserLogs").finish()
     }
 }
 
-impl From<Config> for Nodes {
+impl From<Config> for UserLogs {
     fn from(value: Config) -> Self {
         Self {
+            logs: value.additional_logs.clone(),
             collectable: Objects::new_typed(value),
         }
     }
 }
 
 #[async_trait]
-impl Collect<Node> for Nodes {
+impl Collect<Node> for UserLogs {
     fn get_secrets(&self) -> Secrets {
         self.collectable.get_secrets()
     }
@@ -77,14 +71,31 @@ impl Collect<Node> for Nodes {
     /// Collects container logs representations.
     #[instrument(skip_all, fields(node = node.name_any()), err)]
     async fn representations(&self, node: &Node) -> anyhow::Result<Vec<Representation>> {
-        tracing::info!("Collecting node logs");
+        tracing::info!("Collecting user logs");
 
         let node_name = node.name_any();
-        let pod = Self::get_template_pod(node_name);
-        let pod_name = pod.name_any();
-        self.get_or_create(pod).await?;
 
-        self.collect_logs(node, pod_name).await
+        let mut pods = vec![];
+        for log in self.logs.deref() {
+            let mut pod = Nodes::get_template_pod(node_name.clone());
+            pod.metadata.name = Some(format!("user-logs-{}", log.path));
+            pods.push(pod.clone());
+            self.get_or_create(pod).await?;
+        }
+
+        let mut representations = vec![];
+        for pod in pods.deref() {
+            let logs = self.collect_logs(node, pod.name_any()).await?;
+            representations.extend(logs);
+        }
+
+        let api: Api<Pod> = Api::default_namespaced(self.get_api().into());
+        for pod in pods.deref() {
+            api.delete(&pod.name_any(), &DeleteParams::default().grace_period(0))
+                .await?;
+        }
+
+        Ok(representations)
     }
 
     fn get_api(&self) -> Api<Node> {
@@ -96,7 +107,7 @@ impl Collect<Node> for Nodes {
     }
 }
 
-impl Nodes {
+impl UserLogs {
     #[instrument(skip_all, fields(pod_name = pod.name_any()), err)]
     async fn get_or_create(&self, pod: Pod) -> anyhow::Result<()> {
         let api = Api::default_namespaced(self.get_api().into());
@@ -107,7 +118,7 @@ impl Nodes {
             .map_err(DebugPodError::Get)?;
 
         if found.is_none() {
-            tracing::info!("Creating debug pod");
+            tracing::info!("Creating user logs debug pod");
             api.create(&Default::default(), &pod)
                 .await
                 .map_err(DebugPodError::Create)?;
@@ -138,27 +149,23 @@ impl Nodes {
             }
         }
 
-        let representations = vec![
-            self.get_representation(
-                pod_name.as_str(),
-                vec![
-                    "sh",
-                    "-c",
-                    "chroot /host /bin/sh <<\"EOT\"\njournalctl -u kubelet\n\"EOT\"",
-                ],
-                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::Kubelet),
-            )
-            .await?,
-            self.get_representation(
-                pod_name.as_str(),
-                vec!["sh", "-c", "cat /host/var/log/kubelet.log"],
-                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::KubeletLegacy),
-            )
-            .await?,
-        ];
+        let mut representations = vec![];
 
-        api.delete(&pod_name, &DeleteParams::default().grace_period(0))
-            .await?;
+        for custom_log in self.logs.deref() {
+            let representation = self
+                .get_representation(
+                    pod_name.as_str(),
+                    custom_log.command.split_ascii_whitespace().collect(),
+                    ArchivePath::logs_path(
+                        node,
+                        TypeMeta::resource::<Node>(),
+                        LogGroup::Custom(custom_log.clone()),
+                    ),
+                )
+                .await?;
+
+            representations.push(representation);
+        }
 
         Ok(representations.into_iter().flatten().collect())
     }
@@ -186,55 +193,10 @@ impl Nodes {
 
         match out.as_str() {
             "" => {
-                tracing::debug!("Node debug output is unavailable.");
+                tracing::debug!("User log output is empty.");
                 Ok(None)
             }
             data => Ok(Some(Representation::new().with_path(path).with_data(data))),
-        }
-    }
-
-    pub fn get_template_pod(node_name: String) -> Pod {
-        Pod {
-            metadata: ObjectMeta {
-                name: Some(format!("node-debug-{node_name}")),
-                ..Default::default()
-            },
-            spec: Some(PodSpec {
-                node_name: Some(node_name),
-                restart_policy: Some("Never".into()),
-                dns_policy: Some("ClusterFirst".into()),
-                enable_service_links: Some(true),
-                host_ipc: Some(true),
-                host_network: Some(true),
-                host_pid: Some(true),
-                tolerations: Some(vec![Toleration {
-                    operator: Some("Exists".into()),
-                    ..Default::default()
-                }]),
-                containers: vec![Container {
-                    name: "debug".into(),
-                    stdin: Some(true),
-                    tty: Some(true),
-                    image: Some("busybox".into()),
-                    image_pull_policy: Some("IfNotPresent".into()),
-                    volume_mounts: Some(vec![VolumeMount {
-                        name: "host-root".into(),
-                        mount_path: "/host".into(),
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }],
-                volumes: Some(vec![Volume {
-                    name: "host-root".into(),
-                    host_path: Some(HostPathVolumeSource {
-                        path: "/".into(),
-                        type_: Some(String::new()),
-                    }),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }),
-            ..Default::default()
         }
     }
 }
