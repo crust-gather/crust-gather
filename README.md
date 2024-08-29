@@ -57,8 +57,7 @@ Depending on the installation type, there might be needed:
 The plugin can be installed with `krew` and used as follows:
 
 ```bash
-kubectl krew index add crust-gather https://github.com/crust-gather/crust-gather.git
-kubectl krew install crust-gather/crust-gather
+kubectl krew install crust-gather
 
 kubectl crust-gather --help
 ```
