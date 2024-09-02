@@ -77,8 +77,7 @@ impl Collect<Node> for UserLogs {
 
         let mut pods = vec![];
         for log in self.logs.deref() {
-            let mut pod = Nodes::get_template_pod(node_name.clone());
-            pod.metadata.name = Some(format!("user-logs-{}", log.path));
+            let pod = Nodes::get_template_pod(log.path.clone(), node_name.clone());
             pods.push(pod.clone());
             self.get_or_create(pod).await?;
         }
