@@ -80,7 +80,7 @@ impl Collect<Node> for Nodes {
         tracing::info!("Collecting node logs");
 
         let node_name = node.name_any();
-        let pod = Self::get_template_pod(node_name);
+        let pod = Self::get_template_pod("node-debug".into(), node_name);
         let pod_name = pod.name_any();
         self.get_or_create(pod).await?;
 
@@ -193,10 +193,10 @@ impl Nodes {
         }
     }
 
-    pub fn get_template_pod(node_name: String) -> Pod {
+    pub fn get_template_pod(log_path: String, node_name: String) -> Pod {
         Pod {
             metadata: ObjectMeta {
-                name: Some(format!("node-debug-{node_name}")),
+                name: Some(format!("{log_path}-{node_name}")),
                 ..Default::default()
             },
             spec: Some(PodSpec {
@@ -207,10 +207,17 @@ impl Nodes {
                 host_ipc: Some(true),
                 host_network: Some(true),
                 host_pid: Some(true),
-                tolerations: Some(vec![Toleration {
-                    operator: Some("Exists".into()),
-                    ..Default::default()
-                }]),
+                tolerations: Some(vec![
+                    Toleration {
+                        operator: Some("Exists".into()),
+                        ..Default::default()
+                    },
+                    Toleration {
+                        operator: Some("Exists".into()),
+                        key: Some("NoSchedule".into()),
+                        ..Default::default()
+                    },
+                ]),
                 containers: vec![Container {
                     name: "debug".into(),
                     stdin: Some(true),
