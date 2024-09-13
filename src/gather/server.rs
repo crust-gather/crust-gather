@@ -48,7 +48,7 @@ impl Display for Socket {
 #[derive(Parser, Clone, Default, Deserialize)]
 pub struct Server {
     /// Path to a kubeconfig file.
-    /// If not provided, will attempt to use the default config for the environemnt.
+    /// If not provided, will attempt to use the default config for the environment.
     /// This can be defined by KUBECONFIG env variable.
     ///
     /// Example:
@@ -56,7 +56,7 @@ pub struct Server {
     #[arg(short, long, value_name = "KUBECONFIG")]
     kubeconfig: Option<PathBuf>,
 
-    /// The input archive path. Will be used as a recursive search direcory for
+    /// The input archive path. Will be used as a recursive search directory for
     /// snapshot locations.
     ///
     /// Defaults to a new archive with name "crust-gather".
