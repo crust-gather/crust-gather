@@ -110,7 +110,7 @@ impl Api {
             .clone()
             .into_iter()
             .map(|a| Api::prepare_kubeconfig(&a, socket))
-            .try_fold(Kubeconfig::default(), Kubeconfig::merge)?;
+            .try_fold(Kubeconfig::read().unwrap_or_default(), Kubeconfig::merge)?;
 
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
             std::env::var("KUBECONFIG")
