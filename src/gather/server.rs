@@ -95,6 +95,7 @@ pub struct Api {
 #[derive(Clone)]
 struct ApiState {
     archives: HashMap<String, Archive>,
+    kubeconfig_path: PathBuf,
     serve_time: DateTime<Utc>,
 }
 
@@ -106,18 +107,23 @@ impl Api {
     ) -> anyhow::Result<Self> {
         let Socket(socket) = socket;
 
-        let config = archives
-            .clone()
-            .into_iter()
-            .map(|a| Api::prepare_kubeconfig(&a, socket))
-            .try_fold(Kubeconfig::read().unwrap_or_default(), Kubeconfig::merge)?;
-
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
             std::env::var("KUBECONFIG")
                 .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?).to_string()),
         ));
 
-        serde_yaml::to_writer(File::create(kubeconfig_path)?, &config)?;
+        let config = match File::open(&kubeconfig_path) {
+            Ok(file) => serde_yaml::from_reader(file)?,
+            _ => Kubeconfig::default()
+        };
+
+        let config = archives
+            .clone()
+            .into_iter()
+            .map(|a| Api::prepare_kubeconfig(&a, socket))
+            .try_fold(config, Kubeconfig::merge)?;
+
+        serde_yaml::to_writer(File::create(&kubeconfig_path)?, &config)?;
 
         let mut readers = HashMap::new();
         for archive in archives {
@@ -127,6 +133,7 @@ impl Api {
         Ok(Self {
             state: ApiState {
                 archives: readers,
+                kubeconfig_path,
                 serve_time: Utc::now(),
             },
             socket,
@@ -160,7 +167,24 @@ impl Api {
         }
     }
 
-    pub async fn serve(self) -> std::io::Result<()> {
+    fn clean_kubeconfig(state: ApiState) -> anyhow::Result<()> {
+
+        let mut config = Kubeconfig::read_from(&state.kubeconfig_path)?;
+
+        let contexts = state.archives.into_keys().collect::<Vec<_>>();
+
+        config.contexts.retain(|c| !contexts.contains(&c.name));
+        config.clusters.retain(|c| !contexts.contains(&c.name));
+        config.auth_infos.retain(|ai| !contexts.contains(&ai.name));
+
+        serde_yaml::to_writer(File::create(state.kubeconfig_path)?, &config)?;
+
+        Ok(())
+    }
+
+    pub async fn serve(self) -> anyhow::Result<()> {
+        let state = self.state.clone();
+
         HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
@@ -182,9 +206,14 @@ impl Api {
         .client_disconnect_timeout(Duration::from_secs(5))
         .bind_auto_h2c(self.socket)?
         .run()
-        .await
+        .await?;
+
+        Self::clean_kubeconfig(state)?;
+
+        Ok(())
     }
 }
+
 
 #[get("{server}/version")]
 async fn version(
