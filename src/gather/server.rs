@@ -182,7 +182,10 @@ impl Api {
         config.clusters.retain(|c| !contexts.contains(&c.name));
         config.auth_infos.retain(|ai| !contexts.contains(&ai.name));
 
-        config.current_context = state.previous_context;
+        config.current_context = match config.contexts.iter().find(|c| Some(c.name.clone()) == state.previous_context) {
+            Some(context) => Some(context.name.clone()),
+            None => config.contexts.first().map(|c| c.name.clone())
+        };
 
         serde_yaml::to_writer(File::create(state.kubeconfig_path)?, &config)?;
 
