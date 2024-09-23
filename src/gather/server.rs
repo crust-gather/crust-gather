@@ -96,6 +96,7 @@ pub struct Api {
 struct ApiState {
     archives: HashMap<String, Archive>,
     kubeconfig_path: PathBuf,
+    previous_context: Option<String>,
     serve_time: DateTime<Utc>,
 }
 
@@ -112,10 +113,13 @@ impl Api {
                 .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?).to_string()),
         ));
 
-        let config = match File::open(&kubeconfig_path) {
+        let mut config = match File::open(&kubeconfig_path) {
             Ok(file) => serde_yaml::from_reader(file)?,
             _ => Kubeconfig::default()
         };
+
+        let previous_context = config.current_context;
+        config.current_context = None;
 
         let config = archives
             .clone()
@@ -134,6 +138,7 @@ impl Api {
             state: ApiState {
                 archives: readers,
                 kubeconfig_path,
+                previous_context,
                 serve_time: Utc::now(),
             },
             socket,
@@ -176,6 +181,8 @@ impl Api {
         config.contexts.retain(|c| !contexts.contains(&c.name));
         config.clusters.retain(|c| !contexts.contains(&c.name));
         config.auth_infos.retain(|ai| !contexts.contains(&ai.name));
+
+        config.current_context = state.previous_context;
 
         serde_yaml::to_writer(File::create(state.kubeconfig_path)?, &config)?;
 
