@@ -681,7 +681,7 @@ dependencies = [
  "glob",
  "http 1.1.0",
  "json-patch",
- "jsonptr",
+ "jsonptr 0.6.2",
  "k8s-openapi",
  "kube",
  "logos",
@@ -1400,7 +1400,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b1fb8864823fad91877e6caea0baca82e49e8db50f8e5c9f9a453e27d3330fc"
 dependencies = [
- "jsonptr",
+ "jsonptr 0.4.7",
  "serde",
  "serde_json",
  "thiserror",
@@ -1428,6 +1428,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c6e529149475ca0b2820835d3dce8fcc41c6b943ca608d32f35b449255e4627"
 dependencies = [
  "fluent-uri",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonptr"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a328e4ba9e48684f9c6dce600276549a8580c6406c215fc36222468dd74e9636"
+dependencies = [
  "serde",
  "serde_json",
 ]
