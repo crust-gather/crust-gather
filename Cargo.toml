@@ -31,7 +31,7 @@ walkdir = "2.5.0"
 logos = "0.14.2"
 json-patch = "2.0.0"
 jsonptr = "0.4.7"
-async-stream = "0.3.5"
+async-stream = "0.3.6"
 thiserror = "1.0.64"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
