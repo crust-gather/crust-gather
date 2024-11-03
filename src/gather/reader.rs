@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
-use jsonptr::Pointer;
+use jsonptr::PointerBuf;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
         CustomResourceColumnDefinition, CustomResourceDefinition, CustomResourceDefinitionSpec,
@@ -38,9 +38,9 @@ use super::{
     writer::Archive,
 };
 
-const ADDED_PATH: &[&str] = &["metadata", "annotations", ADDED_ANNOTATION];
-const UPDATED_PATH: &[&str] = &["metadata", "annotations", UPDATED_ANNOTATION];
-const DELETED_PATH: &[&str] = &["metadata", "annotations", DELETED_ANNOTATION];
+const ADDED_PATH: [&str; 3] = ["metadata", "annotations", ADDED_ANNOTATION];
+const UPDATED_PATH: [&str; 3] = ["metadata", "annotations", UPDATED_ANNOTATION];
+const DELETED_PATH: [&str; 3] = ["metadata", "annotations", DELETED_ANNOTATION];
 
 const PREDEFINED_TABLES: LazyCell<BTreeMap<String, Vec<CustomResourceColumnDefinition>>> =
     LazyCell::new(|| {
@@ -666,9 +666,9 @@ impl Reader {
                 match p {
                     PatchOperation::Replace(ReplaceOperation { path, value })
                     | PatchOperation::Add(AddOperation { path, value })
-                        if path == Pointer::new(UPDATED_PATH)
-                            || path == Pointer::new(ADDED_PATH)
-                            || path == Pointer::new(DELETED_PATH) =>
+                        if path == PointerBuf::from_tokens(UPDATED_PATH)
+                            || path == PointerBuf::from_tokens(ADDED_PATH)
+                            || path == PointerBuf::from_tokens(DELETED_PATH) =>
                     {
                         let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
                         if last_sync_timestamp >= until {
