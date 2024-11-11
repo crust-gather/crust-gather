@@ -42,7 +42,7 @@ archive = ["dep:tar", "dep:flate2", "dep:zip"]
 [dev-dependencies]
 xid = "1.1.1"
 tempdir = "0.3.7"
-serial_test = "3.1.1"
+serial_test = "3.2.0"
 serde_with = "3.11.0"
 
 [profile.release]
