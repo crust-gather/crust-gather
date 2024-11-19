@@ -51,13 +51,13 @@ impl IntoIterator for Expressions {
 #[derive(Logos, Debug, PartialEq)]
 #[logos(skip r"[, \t\n\f]+")]
 pub enum ParsedExpression {
-    #[regex(r"\w+\s+in\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
-    #[regex(r"\w+\s+notin\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
-    #[regex(r"\!\w+", |lex| parse_set(lex.slice()))]
-    #[regex(r"\w+", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+\s+in\s+\([-.\w\s,]+\)", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+\s+notin\s+\([-.\w\s,]+\)", |lex| parse_set(lex.slice()))]
+    #[regex(r"\![-./\w]+", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+", |lex| parse_set(lex.slice()))]
     #[regex(r"[-./\w]+\s*=\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
-    #[regex(r"\w+\s*==\s*\w+", |lex| parse_equality(lex.slice()))]
-    #[regex(r"\w+\s*!=\s*\w+", |lex| parse_equality(lex.slice()))]
+    #[regex(r"[-./\w]+\s*==\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
+    #[regex(r"[-./\w]+\s*!=\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
     Expression(Expression),
 }
 
