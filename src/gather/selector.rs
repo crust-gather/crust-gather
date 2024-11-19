@@ -51,13 +51,13 @@ impl IntoIterator for Expressions {
 #[derive(Logos, Debug, PartialEq)]
 #[logos(skip r"[, \t\n\f]+")]
 pub enum ParsedExpression {
-    #[regex(r"\w+\s+in\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
-    #[regex(r"\w+\s+notin\s+\([\w\s,]+\)", |lex| parse_set(lex.slice()))]
-    #[regex(r"\!\w+", |lex| parse_set(lex.slice()))]
-    #[regex(r"\w+", |lex| parse_set(lex.slice()))]
-    #[regex(r"\w+\s*=\s*\w+", |lex| parse_equality(lex.slice()))]
-    #[regex(r"\w+\s*==\s*\w+", |lex| parse_equality(lex.slice()))]
-    #[regex(r"\w+\s*!=\s*\w+", |lex| parse_equality(lex.slice()))]
+    #[regex(r"[-./\w]+\s+in\s+\([-.\w\s,]+\)", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+\s+notin\s+\([-.\w\s,]+\)", |lex| parse_set(lex.slice()))]
+    #[regex(r"\![-./\w]+", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+", |lex| parse_set(lex.slice()))]
+    #[regex(r"[-./\w]+\s*=\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
+    #[regex(r"[-./\w]+\s*==\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
+    #[regex(r"[-./\w]+\s*!=\s*[-.\w]+", |lex| parse_equality(lex.slice()))]
     Expression(Expression),
 }
 
@@ -84,7 +84,7 @@ enum EqualityToken {
     Equal,
     #[token("!=")]
     NotEqual,
-    #[regex(r"\w+", |lex| lex.slice().to_owned())]
+    #[regex(r"[-./\w]+", |lex| lex.slice().to_owned())]
     Value(String),
 }
 
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn expression_lexer() {
-        let data = "a==b,,b=c,c!=d,a in (a,b, c), a notin (a), c,!a,a()d";
+        let data = "a==b,,foo.bar.baz/b-y_.6=c_8.-z,c!=d,a in (a,b, c), a notin (a), c,!a,a()d";
         let mut lexer = ParsedExpression::lexer(data);
         assert_eq!(
             Some(ParsedExpression::Expression(Expression::Equal(
@@ -222,8 +222,8 @@ mod tests {
         );
         assert_eq!(
             Some(ParsedExpression::Expression(Expression::Equal(
-                "b".into(),
-                "c".into()
+                "foo.bar.baz/b-y_.6".into(),
+                "c_8.-z".into()
             ))),
             parse_expression(&mut lexer).unwrap()
         );
@@ -263,11 +263,11 @@ mod tests {
             parse_expression(&mut lexer).unwrap()
         );
         assert_eq!(
-            Err(ParseError::StringParse("(".into(), 49..50)),
+            Err(ParseError::StringParse("(".into(), 71..72)),
             parse_expression(&mut lexer)
         );
         assert_eq!(
-            Err(ParseError::StringParse(")".into(), 50..51)),
+            Err(ParseError::StringParse(")".into(), 72..73)),
             parse_expression(&mut lexer)
         );
         assert_eq!(
