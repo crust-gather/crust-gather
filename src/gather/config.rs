@@ -365,7 +365,7 @@ impl Config {
         };
         let collectables = discovery
             .groups()
-            .flat_map(kube::discovery::ApiGroup::recommended_resources)
+            .flat_map(|r| r.resources_by_stability())
             .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
             .flat_map(|group: Group| group.into_collectable(self.clone()));
 
