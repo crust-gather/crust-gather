@@ -233,7 +233,7 @@ impl ObjectValueList {
 #[derive(Clone)]
 pub struct Table(Vec<TablePath>, Vec<serde_json::Value>);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct TablePath {
     column: CustomResourceColumnDefinition,
     json_path: JsonPath,
@@ -263,14 +263,7 @@ impl TablePath {
 
 impl Table {
     fn new(crd_path: PathBuf, list: List, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
-        let mut data = vec![TablePath {
-            column: CustomResourceColumnDefinition {
-                name: "Name".to_string(),
-                type_: "string".to_string(),
-                ..Default::default()
-            },
-            json_path: JsonPath::parse("$.metadata.name").unwrap(),
-        }];
+        let mut data = vec![];
 
         data.extend(Table::table_entries(crd_path, list)?);
         let items: anyhow::Result<Vec<serde_json::Value>> = items
@@ -700,5 +693,58 @@ impl Reader {
         let mut data = String::new();
         File::read_to_string(&mut file, &mut data)?;
         Ok(data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_columns() {
+        let list = List{
+            server: "foo".to_string(),
+            namespace: Some("my-namespace".to_string()),
+            group: Some("my-group".to_string()),
+            version: "v1".to_string(),
+            kind: "my-kind".to_string()
+        };
+        let items = vec!["foo", "bar", "baz"];
+        let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
+
+        let expected_paths = vec![TablePath {
+            column: CustomResourceColumnDefinition {
+                name: "Name".to_string(),
+                type_: "string".to_string(),
+                ..Default::default()
+            },
+            json_path: JsonPath::parse("$.metadata.name").unwrap(),
+        }];
+
+        assert_eq!(expected_paths, tbl.unwrap().0);
+    }
+
+    #[test]
+    fn table_columns_known_kind() {
+        let list = List{
+            server: "foo".to_string(),
+            namespace: Some("my-namespace".to_string()),
+            group: Some("my-group".to_string()),
+            version: "v1".to_string(),
+            kind: "type".to_string() // name contained in PREDEFINED_TABLES
+        };
+        let items = vec!["foo", "bar", "baz"];
+        let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
+
+        let expected_paths = vec![TablePath {
+            column: CustomResourceColumnDefinition {
+                name: "Name".to_string(),
+                type_: "string".to_string(),
+                ..Default::default()
+            },
+            json_path: JsonPath::parse("$.metadata.name").unwrap(),
+        }];
+
+        assert_eq!(expected_paths, tbl.unwrap().0);
     }
 }
