@@ -7,9 +7,9 @@ $(TOOLS_BIN_DIR):
 
 export PATH := $(abspath $(TOOLS_BIN_DIR)):$(PATH)
 
-.PHONY: release-tag
-release-tag:
-	./scripts/release_new_tag.sh $(tag)
+.PHONY: update-crate
+update-crate:
+	./scripts/update_crate.sh $(version)
 
 
 .PHONY: test

@@ -1,19 +1,14 @@
 #!/bin/bash
 
 if [ $# -ne 1 ]; then
-	echo "Usage: $0 <new-tag>"
+	echo "Usage: $0 <new-version>"
 	exit 1
 fi
 
-tag=$1
+version=$1
 
 cargo install cargo-edit
-version=${tag#v}
-
-if [ $version = $tag ]; then
-	echo "Setting tag as v$version for consistency with existing tags."
-	tag=v$version
-fi
+version=${version#v}
 
 cargo set-version $version
 if [ $? -ne 0 ]; then
@@ -23,6 +18,4 @@ fi
 
 git add Cargo.*
 git commit -m "Update Cargo files for version $version"
-git tag $tag
 git push
-git push --tags
