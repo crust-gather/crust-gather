@@ -7,6 +7,11 @@ $(TOOLS_BIN_DIR):
 
 export PATH := $(abspath $(TOOLS_BIN_DIR)):$(PATH)
 
+.PHONY: update-crate
+update-crate:
+	./scripts/update_crate.sh $(version)
+
+
 .PHONY: test
 test: $(TOOLS_BIN_DIR)
 	./scripts/install-kwok.sh $(TOOLS_BIN_DIR)
