@@ -125,6 +125,25 @@ jobs:
       - name: Checkout Git repo
         uses: actions/checkout@v4
 
+      - name: Validate tag consistency with crate version
+        run: |
+          ref=${{ github.ref }}
+          tag=${ref#refs/tags/}
+          version=${tag#v}
+
+          echo "tag: $tag"
+          echo "version: $version"
+
+          crate_version_toml=$(grep -E '^version =' Cargo.toml | grep --color=never -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+          echo "version in Cargo.toml: $crate_version_toml"
+
+          if [ $version != $crate_version_toml ]; then
+            echo "Mismatch between crate version ($crate_version_toml) and tag ($tag)."
+            echo "Run \`make update-crate version=$version\`, push changes and try again."
+            exit 1
+          fi
+
       # Goreleaser
       - name: Set up Go
         uses: actions/setup-go@v5
