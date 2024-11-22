@@ -30,16 +30,3 @@ archives:
 release:
   prerelease: auto
   mode: keep-existing
-
-krews:
-- name: crust-gather
-  ids:
-  - kubectl-crust-gather
-  repository:
-    owner: crust-gather
-    name: crust-gather
-    token: "{{ .Env.GITHUB_TOKEN }}"
-  description: |
-    Provides functionality similar to os adm inspect, by collecting all resources for debugging purposes.
-  short_description: "Provides functionality similar to os adm inspect, by collecting all resources for debugging purposes."
-  skip_upload: auto
