@@ -157,7 +157,7 @@ impl Api {
                 name: name.clone(),
                 context: Some(Context {
                     cluster: name.clone(),
-                    user: name.clone(),
+                    user: name.clone().into(),
                     ..Default::default()
                 }),
             }],
