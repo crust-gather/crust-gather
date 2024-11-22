@@ -11,7 +11,7 @@ cargo install cargo-edit
 version=${tag#v}
 
 if [ $version = $tag ]; then
-	echo "Setting tag as v$version" for consistency with existing tags."
+	echo "Setting tag as v$version for consistency with existing tags."
 	tag=v$version
 fi
 
