@@ -118,6 +118,14 @@ impl Get {
             },
         )
     }
+
+    pub fn get_singular_kind(&self) -> String {
+        if let Some(stripped) = self.kind.strip_suffix("ies") {
+            format!("{}y", stripped)
+        } else {
+            self.kind.trim_end_matches('s').to_string()
+        }
+    }
 }
 
 impl TypeMetaGetter for Get {
@@ -125,11 +133,11 @@ impl TypeMetaGetter for Get {
         match self.group.clone() {
             Some(group) => TypeMeta {
                 api_version: format!("{}/{}", group, self.version),
-                kind: self.kind.trim_end_matches('s').to_string(),
+                kind: self.get_singular_kind(),
             },
             None => TypeMeta {
                 api_version: self.version.clone(),
-                kind: self.kind.trim_end_matches('s').to_string(),
+                kind: self.get_singular_kind(),
             },
         }
     }
@@ -177,6 +185,14 @@ impl List {
             )
         })
     }
+
+    pub fn get_singular_kind(&self) -> String {
+        if let Some(stripped) = self.kind.strip_suffix("ies") {
+            format!("{}y", stripped)
+        } else {
+            self.kind.trim_end_matches('s').to_string()
+        }
+    }
 }
 
 impl TypeMetaGetter for List {
@@ -184,11 +200,11 @@ impl TypeMetaGetter for List {
         match self.group.clone() {
             Some(group) => TypeMeta {
                 api_version: format!("{}/{}", group, self.version),
-                kind: self.kind.trim_end_matches('s').to_string(),
+                kind: self.get_singular_kind(),
             },
             None => TypeMeta {
                 api_version: self.version.clone(),
-                kind: self.kind.trim_end_matches('s').to_string(),
+                kind: self.get_singular_kind(),
             },
         }
     }
@@ -215,11 +231,7 @@ impl ObjectValueList {
     pub fn new(list: List, items: Vec<DynamicObject>) -> Self {
         // Doing best effort to convert arbitrary object list to a typed list.
         // Works best for core types, generating SecretList instead of just List.
-        let mut kind = list
-            .kind
-            .strip_suffix('s')
-            .unwrap_or(list.kind.as_str())
-            .to_string();
+        let mut kind = list.get_singular_kind();
         Self {
             type_meta: TypeMeta {
                 kind: format!("{}{kind}List", kind.remove(0).to_uppercase(),),
