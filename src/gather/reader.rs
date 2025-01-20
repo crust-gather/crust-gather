@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
 use jsonptr::PointerBuf;
 use k8s_openapi::{
