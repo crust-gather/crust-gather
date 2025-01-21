@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
 use jsonptr::PointerBuf;
 use k8s_openapi::{
@@ -236,18 +236,23 @@ pub struct Table(Vec<TablePath>, Vec<serde_json::Value>);
 #[derive(Clone, Debug, PartialEq)]
 struct TablePath {
     column: CustomResourceColumnDefinition,
-    json_path: JsonPath,
+    json_path: Option<JsonPath>,
 }
 
 impl TablePath {
-    fn new(column: &CustomResourceColumnDefinition) -> anyhow::Result<Self> {
+    fn new(column: &CustomResourceColumnDefinition) -> Self {
         let json_path = format!("${}", column.json_path.replace(r"\.", r"."));
-        let json_path = JsonPath::parse(&json_path)
-            .map_err(|e| anyhow!("unable to parse json path for {json_path}: {e:?}",))?;
-        Ok(Self {
+        let json_path = match JsonPath::parse(&json_path) {
+            Ok(json_path) => Some(json_path),
+            Err(e) => {
+                tracing::debug!("unable to parse json path for {json_path}: {e:?}");
+                None
+            } 
+        };
+        Self {
             column: column.clone(),
             json_path,
-        })
+        }
     }
 
     fn to_definition(&self) -> serde_json::Value {
@@ -302,7 +307,6 @@ impl Table {
             .map(|version| version.additional_printer_columns.clone())
             .unwrap_or_default()
             .map(|columns| columns.iter().map(TablePath::new).collect())
-            .transpose()?
             .unwrap_or_default();
 
         Ok(match PREDEFINED_TABLES.get(&list.kind.clone()) {
@@ -314,7 +318,7 @@ impl Table {
                         type_: "string".to_string(),
                         ..Default::default()
                     },
-                    json_path: JsonPath::parse("$.metadata.name").unwrap(),
+                    json_path: JsonPath::parse("$.metadata.name").ok(),
                 }];
                 data.extend(table_entries);
                 data
@@ -327,7 +331,7 @@ impl Table {
         let obj = serde_json::to_value(obj)?;
         let cells: Vec<&serde_json::Value> = rows
             .iter()
-            .filter_map(|r| r.json_path.query(&obj).first())
+            .filter_map(|r| r.json_path.as_ref().map(|json_path| json_path.query(&obj).first()).unwrap_or_default())
             .collect();
 
         Ok(json!({
@@ -718,7 +722,7 @@ mod tests {
                 type_: "string".to_string(),
                 ..Default::default()
             },
-            json_path: JsonPath::parse("$.metadata.name").unwrap(),
+            json_path: JsonPath::parse("$.metadata.name").ok(),
         }];
 
         assert_eq!(expected_paths, tbl.unwrap().0);
@@ -742,7 +746,7 @@ mod tests {
                 type_: "string".to_string(),
                 ..Default::default()
             },
-            json_path: JsonPath::parse("$.metadata.name").unwrap(),
+            json_path: JsonPath::parse("$.metadata.name").ok(),
         }];
 
         assert_eq!(expected_paths, tbl.unwrap().0);
