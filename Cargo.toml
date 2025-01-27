@@ -15,7 +15,7 @@ async-trait = "0.1.85"
 tar = { version = "0.4.43", optional = true }
 flate2 = { version = "1.0.35", optional = true }
 zip = { version = "2.2.2", optional = true }
-build_html = "2.5.0"
+build_html = "2.6.0"
 regex = "1.11.1"
 futures = "0.3.31"
 tokio-retry = "0.3.0"
