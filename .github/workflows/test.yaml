@@ -1,0 +1,22 @@
+name: Secret Comparison
+
+on:
+  merge_group:
+
+jobs:
+  compare-secret:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare secret with expected value
+        run: |
+          echo "Reading secret and comparing..."
+          SECRET="${{ secrets.MY_SECRET }}"
+          EXPECTED_VALUE="expected123"
+
+          if [ "$SECRET" = "$EXPECTED_VALUE" ]; then
+            echo "✅ Secret matches the expected value."
+          else
+            echo "❌ Secret does NOT match the expected value."
+          fi
+
+
