@@ -71,7 +71,7 @@ crust-gather --help
 
 Or used with `nix`:
 ```bash
-nix-shell -p 'callPackage (fetchGit https://github.com/crust-gather/crust-gather) {}'
+nix shell github:crust-gather/crust-gather
 
 kubectl-crust-gather --help
 ```

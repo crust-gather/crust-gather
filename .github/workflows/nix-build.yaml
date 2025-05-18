@@ -19,4 +19,4 @@ jobs:
           extra_nix_config: |
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
       - name: Build Nix Packages
-        run: nix-build
+        run: nix build

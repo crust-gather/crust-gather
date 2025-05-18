@@ -1,6 +1,5 @@
-#! /usr/bin/env nix-shell
-#! nix-shell -i bash -p curl unzip mktemp
-#! nix-shell -i bash -p 'callPackage (fetchGit https://github.com/crust-gather/crust-gather) {}'
+#!/usr/bin/env -S nix shell nixpkgs#bash nixpkgs#curl nixpkgs#unzip nixpkgs#mktemp github:crust-gather/crust-gather --command bash
+
 
 usage() {
     cat << EOF
@@ -12,7 +11,7 @@ Script to collect a Github Actions artifact with crust-gather content and serve 
 -o, --owner       Owner of the repository. Required.
 -r, --repo        Repository name. Required.
 -a, --artifact_id Artifact ID. Required.
--s, --socket      The socket address to bind the HTTP server to. Defaults to 0.0.0.0:8080
+-s, --socket      The socket address to bind the HTTP server to. Defaults to 0.0.0.0:9095
 EOF
     exit 1
 }
@@ -74,5 +73,5 @@ tmp=$(mktemp -d)
 curl -H "Accept: application/vnd.github+json" -H "Authorization: token ${GITHUB_TOKEN}" -L  ${artifact_download} --output ${tmp}/artifact.zip
 unzip ${tmp}/artifact.zip -d ${tmp}
 
-echo "Serving on ${SOCKET:-0.0.0.0:8080}..."
+echo "Serving on ${SOCKET:-0.0.0.0:9095}..."
 kubectl-crust-gather serve -a ${tmp} ${SOCKET}
