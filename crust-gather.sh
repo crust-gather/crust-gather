@@ -1,3 +1,3 @@
-#! /usr/bin/env nix-shell
-#! nix-shell -i bash -p 'callPackage (fetchGit https://github.com/crust-gather/crust-gather) {}'
+#!/usr/bin/env -S nix shell github:crust-gather/crust-gather --command bash
+
 kubectl-crust-gather ${@}

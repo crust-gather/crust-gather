@@ -35,7 +35,7 @@ pub struct Socket(SocketAddr);
 
 impl Default for Socket {
     fn default() -> Self {
-        Self("0.0.0.0:8080".parse().unwrap())
+        Self("0.0.0.0:9095".parse().unwrap())
     }
 }
 
