@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
-use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
+use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
@@ -33,8 +33,6 @@ impl<R: ResourceThreadSafe> Filter<R> for NamespaceInclude {
     }
 }
 
-impl<R: ResourceThreadSafe> FilterDefinition<R> for NamespaceInclude {}
-
 impl TryFrom<String> for NamespaceInclude {
     type Error = anyhow::Error;
 
@@ -56,8 +54,6 @@ impl From<Vec<NamespaceInclude>> for FilterType {
 pub struct NamespaceExclude {
     namespace: FilterRegex,
 }
-
-impl<R: ResourceThreadSafe> FilterDefinition<R> for NamespaceExclude {}
 
 impl TryFrom<String> for NamespaceExclude {
     type Error = anyhow::Error;
