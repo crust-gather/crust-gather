@@ -69,6 +69,7 @@ impl Collect<DynamicObject> for Dynamic {
         self.collectable.get_api()
     }
 
+    #[allow(refining_impl_trait)]
     fn resource(&self) -> ApiResource {
         self.collectable.resource()
     }
@@ -76,7 +77,8 @@ impl Collect<DynamicObject> for Dynamic {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, time::Duration};
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::core::{params::PostParams, ApiResource};
@@ -104,9 +106,10 @@ mod test {
     use super::*;
 
     #[derive(Deserialize, Debug)]
+    #[allow(dead_code)]
     struct NoDuplicate(
         #[serde(with = "::serde_with::rust::maps_duplicate_key_is_error")]
-        HashMap<String, Option<serde_json::Value>>,
+        pub HashMap<String, Option<serde_json::Value>>,
     );
 
     #[tokio::test]

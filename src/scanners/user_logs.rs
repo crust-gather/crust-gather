@@ -101,6 +101,7 @@ impl Collect<Node> for UserLogs {
         self.collectable.get_api()
     }
 
+    #[allow(refining_impl_trait)]
     fn resource(&self) -> ApiResource {
         self.collectable.resource()
     }
