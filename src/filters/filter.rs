@@ -46,13 +46,6 @@ where
     }
 }
 
-pub trait FilterDefinition<R>: Filter<R> + TryFrom<String> + Clone
-where
-    R: Resource + Serialize + DeserializeOwned,
-    R: Clone + Sync + Send + Debug,
-{
-}
-
 #[derive(Default, Debug)]
 pub struct FilterList(pub Vec<FilterType>);
 

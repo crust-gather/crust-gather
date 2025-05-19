@@ -675,9 +675,9 @@ impl Reader {
                 match p {
                     PatchOperation::Replace(ReplaceOperation { path, value })
                     | PatchOperation::Add(AddOperation { path, value })
-                        if path == PointerBuf::from_tokens(UPDATED_PATH)
-                            || path == PointerBuf::from_tokens(ADDED_PATH)
-                            || path == PointerBuf::from_tokens(DELETED_PATH) =>
+                        if path == PointerBuf::from_tokens(UPDATED_PATH).to_string()
+                            || path == PointerBuf::from_tokens(ADDED_PATH).to_string()
+                            || path == PointerBuf::from_tokens(DELETED_PATH).to_string() =>
                     {
                         let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
                         if last_sync_timestamp >= until {

@@ -96,6 +96,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
         self.api.clone()
     }
 
+    #[allow(refining_impl_trait)]
     fn resource(&self) -> ApiResource {
         self.resource.clone()
     }

@@ -144,6 +144,7 @@ impl Collect<Pod> for Logs {
         self.collectable.get_api()
     }
 
+    #[allow(refining_impl_trait)]
     fn resource(&self) -> ApiResource {
         self.collectable.resource()
     }

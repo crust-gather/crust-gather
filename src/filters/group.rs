@@ -6,7 +6,7 @@ use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
-use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
+use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
@@ -70,8 +70,6 @@ impl Display for Group {
     }
 }
 
-impl<R: ResourceThreadSafe> FilterDefinition<R> for GroupInclude {}
-
 impl TryFrom<String> for GroupInclude {
     type Error = anyhow::Error;
 
@@ -108,8 +106,6 @@ impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
         Some(accepted)
     }
 }
-
-impl<R: ResourceThreadSafe> FilterDefinition<R> for GroupExclude {}
 
 impl TryFrom<String> for GroupExclude {
     type Error = anyhow::Error;

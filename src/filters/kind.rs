@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
-use super::filter::{Filter, FilterDefinition, FilterRegex, FilterType};
+use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Deserialize, Debug)]
 #[serde(try_from = "String")]
@@ -26,8 +26,6 @@ impl<R: ResourceThreadSafe> Filter<R> for KindInclude {
         Some(accepted)
     }
 }
-
-impl<R: ResourceThreadSafe> FilterDefinition<R> for KindInclude {}
 
 impl TryFrom<String> for KindInclude {
     type Error = anyhow::Error;
@@ -65,8 +63,6 @@ impl<R: ResourceThreadSafe> Filter<R> for KindExclude {
         Some(accepted)
     }
 }
-
-impl<R: ResourceThreadSafe> FilterDefinition<R> for KindExclude {}
 
 impl TryFrom<String> for KindExclude {
     type Error = anyhow::Error;
