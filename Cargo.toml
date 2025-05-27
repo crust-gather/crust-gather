@@ -4,7 +4,7 @@ version = "0.8.0"
 edition = "2021"
 
 [dependencies]
-kube = { version = "1.0.0", features = ["ws"] }
+kube = { version = "1.1.0", features = ["ws"] }
 k8s-openapi = { version = "0.25.0", features = ["latest"] }
 tokio = { version = "1.45.1", features = ["full"] }
 serde_yaml = "0.9.28"
