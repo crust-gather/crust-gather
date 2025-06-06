@@ -193,6 +193,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Collect objects from watch events, storing difference from original as a series of json pathes
     #[instrument(skip_all, err)]
     async fn watch_collect(&self) -> Result<(), WatchError> {
+        self.collect().await?;
+
         let mut stream = self
             .get_api()
             .watch(&Default::default(), "0")
@@ -230,9 +232,10 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
 
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
-    async fn sync_with_retry(&self, object: &R) -> anyhow::Result<()> {
+    #[instrument(skip_all, err, fields(name = obj.name_any(), namespace = obj.namespace(), gvk))]
+    async fn sync_with_retry(&self, obj: &R) -> anyhow::Result<()> {
         let representations = Retry::spawn(Self::delay(), || async {
-            self.representations(object).await
+            self.representations(obj).await
         })
         .await?;
 
