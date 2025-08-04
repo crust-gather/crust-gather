@@ -16,7 +16,10 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::{Collect, CollectError}, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
 
 #[derive(Clone, Debug)]
 pub struct Info {
@@ -56,7 +59,7 @@ impl Collect<Node> for Info {
                     .uri("/api")
                     .header(
                         "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
+                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
                     )
                     .body(vec![])?,
             )
@@ -67,7 +70,7 @@ impl Collect<Node> for Info {
                     .uri("/apis")
                     .header(
                         "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
+                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
                     )
                     .body(vec![])?,
             )
