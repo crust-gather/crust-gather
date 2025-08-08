@@ -234,10 +234,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// This helps handle transient errors and spreading load.
     #[instrument(skip_all, err, fields(name = obj.name_any(), namespace = obj.namespace(), gvk))]
     async fn sync_with_retry(&self, obj: &R) -> anyhow::Result<()> {
-        let representations = Retry::spawn(Self::delay(), || async {
-            self.representations(obj).await
-        })
-        .await?;
+        let representations =
+            Retry::spawn(Self::delay(), || async { self.representations(obj).await }).await?;
 
         let writer = self.get_writer();
         for repr in representations {

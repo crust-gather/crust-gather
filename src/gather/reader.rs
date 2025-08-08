@@ -121,7 +121,7 @@ impl Get {
 
     pub fn get_singular_kind(&self) -> String {
         if let Some(stripped) = self.kind.strip_suffix("ies") {
-            format!("{}y", stripped)
+            format!("{stripped}y")
         } else {
             self.kind.trim_end_matches('s').to_string()
         }
@@ -188,7 +188,7 @@ impl List {
 
     pub fn get_singular_kind(&self) -> String {
         if let Some(stripped) = self.kind.strip_suffix("ies") {
-            format!("{}y", stripped)
+            format!("{stripped}y")
         } else {
             self.kind.trim_end_matches('s').to_string()
         }
@@ -259,7 +259,7 @@ impl TablePath {
             Err(e) => {
                 tracing::debug!("unable to parse json path for {json_path}: {e:?}");
                 None
-            } 
+            }
         };
         Self {
             column: column.clone(),
@@ -343,7 +343,12 @@ impl Table {
         let obj = serde_json::to_value(obj)?;
         let cells: Vec<&serde_json::Value> = rows
             .iter()
-            .filter_map(|r| r.json_path.as_ref().map(|json_path| json_path.query(&obj).first()).unwrap_or_default())
+            .filter_map(|r| {
+                r.json_path
+                    .as_ref()
+                    .map(|json_path| json_path.query(&obj).first())
+                    .unwrap_or_default()
+            })
             .collect();
 
         Ok(json!({
@@ -675,9 +680,9 @@ impl Reader {
                 match p {
                     PatchOperation::Replace(ReplaceOperation { path, value })
                     | PatchOperation::Add(AddOperation { path, value })
-                        if path == PointerBuf::from_tokens(UPDATED_PATH).to_string()
-                            || path == PointerBuf::from_tokens(ADDED_PATH).to_string()
-                            || path == PointerBuf::from_tokens(DELETED_PATH).to_string() =>
+                        if path == PointerBuf::from_tokens(UPDATED_PATH)
+                            || path == PointerBuf::from_tokens(ADDED_PATH)
+                            || path == PointerBuf::from_tokens(DELETED_PATH) =>
                     {
                         let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
                         if last_sync_timestamp >= until {
@@ -718,12 +723,12 @@ mod tests {
 
     #[test]
     fn table_columns() {
-        let list = List{
+        let list = List {
             server: "foo".to_string(),
             namespace: Some("my-namespace".to_string()),
             group: Some("my-group".to_string()),
             version: "v1".to_string(),
-            kind: "my-kind".to_string()
+            kind: "my-kind".to_string(),
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
@@ -742,12 +747,12 @@ mod tests {
 
     #[test]
     fn table_columns_known_kind() {
-        let list = List{
+        let list = List {
             server: "foo".to_string(),
             namespace: Some("my-namespace".to_string()),
             group: Some("my-group".to_string()),
             version: "v1".to_string(),
-            kind: "type".to_string() // name contained in PREDEFINED_TABLES
+            kind: "type".to_string(), // name contained in PREDEFINED_TABLES
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);

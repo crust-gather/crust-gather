@@ -86,7 +86,7 @@ impl Archive {
     pub fn name(&self) -> &OsStr {
         self.0
             .components()
-            .last()
+            .next_back()
             .map(|c| c.as_os_str())
             .unwrap_or(OsStr::new("snapshot"))
     }

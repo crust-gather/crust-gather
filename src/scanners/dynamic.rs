@@ -81,8 +81,8 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
+    use kube::config::KubeConfigOptions;
     use kube::core::{params::PostParams, ApiResource};
-    use kube::Api;
     use serde::Deserialize;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -100,7 +100,6 @@ mod test {
             writer::{Archive, Encoding, Writer},
         },
         scanners::{interface::Collect, objects::Objects},
-        tests::kwok,
     };
 
     use super::*;
@@ -109,19 +108,25 @@ mod test {
     #[allow(dead_code)]
     struct NoDuplicate(
         #[serde(with = "::serde_with::rust::maps_duplicate_key_is_error")]
-        pub HashMap<String, Option<serde_json::Value>>,
+        pub  HashMap<String, Option<serde_json::Value>>,
     );
 
     #[tokio::test]
     #[serial]
     async fn collect_dynamic_object() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let api: Api<DynamicObject> =
-            Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
+        let api: Api<DynamicObject> = Api::default_namespaced_with(
+            cfg.clone().try_into().expect("client"),
+            &ApiResource::erase::<Pod>(&()),
+        );
 
         timeout(
             Duration::new(10, 0),
@@ -156,7 +161,7 @@ mod test {
         let dynamic = Dynamic {
             collectable: Objects::new(
                 Config::new(
-                    test_env.client().await,
+                    cfg.try_into().expect("client"),
                     FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
                         .expect("failed to create builder"),

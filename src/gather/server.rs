@@ -115,7 +115,7 @@ impl Api {
 
         let mut config = match File::open(&kubeconfig_path) {
             Ok(file) => serde_yaml::from_reader(file)?,
-            _ => Kubeconfig::default()
+            _ => Kubeconfig::default(),
         };
 
         let previous_context = config.current_context;
@@ -173,7 +173,6 @@ impl Api {
     }
 
     fn clean_kubeconfig(state: ApiState) -> anyhow::Result<()> {
-
         let mut config = Kubeconfig::read_from(&state.kubeconfig_path)?;
 
         let contexts = state.archives.into_keys().collect::<Vec<_>>();
@@ -182,9 +181,13 @@ impl Api {
         config.clusters.retain(|c| !contexts.contains(&c.name));
         config.auth_infos.retain(|ai| !contexts.contains(&ai.name));
 
-        config.current_context = match config.contexts.iter().find(|c| Some(c.name.clone()) == state.previous_context) {
+        config.current_context = match config
+            .contexts
+            .iter()
+            .find(|c| Some(c.name.clone()) == state.previous_context)
+        {
             Some(context) => Some(context.name.clone()),
-            None => config.contexts.first().map(|c| c.name.clone())
+            None => config.contexts.first().map(|c| c.name.clone()),
         };
 
         serde_yaml::to_writer(File::create(state.kubeconfig_path)?, &config)?;
@@ -223,7 +226,6 @@ impl Api {
         Ok(())
     }
 }
-
 
 #[get("{server}/version")]
 async fn version(

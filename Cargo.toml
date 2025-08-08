@@ -44,6 +44,7 @@ xid = "1.1.1"
 tempdir = "0.3.7"
 serial_test = "3.2.0"
 serde_with = "3.14.0"
+envtest = { git = "https://github.com/Danil-Grigorev/envtest", rev = "2a3d90afa8b" }
 
 [profile.release]
 strip = true
