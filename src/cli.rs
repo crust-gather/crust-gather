@@ -1,9 +1,9 @@
 use std::fs::File;
 
 use anyhow::anyhow;
-use clap::{arg, command, ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, arg, command};
 use k8s_openapi::serde::Deserialize;
-use kube::{config::Kubeconfig, Client};
+use kube::{Client, config::Kubeconfig};
 use tracing::level_filters::LevelFilter;
 
 use crate::{
@@ -638,8 +638,8 @@ mod tests {
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
     use k8s_openapi::serde_json;
     use kube::config::KubeConfigOptions;
-    use kube::core::{params::ListParams, ObjectMeta};
-    use kube::{api::PostParams, Api};
+    use kube::core::{ObjectMeta, params::ListParams};
+    use kube::{Api, api::PostParams};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::fs;
@@ -729,7 +729,9 @@ mod tests {
         .await
         .unwrap();
 
-        env::set_var("KUBECONFIG", kubeconfig_path.clone().to_str().unwrap());
+        unsafe {
+            env::set_var("KUBECONFIG", kubeconfig_path.clone().to_str().unwrap());
+        }
 
         let commands = GatherCommands::default();
         let client = commands.client().await.unwrap();
@@ -780,18 +782,22 @@ mod tests {
         assert!(config.collect().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
@@ -830,18 +836,22 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
@@ -896,18 +906,22 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
@@ -995,25 +1009,31 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .join("configmap")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .join("configmap")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
 
         let commands = Commands::CollectFromConfig {
             source: ConfigSource {
@@ -1036,28 +1056,36 @@ mod tests {
         };
 
         assert!(commands.run().await.is_ok());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("cluster")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("cluster")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
@@ -1124,18 +1152,22 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[test]

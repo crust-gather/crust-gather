@@ -509,8 +509,8 @@ mod tests {
 
     #[test]
     fn test_secrets_populated() {
-        env::set_var("FOO", "foo");
-        env::set_var("BAR", "bar");
+        unsafe { env::set_var("FOO", "foo") };
+        unsafe { env::set_var("BAR", "bar") };
 
         let secrets: Secrets = vec!["FOO".into(), "BAR".into(), "OTHER".into()].into();
 
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_strip_secrets() {
-        env::set_var("KEY", "password");
+        unsafe { env::set_var("KEY", "password") };
 
         let data = "omit password string".to_string();
         let secrets: Secrets = vec!["KEY".to_string()].into();
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_strip_b64_secrets() {
-        env::set_var("KEY", "password");
+        unsafe { env::set_var("KEY", "password") };
 
         let data = "omit cGFzc3dvcmQ= string".to_string();
         let secrets: Secrets = vec!["KEY".to_string()].into();

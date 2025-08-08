@@ -4,14 +4,13 @@ use std::{
 };
 
 use actix_web::{
-    error, get,
+    App, HttpResponse, HttpServer, Responder, error, get,
     http::{
-        header::{Accept, QualityItem, CONTENT_TYPE},
         KeepAlive,
+        header::{Accept, CONTENT_TYPE, QualityItem},
     },
     post,
     web::{self, Bytes, Header, Path, Query},
-    App, HttpResponse, HttpServer, Responder,
 };
 use async_stream::stream;
 use clap::Parser;
@@ -21,7 +20,7 @@ use k8s_openapi::{
 };
 use kube::config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
 use serde::Deserialize;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 use crate::gather::{
     reader::{Destination, Get, List, Log, Reader, Watch},
@@ -232,18 +231,16 @@ async fn version(
     server: Path<Destination>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
-    let version: serde_yaml::Value = serde_yaml::from_str({
-        let archive = state
-            .archives
-            .get(server.get_server())
-            .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
-        Reader::new(archive.clone(), state.serve_time)
-            .map_err(error::ErrorNotFound)?
-            .load_raw(ArchivePath::Custom("version.yaml".into()))
-            .map_err(error::ErrorNotFound)?
-            .as_str()
-    })
-    .map_err(error::ErrorUnprocessableEntity)?;
+    let archive = state
+        .archives
+        .get(server.get_server())
+        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+    let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
+    let path = reader
+        .load_raw(ArchivePath::Custom("version.yaml".into()))
+        .map_err(error::ErrorNotFound)?;
+    let version: serde_yaml::Value =
+        serde_yaml::from_str(&path).map_err(error::ErrorUnprocessableEntity)?;
 
     Ok(web::Json(version))
 }

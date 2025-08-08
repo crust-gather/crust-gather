@@ -866,7 +866,7 @@ dependencies = [
 [[package]]
 name = "envtest"
 version = "0.1.0"
-source = "git+https://github.com/Danil-Grigorev/envtest?rev=2a3d90afa8b#2a3d90afa8b4b72cd4b8dd766949762752d1bc40"
+source = "git+https://github.com/Danil-Grigorev/envtest?rev=18eb36f209da#18eb36f209da66179533c1a203a6d53e9ee19835"
 dependencies = [
  "rust2go",
  "serde",
