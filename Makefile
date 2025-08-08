@@ -14,5 +14,4 @@ update-crate:
 
 .PHONY: test
 test: $(TOOLS_BIN_DIR)
-	./scripts/install-kwok.sh $(TOOLS_BIN_DIR)
 	cargo t --features archive

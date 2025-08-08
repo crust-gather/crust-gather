@@ -493,7 +493,6 @@ mod tests {
     use crate::{
         filters::filter::FilterList,
         gather::writer::{Archive, Encoding},
-        tests::kwok,
     };
 
     #[cfg(feature = "archive")]
@@ -510,8 +509,8 @@ mod tests {
 
     #[test]
     fn test_secrets_populated() {
-        env::set_var("FOO", "foo");
-        env::set_var("BAR", "bar");
+        unsafe { env::set_var("FOO", "foo") };
+        unsafe { env::set_var("BAR", "bar") };
 
         let secrets: Secrets = vec!["FOO".into(), "BAR".into(), "OTHER".into()].into();
 
@@ -520,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_strip_secrets() {
-        env::set_var("KEY", "password");
+        unsafe { env::set_var("KEY", "password") };
 
         let data = "omit password string".to_string();
         let secrets: Secrets = vec!["KEY".to_string()].into();
@@ -531,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_strip_b64_secrets() {
-        env::set_var("KEY", "password");
+        unsafe { env::set_var("KEY", "password") };
 
         let data = "omit cGFzc3dvcmQ= string".to_string();
         let secrets: Secrets = vec!["KEY".to_string()].into();
@@ -565,15 +564,18 @@ mod tests {
     #[cfg(feature = "archive")]
     #[serial]
     async fn test_gzip_collect() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
-
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let f = NamespaceInclude::try_from("default".to_string()).unwrap();
         let config = Config {
-            client: test_env.client().await,
+            client: cfg.try_into().expect("client"),
             filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder")
@@ -594,14 +596,18 @@ mod tests {
     #[cfg(feature = "archive")]
     #[serial]
     async fn test_zip_collect() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
         let config = Config {
-            client: test_env.client().await,
+            client: cfg.try_into().expect("client"),
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
                 .expect("failed to create builder")
@@ -619,14 +625,18 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_path_collect() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let config = Config {
-            client: test_env.client().await,
+            client: cfg.try_into().expect("client"),
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
                 .expect("failed to create builder")

@@ -8,7 +8,7 @@ on:
 
 env:
   # Define the rust version to use
-  RUST_VERSION: 1.82.0
+  RUST_VERSION: 1.85.1
   # Rust build arguments
   BUILD_ARGS: "--release --features=archive"
   # The binary name
@@ -37,10 +37,14 @@ jobs:
           override: true
           target: x86_64-unknown-linux-gnu
           components: rustfmt, clippy
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
 
       - name: Test binary
-        run: |
-          GOOS=linux GOARCH=amd64 make test
+        run: make test
 
   build:
     name: Build - ${{ matrix.platform.name }}

@@ -1,7 +1,7 @@
 [package]
 name = "crust-gather"
 version = "0.10.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 kube = { version = "1.1.0", features = ["ws"] }
@@ -44,6 +44,7 @@ xid = "1.1.1"
 tempdir = "0.3.7"
 serial_test = "3.2.0"
 serde_with = "3.14.0"
+envtest = { git = "https://github.com/Danil-Grigorev/envtest", rev = "18eb36f209da" }
 
 [profile.release]
 strip = true

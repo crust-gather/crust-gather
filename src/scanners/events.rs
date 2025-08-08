@@ -7,11 +7,11 @@ use k8s_openapi::{
 };
 use kube::core::ApiResource;
 use kube::Api;
-use tracing::instrument;
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},
 };
+use tracing::instrument;
 
 use crate::gather::{
     config::{Config, Secrets},
@@ -19,7 +19,10 @@ use crate::gather::{
     writer::Writer,
 };
 
-use super::{interface::{Collect, CollectError}, objects::Objects};
+use super::{
+    interface::{Collect, CollectError},
+    objects::Objects,
+};
 
 #[derive(Clone)]
 pub struct Events {

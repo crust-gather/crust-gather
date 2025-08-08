@@ -78,7 +78,7 @@ kubectl-crust-gather --help
 
 ## Testing
 
-To run tests locally you need to have `golang` and `kwok` pre-installed. On linux and mac this will be done automatically with the test command:
+To run tests locally:
 ```bash
 make test
 ```

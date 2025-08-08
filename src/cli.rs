@@ -1,9 +1,9 @@
 use std::fs::File;
 
 use anyhow::anyhow;
-use clap::{arg, command, ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, arg, command};
 use k8s_openapi::serde::Deserialize;
-use kube::{config::Kubeconfig, Client};
+use kube::{Client, config::Kubeconfig};
 use tracing::level_filters::LevelFilter;
 
 use crate::{
@@ -626,40 +626,48 @@ impl From<&Filters> for FilterList {
             filter.exclude_group.clone().into(),
         ];
 
-        Self(data.iter().map(Clone::clone).map(Into::into).collect())
+        Self(data.iter().map(Clone::clone).collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::{collections::BTreeMap, env, io::Write};
 
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
-    use kube::core::{params::ListParams, ObjectMeta};
-    use kube::{api::PostParams, Api};
+    use k8s_openapi::serde_json;
+    use kube::config::KubeConfigOptions;
+    use kube::core::{ObjectMeta, params::ListParams};
+    use kube::{Api, api::PostParams};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::fs;
 
-    use crate::tests::kwok;
-
     use super::*;
+
+    fn temp_kubeconfig() -> PathBuf {
+        let mut dir = env::temp_dir();
+        dir.push(xid::new().to_string());
+        dir
+    }
 
     #[tokio::test]
     #[serial]
     async fn test_client_from_kubeconfig() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
 
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let kubeconfig_path = temp_kubeconfig();
+        fs::write(
+            kubeconfig_path.clone(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .await
+        .unwrap();
 
         let kubeconfig =
-            KubeconfigFile::try_from(test_env.kubeconfig_path().to_str().unwrap().to_string())
-                .unwrap();
+            KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap().to_string()).unwrap();
 
         let commands = GatherCommands {
             settings: GatherSettings {
@@ -678,16 +686,19 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insecure_client_from_kubeconfig() {
-        let test_env = kwok::TestEnvBuilder::default().build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
 
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let kubeconfig_path = temp_kubeconfig();
+        fs::write(
+            kubeconfig_path.clone(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .await
+        .unwrap();
 
         let kubeconfig =
-            KubeconfigFile::try_from(test_env.kubeconfig_path().to_str().unwrap().to_string())
-                .unwrap();
+            KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap().to_string()).unwrap();
 
         let commands = GatherCommands {
             settings: GatherSettings {
@@ -707,16 +718,20 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_client_from_default() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
 
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let kubeconfig_path = temp_kubeconfig();
+        fs::write(
+            kubeconfig_path.clone(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .await
+        .unwrap();
 
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        unsafe {
+            env::set_var("KUBECONFIG", kubeconfig_path.clone().to_str().unwrap());
+        }
 
         let commands = GatherCommands::default();
         let client = commands.client().await.unwrap();
@@ -728,18 +743,13 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insecure_client_from_default() {
-        let test_env = kwok::TestEnvBuilder::default().build();
-
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
-
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let config = test_env.kubeconfig().unwrap();
 
         let commands = GatherCommands {
             settings: GatherSettings {
                 insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(KubeconfigFile(config)),
                 ..Default::default()
             },
             ..GatherCommands::default()
@@ -753,14 +763,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_collect() {
-        let test_env = kwok::TestEnvBuilder::default().build();
-
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
-
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let config = test_env.kubeconfig().unwrap();
 
         let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
 
@@ -768,6 +772,7 @@ mod tests {
             settings: GatherSettings {
                 insecure_skip_tls_verify: Some(true),
                 file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
+                kubeconfig: Some(KubeconfigFile(config)),
                 ..Default::default()
             },
             ..GatherCommands::default()
@@ -777,31 +782,29 @@ mod tests {
         assert!(config.collect().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
     #[serial]
     async fn test_collect_from_config() {
-        let test_env = kwok::TestEnvBuilder::default().build();
-
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
-
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let config = test_env.kubeconfig().unwrap();
 
         let tmp_dir = TempDir::new("config").expect("failed to create temp dir");
 
@@ -824,6 +827,7 @@ mod tests {
             },
             overrides: GatherSettings {
                 insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(KubeconfigFile(config)),
                 file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
                 ..Default::default()
             },
@@ -832,40 +836,43 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
     #[serial]
     async fn test_collect_from_config_map() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
-
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
-
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            config.clone(),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
+        let client = Client::try_from(cfg).unwrap();
 
         let valid_config = r"
             filters:
             - include_namespace:
                 - default
             ";
-        let cm_api: Api<ConfigMap> = Api::namespaced(test_env.client().await, "default");
+        let cm_api: Api<ConfigMap> = Api::namespaced(client, "default");
         cm_api
             .create(
                 &PostParams::default(),
@@ -890,6 +897,7 @@ mod tests {
             },
             overrides: GatherSettings {
                 insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(KubeconfigFile(config)),
                 file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
                 ..Default::default()
             },
@@ -898,33 +906,46 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
     #[serial]
     async fn test_collect_kubeconfig_from_secret() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
-        let other_env = kwok::TestEnvBuilder::default().build();
+        let test_env = envtest::Environment::default()
+            .create()
+            .expect("cluster one");
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            config.clone(),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
+        let client = Client::try_from(cfg).unwrap();
 
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+        let other_env = envtest::Environment::default()
+            .create()
+            .expect("cluster two");
 
-        let other_kubeconfig = serde_yaml::to_string(&other_env.kubeconfig()).unwrap();
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
+        let other_kubeconfig: serde_json::Value = other_env.kubeconfig().unwrap();
+        let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
+        fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await
             .unwrap();
 
@@ -933,7 +954,7 @@ mod tests {
         - include_namespace:
             - default
         ";
-        let cm_api: Api<ConfigMap> = Api::namespaced(test_env.client().await, "default");
+        let cm_api: Api<ConfigMap> = Api::namespaced(client.clone(), "default");
         cm_api
             .create(
                 &PostParams::default(),
@@ -949,7 +970,7 @@ mod tests {
             .await
             .unwrap();
 
-        let secret_api: Api<Secret> = Api::namespaced(test_env.client().await, "default");
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), "default");
         secret_api
             .create(
                 &PostParams::default(),
@@ -979,6 +1000,7 @@ mod tests {
                     kubeconfig_secret_name: None,
                 }),
                 insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(KubeconfigFile(config.clone())),
                 file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
                 ..Default::default()
             },
@@ -987,25 +1009,31 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .join("configmap")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .join("configmap")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
 
         let commands = Commands::CollectFromConfig {
             source: ConfigSource {
@@ -1014,6 +1042,7 @@ mod tests {
             },
             overrides: GatherSettings {
                 insecure_skip_tls_verify: Some(true),
+                kubeconfig: Some(KubeconfigFile(config)),
                 file: Some(
                     tmp_dir
                         .path()
@@ -1027,47 +1056,64 @@ mod tests {
         };
 
         assert!(commands.run().await.is_ok());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("cluster")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(!tmp_dir
-            .path()
-            .join("collect-origin")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("cluster")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            !tmp_dir
+                .path()
+                .join("collect-origin")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[tokio::test]
     #[serial]
     async fn test_collect_kubeconfig_from_secret_by_name() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
-        let other_env = kwok::TestEnvBuilder::default().build();
+        let test_env = envtest::Environment::default()
+            .create()
+            .expect("cluster one");
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            config.clone(),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
+        let client = Client::try_from(cfg).unwrap();
 
-        env::set_var("KUBECONFIG", test_env.kubeconfig_path().to_str().unwrap());
+        let other_env = envtest::Environment::default()
+            .create()
+            .expect("cluster two");
 
-        let other_kubeconfig = serde_yaml::to_string(&other_env.kubeconfig()).unwrap();
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
+        let other_kubeconfig: serde_json::Value = other_env.kubeconfig().unwrap();
+        let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
+        fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await
             .unwrap();
 
-        let secret_api: Api<Secret> = Api::namespaced(test_env.client().await, "default");
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), "default");
         secret_api
             .create(
                 &PostParams::default(),
@@ -1094,6 +1140,7 @@ mod tests {
                             "default/kubeconfig-secret".to_string(),
                         )),
                     }),
+                    kubeconfig: Some(KubeconfigFile(config)),
                     insecure_skip_tls_verify: Some(true),
                     file: Some(tmp_dir.path().join("collect").to_str().unwrap().into()),
                     ..Default::default()
@@ -1105,18 +1152,22 @@ mod tests {
         assert!(commands.run().await.is_ok());
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("default")
-            .is_dir());
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("namespaces")
-            .join("kube-system")
-            .is_dir());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("default")
+                .is_dir()
+        );
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("namespaces")
+                .join("kube-system")
+                .is_dir()
+        );
     }
 
     #[test]

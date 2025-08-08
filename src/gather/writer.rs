@@ -86,7 +86,7 @@ impl Archive {
     pub fn name(&self) -> &OsStr {
         self.0
             .components()
-            .last()
+            .next_back()
             .map(|c| c.as_os_str())
             .unwrap_or(OsStr::new("snapshot"))
     }
@@ -366,7 +366,7 @@ mod tests {
 
         use crate::gather::representation::ArchivePath;
 
-        env::set_var("SECRET", "secret");
+        unsafe { env::set_var("SECRET", "secret"); }
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_add_path() {
-        env::set_var("SECRET", "secret");
+        unsafe { env::set_var("SECRET", "secret") };
 
         let tmp_dir = TempDir::new("path").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("cluster1/collected");

@@ -28,8 +28,7 @@ impl Selector {
             Some(selector) => Expressions::try_from(selector.clone())
                 .map(|expr| {
                     expr.into_iter()
-                        .map(|ParsedExpression::Expression(e)| e.matches(labels))
-                        .all(|is_true| is_true)
+                        .all(|ParsedExpression::Expression(e)| e.matches(labels))
                 })
                 .unwrap_or_default(),
             None => true,

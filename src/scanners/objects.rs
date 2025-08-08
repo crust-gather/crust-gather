@@ -109,8 +109,11 @@ mod test {
         api::core::v1::{Namespace, Pod},
         serde_json,
     };
-    use kube::core::{params::PostParams, ApiResource, DynamicObject};
     use kube::Api;
+    use kube::{
+        config::KubeConfigOptions,
+        core::{params::PostParams, ApiResource, DynamicObject},
+    };
     use serial_test::serial;
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
@@ -126,7 +129,6 @@ mod test {
             writer::{Archive, Encoding, Writer},
         },
         scanners::{interface::Collect, objects::Objects},
-        tests::kwok,
     };
     use tokio::time::timeout;
 
@@ -135,13 +137,17 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn collect_pod() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().await);
+        let pod_api: Api<Pod> = Api::default_namespaced(cfg.clone().try_into().expect("client"));
         timeout(
             Duration::new(10, 0),
             Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
@@ -170,12 +176,14 @@ mod test {
         .expect("Timeout")
         .unwrap();
 
-        let api: Api<DynamicObject> =
-            Api::default_namespaced_with(test_env.client().await, &ApiResource::erase::<Pod>(&()));
+        let api: Api<DynamicObject> = Api::default_namespaced_with(
+            cfg.clone().try_into().expect("client"),
+            &ApiResource::erase::<Pod>(&()),
+        );
         let pod = api.get("test").await.unwrap();
         let repr = Objects::new(
             Config::new(
-                test_env.client().await,
+                cfg.clone().try_into().expect("client"),
                 FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
@@ -199,15 +207,19 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_path_cluster_scoped() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
         let collectable = Objects::new(
             Config::new(
-                test_env.client().await,
+                cfg.clone().try_into().expect("client"),
                 FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
@@ -228,14 +240,19 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_path_namespaced() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
+
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Objects::new(
             Config::new(
-                test_env.client().await,
+                cfg.clone().try_into().expect("client"),
                 FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),

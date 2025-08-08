@@ -93,28 +93,36 @@ impl Collect<Pod> for Versions {
 #[cfg(test)]
 mod tests {
 
-    use std::{fs::File, io::Write, time::Duration};
+    use std::{env, fs::File, io::Write, path::PathBuf, time::Duration};
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::{api::PostParams, Api};
+    use kube::{
+        api::PostParams,
+        config::{KubeConfigOptions, Kubeconfig},
+        Api,
+    };
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::{fs, time::timeout};
     use tokio_retry::{strategy::FixedInterval, Retry};
 
-    use crate::{cli::GatherCommands, tests::kwok};
+    use crate::cli::GatherCommands;
+
+    fn temp_kubeconfig() -> PathBuf {
+        let mut dir = env::temp_dir();
+        dir.push(xid::new().to_string());
+        dir
+    }
 
     #[tokio::test]
     #[serial]
     async fn test_collect_versions() {
-        let test_env = kwok::TestEnvBuilder::default()
-            .insecure_skip_tls_verify(true)
-            .build();
+        let test_env = envtest::Environment::default().create().expect("cluster");
+        let kubeconfig: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
 
-        let kubeconfig = serde_yaml::to_string(&test_env.kubeconfig()).unwrap();
-        fs::write(test_env.kubeconfig_path(), kubeconfig)
-            .await
-            .unwrap();
+        let kubeconfig = serde_yaml::to_string(&kubeconfig).unwrap();
+        let path = temp_kubeconfig();
+        fs::write(path.clone(), kubeconfig).await.unwrap();
 
         let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
 
@@ -126,11 +134,18 @@ mod tests {
               kubeconfig: {}
             ",
             tmp_dir.path().join("collect").to_str().unwrap(),
-            test_env.kubeconfig_path().to_str().unwrap(),
+            path.clone().to_str().unwrap(),
         );
         valid.write_all(valid_config.as_bytes()).unwrap();
 
-        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().await);
+        let cfg = kube::config::Config::from_custom_kubeconfig(
+            test_env.kubeconfig().expect("kubeconfig"),
+            &KubeConfigOptions::default(),
+        )
+        .await
+        .expect("config");
+
+        let pod_api: Api<Pod> = Api::default_namespaced(cfg.try_into().expect("client"));
         timeout(
             Duration::new(10, 0),
             Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
