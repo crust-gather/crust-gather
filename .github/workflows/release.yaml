@@ -153,7 +153,7 @@ jobs:
         uses: actions/setup-go@v5
 
       # Download all artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Run GoReleaser
