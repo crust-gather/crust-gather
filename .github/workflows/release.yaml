@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Git repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Linux & Windows
       - name: Install rust toolchain
@@ -76,7 +76,7 @@ jobs:
 
     steps:
       - name: Checkout Git repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Linux & Windows
       - name: Install rust toolchain
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Git repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate tag consistency with crate version
         run: |
