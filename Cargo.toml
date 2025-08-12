@@ -10,7 +10,7 @@ tokio = { version = "1.47.1", features = ["full"] }
 serde_yaml = "0.9.28"
 serde = { version = "1.0.219", features = ["derive"] }
 clap = { version = "4.5.43", features = ["derive"] }
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 async-trait = "0.1.88"
 tar = { version = "0.4.44", optional = true }
 flate2 = { version = "1.1.2", optional = true }
