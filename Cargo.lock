@@ -835,9 +835,9 @@ dependencies = [
 
 [[package]]
 name = "duration-string"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04782251e09dc67c90d694d89e9a3e5fc6cfe883df1b203202de672d812fb299"
+checksum = "edbd404ab304f4426de3e981a875a77129597ce04202c9b8b4502c6f1c246809"
 dependencies = [
  "serde",
 ]
