@@ -222,8 +222,8 @@ detect_arch() {
   arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
 
   case "${arch}" in
-    amd64) arch="amd64" ;;
-    arm64) arch="arm64" ;;
+    x86_64|amd64)  arch="x86_64" ;;
+    arm64|aarch64) arch="aarch64" ;;
   esac
 
   printf '%s' "${arch}"
