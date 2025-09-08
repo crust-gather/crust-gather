@@ -37,7 +37,7 @@ jobs:
           override: true
           target: x86_64-unknown-linux-gnu
           components: rustfmt, clippy
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24'
           check-latest: true
@@ -150,7 +150,7 @@ jobs:
 
       # Goreleaser
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
 
       # Download all artifacts
       - uses: actions/download-artifact@v5
