@@ -43,7 +43,7 @@ archive = ["dep:tar", "dep:flate2", "dep:zip"]
 xid = "1.1.1"
 tempdir = "0.3.7"
 serial_test = "3.2.0"
-serde_with = "3.14.0"
+serde_with = "3.14.1"
 envtest = { git = "https://github.com/Danil-Grigorev/envtest", rev = "18eb36f209da" }
 
 [profile.release]
