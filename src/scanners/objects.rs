@@ -100,6 +100,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     fn resource(&self) -> ApiResource {
         self.resource.clone()
     }
+
 }
 
 #[cfg(test)]
@@ -188,6 +189,7 @@ mod test {
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
                 Default::default(),
+                Default::default(),
             ),
             ApiResource::erase::<Pod>(&()),
         )
@@ -221,6 +223,7 @@ mod test {
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
                 Default::default(),
+                Default::default(),
             ),
             ApiResource::erase::<Namespace>(&()),
         );
@@ -250,6 +253,7 @@ mod test {
                 GatherMode::Collect,
                 Default::default(),
                 "1m".to_string().try_into().unwrap(),
+                Default::default(),
                 Default::default(),
             ),
             ApiResource::erase::<Pod>(&()),
