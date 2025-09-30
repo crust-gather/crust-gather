@@ -587,6 +587,7 @@ mod tests {
             mode: GatherMode::Collect,
             duration: "10s".to_string().try_into().unwrap(),
             additional_logs: Default::default(),
+            systemd_units: Default::default(),
         };
 
         // Gzip archive is failing due to timeout.
@@ -619,6 +620,7 @@ mod tests {
             mode: GatherMode::Collect,
             secrets: Default::default(),
             additional_logs: Default::default(),
+            systemd_units: Default::default(),
         };
 
         let result = config.collect().await;

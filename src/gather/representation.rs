@@ -356,7 +356,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let log_group = LogGroup::Kubelet;
+        let log_group = LogGroup::Kubelet(String::from("kubelet"));
 
         let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
 
