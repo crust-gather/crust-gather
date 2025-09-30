@@ -107,7 +107,7 @@ impl From<UserLog> for CustomLog {
 pub enum LogGroup {
     Current(Container),
     Previous(Container),
-    Kubelet,
+    Kubelet(String),
     KubeletLegacy,
     Custom(CustomLog),
 }
@@ -117,7 +117,7 @@ impl fmt::Display for LogGroup {
         match self {
             Self::Current(container) => write!(formatter, "{container:?}/current.log"),
             Self::Previous(container) => write!(formatter, "{container:?}/previous.log"),
-            Self::Kubelet => write!(formatter, "kubelet.log"),
+            Self::Kubelet(systemd_unit) => write!(formatter, "{systemd_unit}.log"),
             Self::KubeletLegacy => write!(formatter, "kubelet-log-path.log"),
             Self::Custom(CustomLog { path, .. }) => write!(formatter, "{path}"),
         }
@@ -183,7 +183,7 @@ impl ArchivePath {
                 LogGroup::Previous(Container(container)) => {
                     ArchivePath::Logs(path.with_extension("").join(container).join("previous.log"))
                 }
-                LogGroup::Kubelet => ArchivePath::Logs(path.with_extension("").join("kubelet.log")),
+                LogGroup::Kubelet(systemd_unit) => ArchivePath::Logs(path.with_extension("").join(format!("{systemd_unit}.log"))),
                 LogGroup::KubeletLegacy => {
                     ArchivePath::Logs(path.with_extension("").join("kubelet-log-path.log"))
                 }

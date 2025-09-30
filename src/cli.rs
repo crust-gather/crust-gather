@@ -260,6 +260,11 @@ impl GatherSettings {
             },
             secrets_file: other.secrets_file.or(self.secrets_file.clone()),
             duration: other.duration.or(self.duration),
+            systemd_units: if other.systemd_units.is_empty() {
+                self.systemd_units.clone()
+            } else {
+                other.systemd_units
+            },
         }
     }
 }
@@ -344,6 +349,17 @@ pub struct GatherSettings {
         value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
     #[serde(default)]
     duration: Option<RunDuration>,
+
+    /// Name of the kubelet systemd unit.
+    ///
+    /// Defaults to kubelet.
+    ///
+    /// Example:
+    ///     --systemd-unit=rke2-server
+    ///     --systemd-unit=rke2-agent
+    #[arg(long = "systemd-unit", value_name = "SYSTEMD_UNIT", default_value = "kubelet", action = ArgAction::Append )]
+    #[serde(default)]
+    systemd_units: Vec<String>,
 }
 
 impl GatherSettings {
@@ -587,6 +603,7 @@ impl GatherCommands {
                 .map(Into::into)
                 .collect(),
             self.settings.duration.unwrap_or_default(),
+            self.settings.systemd_units.clone(),
         ))
     }
 

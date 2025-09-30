@@ -44,6 +44,7 @@ pub enum DebugPodError {
 #[derive(Clone)]
 pub struct Nodes {
     pub collectable: Objects<Node>,
+    systemd_units: Vec<String>,
 }
 
 impl Debug for Nodes {
@@ -55,6 +56,7 @@ impl Debug for Nodes {
 impl From<Config> for Nodes {
     fn from(value: Config) -> Self {
         Self {
+            systemd_units: value.systemd_units.clone(),
             collectable: Objects::new_typed(value),
         }
     }
@@ -139,17 +141,7 @@ impl Nodes {
             }
         }
 
-        let representations = vec![
-            self.get_representation(
-                pod_name.as_str(),
-                vec![
-                    "sh",
-                    "-c",
-                    "chroot /host /bin/sh <<\"EOT\"\njournalctl -u kubelet\n\"EOT\"",
-                ],
-                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::Kubelet),
-            )
-            .await?,
+        let mut representations = vec![
             self.get_representation(
                 pod_name.as_str(),
                 vec!["sh", "-c", "cat /host/var/log/kubelet.log"],
@@ -157,6 +149,19 @@ impl Nodes {
             )
             .await?,
         ];
+
+        for systemd_unit in self.systemd_units.iter() {
+            representations.push(self.get_representation(
+                pod_name.as_str(),
+                vec![
+                    "sh",
+                    "-c",
+                    &format!("chroot /host /bin/sh <<\"EOT\"\njournalctl -u {systemd_unit}\n\"EOT\""),
+                ],
+                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::Kubelet(systemd_unit.clone())),
+            )
+            .await?);
+        }
 
         api.delete(&pod_name, &DeleteParams::default().grace_period(0))
             .await?;
