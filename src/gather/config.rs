@@ -332,6 +332,7 @@ pub struct Config {
     pub mode: GatherMode,
     pub additional_logs: Vec<CustomLog>,
     duration: RunDuration,
+    pub systemd_units: Vec<String>,
 }
 
 impl Config {
@@ -343,6 +344,7 @@ impl Config {
         mode: GatherMode,
         additional_logs: Vec<CustomLog>,
         duration: RunDuration,
+        systemd_units: Vec<String>,
     ) -> Self {
         Self {
             client,
@@ -352,6 +354,7 @@ impl Config {
             mode,
             additional_logs,
             writer: writer.into(),
+            systemd_units,
         }
     }
 
@@ -584,6 +587,7 @@ mod tests {
             mode: GatherMode::Collect,
             duration: "10s".to_string().try_into().unwrap(),
             additional_logs: Default::default(),
+            systemd_units: Default::default(),
         };
 
         // Gzip archive is failing due to timeout.
@@ -616,6 +620,7 @@ mod tests {
             mode: GatherMode::Collect,
             secrets: Default::default(),
             additional_logs: Default::default(),
+            systemd_units: Default::default(),
         };
 
         let result = config.collect().await;
@@ -645,6 +650,7 @@ mod tests {
             mode: GatherMode::Collect,
             secrets: Default::default(),
             additional_logs: Default::default(),
+            systemd_units: Default::default(),
         };
 
         let result = config.collect().await;

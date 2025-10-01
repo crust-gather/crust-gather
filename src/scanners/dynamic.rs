@@ -169,6 +169,7 @@ mod test {
                     GatherMode::Collect,
                     Default::default(),
                     "1m".to_string().try_into().unwrap(),
+                    Default::default(),
                 ),
                 ApiResource::erase::<Pod>(&()),
             ),
