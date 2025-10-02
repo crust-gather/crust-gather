@@ -155,7 +155,7 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::config::KubeConfigOptions;
+    use kube::config::{KubeConfigOptions, Kubeconfig};
     use kube::core::params::PostParams;
     use kube::Api;
     use serial_test::serial;
@@ -182,15 +182,10 @@ mod test {
     #[serial]
     async fn collect_logs() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<Pod> = Api::default_namespaced(cfg.clone().try_into().expect("client"));
+        let pod_api: Api<Pod> = Api::default_namespaced(config.clone().try_into().expect("client"));
 
         let pod = timeout(
             Duration::new(10, 0),
@@ -224,7 +219,7 @@ mod test {
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
             collectable: Objects::new_typed(Config::new(
-                cfg.clone().try_into().expect("client"),
+                config.try_into().expect("client"),
                 FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                 Writer::new(&Archive::new(file_path), &Encoding::Path)
                     .expect("failed to create builder"),

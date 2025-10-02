@@ -138,9 +138,7 @@ impl KubeconfigFile {
             false => self.into(),
         };
 
-        Ok(Client::try_from(
-            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
-        )?)
+        Ok(kubeconfig.try_into()?)
     }
 
     /// Creates a new Kubernetes client from the inferred config.
@@ -150,9 +148,7 @@ impl KubeconfigFile {
             false => Kubeconfig::read()?,
         };
 
-        Ok(Client::try_from(
-            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?,
-        )?)
+        Ok(kubeconfig.try_into()?)
     }
 
     fn insecure(config: kube::config::Kubeconfig) -> kube::config::Kubeconfig {
@@ -568,17 +564,13 @@ mod tests {
     #[serial]
     async fn test_gzip_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .unwrap();
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let client: Client = config.try_into().unwrap();
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let f = NamespaceInclude::try_from("default".to_string()).unwrap();
         let config = Config {
-            client: cfg.try_into().expect("client"),
+            client: client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
                 .expect("failed to create builder")
@@ -601,17 +593,13 @@ mod tests {
     #[serial]
     async fn test_zip_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .unwrap();
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let client: Client = config.try_into().unwrap();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
         let config = Config {
-            client: cfg.try_into().expect("client"),
+            client: client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
                 .expect("failed to create builder")
@@ -631,17 +619,13 @@ mod tests {
     #[serial]
     async fn test_path_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let client: Client = config.try_into().unwrap();
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let config = Config {
-            client: cfg.try_into().expect("client"),
+            client: client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
                 .expect("failed to create builder")

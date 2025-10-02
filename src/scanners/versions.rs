@@ -138,14 +138,10 @@ mod tests {
         );
         valid.write_all(valid_config.as_bytes()).unwrap();
 
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
+        let client = config.try_into().expect("client");
 
-        let pod_api: Api<Pod> = Api::default_namespaced(cfg.try_into().expect("client"));
+        let pod_api: Api<Pod> = Api::default_namespaced(client);
         timeout(
             Duration::new(10, 0),
             Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {

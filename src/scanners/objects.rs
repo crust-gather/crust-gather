@@ -109,7 +109,7 @@ mod test {
         api::core::v1::{Namespace, Pod},
         serde_json,
     };
-    use kube::Api;
+    use kube::{config::Kubeconfig, Api, Client};
     use kube::{
         config::KubeConfigOptions,
         core::{params::PostParams, ApiResource, DynamicObject},
@@ -138,16 +138,12 @@ mod test {
     #[serial]
     async fn collect_pod() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
+        let client: Client = config.try_into().expect("client");
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<Pod> = Api::default_namespaced(cfg.clone().try_into().expect("client"));
+        let pod_api: Api<Pod> = Api::default_namespaced(client.clone());
         timeout(
             Duration::new(10, 0),
             Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
@@ -177,13 +173,13 @@ mod test {
         .unwrap();
 
         let api: Api<DynamicObject> = Api::default_namespaced_with(
-            cfg.clone().try_into().expect("client"),
+            client.clone(),
             &ApiResource::erase::<Pod>(&()),
         );
         let pod = api.get("test").await.unwrap();
         let repr = Objects::new(
             Config::new(
-                cfg.clone().try_into().expect("client"),
+                client,
                 FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
@@ -209,18 +205,14 @@ mod test {
     #[serial]
     async fn test_path_cluster_scoped() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
+        let client = config.try_into().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
         let collectable = Objects::new(
             Config::new(
-                cfg.clone().try_into().expect("client"),
+                client,
                 FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),
@@ -243,18 +235,14 @@ mod test {
     #[serial]
     async fn test_path_namespaced() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
+        let client = config.try_into().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Objects::new(
             Config::new(
-                cfg.clone().try_into().expect("client"),
+                client,
                 FilterGroup(vec![FilterList(vec![])]),
                 Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
                     .expect("failed to create builder"),

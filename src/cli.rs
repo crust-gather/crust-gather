@@ -876,13 +876,7 @@ mod tests {
     async fn test_collect_from_config_map() {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            config.clone(),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .unwrap();
-        let client = Client::try_from(cfg).unwrap();
+        let client: Client = config.clone().try_into().unwrap();
 
         let valid_config = r"
             filters:
@@ -948,13 +942,7 @@ mod tests {
             .create()
             .expect("cluster one");
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            config.clone(),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .unwrap();
-        let client = Client::try_from(cfg).unwrap();
+        let client: Client = config.clone().try_into().unwrap();
 
         let other_env = envtest::Environment::default()
             .create()
@@ -1112,13 +1100,7 @@ mod tests {
             .create()
             .expect("cluster one");
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            config.clone(),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .unwrap();
-        let client = Client::try_from(cfg).unwrap();
+        let client: Client = config.clone().try_into().unwrap();
 
         let other_env = envtest::Environment::default()
             .create()
