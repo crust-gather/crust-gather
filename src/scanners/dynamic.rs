@@ -81,8 +81,9 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::config::KubeConfigOptions;
+    use kube::config::{KubeConfigOptions, Kubeconfig};
     use kube::core::{params::PostParams, ApiResource};
+    use kube::Client;
     use serde::Deserialize;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -117,14 +118,9 @@ mod test {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let cfg = kube::config::Config::from_custom_kubeconfig(
-            test_env.kubeconfig().expect("kubeconfig"),
-            &KubeConfigOptions::default(),
-        )
-        .await
-        .expect("config");
+        let config: Kubeconfig = test_env.kubeconfig().unwrap();
         let api: Api<DynamicObject> = Api::default_namespaced_with(
-            cfg.clone().try_into().expect("client"),
+            config.clone().try_into().expect("client"),
             &ApiResource::erase::<Pod>(&()),
         );
 
@@ -161,7 +157,7 @@ mod test {
         let dynamic = Dynamic {
             collectable: Objects::new(
                 Config::new(
-                    cfg.try_into().expect("client"),
+                    config.try_into().expect("client"),
                     FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
                     Writer::new(&Archive::new(file_path), &Encoding::Path)
                         .expect("failed to create builder"),

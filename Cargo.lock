@@ -870,8 +870,9 @@ dependencies = [
 
 [[package]]
 name = "envtest"
-version = "0.1.0"
-source = "git+https://github.com/Danil-Grigorev/envtest?rev=18eb36f209da#18eb36f209da66179533c1a203a6d53e9ee19835"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8716f09166d28a4e95ce3a84a6a21288a32b8399596de141b932dce97b79e4e"
 dependencies = [
  "rust2go",
  "serde",
