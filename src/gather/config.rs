@@ -11,7 +11,7 @@ use duration_string::DurationString;
 use futures::future::join_all;
 use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
 use kube::api::ListParams;
-use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::config::Kubeconfig;
 use kube::core::discovery::verbs::{LIST, WATCH};
 use kube::core::ApiResource;
 use kube::{discovery, Api, Client, ResourceExt};
