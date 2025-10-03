@@ -1,4 +1,5 @@
 use std::{
+    sync::{Arc},
     cell::{Cell, LazyCell, RefCell},
     collections::{BTreeMap, HashMap},
     fs::File,
@@ -17,10 +18,10 @@ use k8s_openapi::{
         CustomResourceDefinitionVersion,
     },
     chrono::{DateTime, Utc},
-    serde_json::{self, json},
+    serde_json::{self, json, Value},
 };
 use kube::{
-    api::{PartialObjectMetaExt as _, WatchEvent},
+    api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent},
     core::{DynamicObject, Resource, TypeMeta},
     ResourceExt,
 };
@@ -103,44 +104,6 @@ impl Get {
     pub fn get_server(&self) -> &str {
         &self.server
     }
-
-    pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(self, self.to_type_meta())
-    }
-
-    pub fn get_logs_path(&self, log: &Log) -> ArchivePath {
-        ArchivePath::new_logs(
-            self,
-            self.to_type_meta(),
-            match log.previous {
-                Some(true) => LogGroup::Previous(log.container.clone()),
-                _ => LogGroup::Current(log.container.clone()),
-            },
-        )
-    }
-
-    pub fn get_singular_kind(&self) -> String {
-        if let Some(stripped) = self.kind.strip_suffix("ies") {
-            format!("{stripped}y")
-        } else {
-            self.kind.trim_end_matches('s').to_string()
-        }
-    }
-}
-
-impl TypeMetaGetter for Get {
-    fn to_type_meta(&self) -> TypeMeta {
-        match self.group.clone() {
-            Some(group) => TypeMeta {
-                api_version: format!("{}/{}", group, self.version),
-                kind: self.get_singular_kind(),
-            },
-            None => TypeMeta {
-                api_version: self.version.clone(),
-                kind: self.get_singular_kind(),
-            },
-        }
-    }
 }
 
 impl NamespacedName for &Get {
@@ -172,52 +135,6 @@ impl List {
     pub fn get_server(&self) -> &str {
         &self.server
     }
-
-    pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(self, self.to_type_meta())
-    }
-
-    pub fn get_crd_path(&self) -> Option<ArchivePath> {
-        self.group.clone().map(|group| {
-            ArchivePath::new_path(
-                NamespaceName::new(Some(format!("{}.{}", self.kind, group)), None),
-                TypeMeta::resource::<CustomResourceDefinition>(),
-            )
-        })
-    }
-
-    pub fn get_singular_kind(&self) -> String {
-        if let Some(stripped) = self.kind.strip_suffix("ies") {
-            format!("{stripped}y")
-        } else {
-            self.kind.trim_end_matches('s').to_string()
-        }
-    }
-}
-
-impl TypeMetaGetter for List {
-    fn to_type_meta(&self) -> TypeMeta {
-        match self.group.clone() {
-            Some(group) => TypeMeta {
-                api_version: format!("{}/{}", group, self.version),
-                kind: self.get_singular_kind(),
-            },
-            None => TypeMeta {
-                api_version: self.version.clone(),
-                kind: self.get_singular_kind(),
-            },
-        }
-    }
-}
-
-impl NamespacedName for &List {
-    fn name(&self) -> Option<String> {
-        None
-    }
-
-    fn namespace(&self) -> Option<String> {
-        self.namespace.clone()
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -228,14 +145,11 @@ pub struct ObjectValueList {
 }
 
 impl ObjectValueList {
-    pub fn new(list: List, items: Vec<DynamicObject>) -> Self {
-        // Doing best effort to convert arbitrary object list to a typed list.
-        // Works best for core types, generating SecretList instead of just List.
-        let mut kind = list.get_singular_kind();
+    pub fn new(list: NamedObject, items: Vec<DynamicObject>) -> Self {
         Self {
             type_meta: TypeMeta {
-                kind: format!("{}{kind}List", kind.remove(0).to_uppercase(),),
-                api_version: "v1".to_string(),
+                kind: list.named_resource.list_kind.clone(),
+                api_version: list.to_type_meta().api_version,
             },
             items,
         }
@@ -279,7 +193,7 @@ impl TablePath {
 }
 
 impl Table {
-    fn new(crd_path: PathBuf, list: List, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
+    fn new(crd_path: PathBuf, list: NamedObject, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
         let mut data = vec![];
 
         data.extend(Table::table_entries(crd_path, list)?);
@@ -290,14 +204,14 @@ impl Table {
         Ok(Self(data, items?))
     }
 
-    fn table_entries(crd_path: PathBuf, list: List) -> anyhow::Result<Vec<TablePath>> {
+    fn table_entries(crd_path: PathBuf, list: NamedObject) -> anyhow::Result<Vec<TablePath>> {
         let crd: CustomResourceDefinition = match crd_path.is_file() {
             true => serde_yaml::from_reader(File::open(crd_path)?)?,
-            false => match PREDEFINED_TABLES.get(&list.kind.clone()) {
+            false => match PREDEFINED_TABLES.get(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
                     spec: CustomResourceDefinitionSpec {
                         versions: vec![CustomResourceDefinitionVersion {
-                            name: list.version.clone(),
+                            name: list.named_resource.version.clone(),
                             additional_printer_columns: Some(columns.clone()),
                             ..Default::default()
                         }],
@@ -313,7 +227,7 @@ impl Table {
             .spec
             .versions
             .iter()
-            .find(|crd| crd.name == list.version);
+            .find(|crd| crd.name == list.named_resource.version);
 
         let table_entries = crd_version
             .map(|version| version.additional_printer_columns.clone())
@@ -321,7 +235,7 @@ impl Table {
             .map(|columns| columns.iter().map(TablePath::new).collect())
             .unwrap_or_default();
 
-        Ok(match PREDEFINED_TABLES.get(&list.kind.clone()) {
+        Ok(match PREDEFINED_TABLES.get(&list.named_resource.resource) {
             Some(_) => table_entries,
             None => {
                 let mut data = vec![TablePath {
@@ -426,7 +340,7 @@ trait GatherObject: ResourceExt + Sized + Serialize {
     fn table_watch_event(
         &self,
         crd_path: PathBuf,
-        list: List,
+        list: NamedObject,
     ) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::to_value(self.event()(
             Table::new(crd_path, list, vec![&self])?.to_value()?,
@@ -436,16 +350,234 @@ trait GatherObject: ResourceExt + Sized + Serialize {
 
 impl<T: Resource + Serialize> GatherObject for T {}
 
+
+// resource is the plural lowercase version of the resource name (exposed to the k8s api)         : configmaps
+// singular is the singular lowercase version of the resource name (used to get retrieve data)    : configmap
+// kind is the PascalCase version of the resource name (not used)                                 : ConfigMap
+// list_kind is the PascalCase version of the resource name + List                                : ConfigMapList
+#[derive(Clone, Debug)]
+struct NamedResource {
+    group: Option<String>,
+    version: String,
+    resource: String,
+    singular: String,
+    list_kind: String,
+}
+
+impl Into<NamedResource> for GroupVersionResource {
+    fn into(self) -> NamedResource {
+        // Doing best effort to convert arbitrary object plural to singular.
+        let singular = if let Some(stripped) = self.resource.strip_suffix("uses") {
+            format!("{stripped}us")
+        } else if let Some(stripped) = self.resource.strip_suffix("sses") {
+            format!("{stripped}ss")
+        } else if let Some(stripped) = self.resource.strip_suffix("ies") {
+            format!("{stripped}y")
+        } else {
+            self.resource.trim_end_matches('s').to_string()
+        };
+
+        // Doing best effort to convert arbitrary object list to a typed list.
+        // Works best for core types, generating SecretList instead of just List.
+        let mut kind = singular.clone();
+        let list_kind = format!("{}{kind}List", kind.remove(0).to_uppercase(),);
+
+        NamedResource {
+            group: if &self.group == "" { None } else { Some(self.group) },
+            version: self.version,
+            resource: self.resource,
+            singular,
+            list_kind,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NamedObject {
+    named_resource: NamedResource,
+    namespace: Option<String>,
+    name: Option<String>,
+}
+
+impl NamedObject
+{
+    pub fn get_path(&self) -> ArchivePath {
+        ArchivePath::new_path(self, self.to_type_meta())
+    }
+
+    pub fn get_crd_path(&self) -> Option<ArchivePath> {
+
+        self.named_resource.group.as_ref().map(|group| {
+            ArchivePath::new_path(
+                NamespaceName::new(Some(format!("{}.{}", self.named_resource.resource, group)), None),
+                TypeMeta::resource::<CustomResourceDefinition>(),
+            )
+        })
+    }
+
+    pub fn get_logs_path(&self, log: &Log) -> ArchivePath {
+        ArchivePath::new_logs(
+            self,
+            self.to_type_meta(),
+            match log.previous {
+                Some(true) => LogGroup::Previous(log.container.clone()),
+                _ => LogGroup::Current(log.container.clone()),
+            },
+        )
+    }
+}
+
+impl TypeMetaGetter for NamedObject {
+    fn to_type_meta(&self) -> TypeMeta {
+        match &self.named_resource.group {
+            Some(group) => TypeMeta {
+                api_version: format!("{}/{}", group, self.named_resource.version),
+                kind: self.named_resource.singular.clone(),
+            },
+            None => TypeMeta {
+                api_version: self.named_resource.version.clone(),
+                kind: self.named_resource.singular.clone(),
+            },
+        }
+    }
+}
+
+impl NamespacedName for &NamedObject {
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct ArchiveReader {
+    archive: Archive,
+    named_resources: Arc<HashMap<GroupVersionResource, NamedResource>>,
+}
+
+impl From<Archive> for ArchiveReader {
+    fn from(archive: Archive) -> Self {
+        ArchiveReader::new(archive)
+    }
+}
+
+impl ArchiveReader {
+    fn new(archive: Archive) -> Self {
+
+        let mut named_resources = match Self::parse_named_resources(archive.join(ArchivePath::Custom("apis.json".into()))) {
+            Ok(named_resources) => named_resources,
+            Err(e) => {
+                tracing::error!("Fail parsing apis.json : {e:?}");
+                HashMap::new()
+            }
+        };
+
+        match Self::parse_named_resources(archive.join(ArchivePath::Custom("api.json".into()))) {
+            Ok(nrs) => named_resources.extend(nrs),
+            Err(e) => {
+                tracing::error!("Fail parsing api.json : {e:?}");
+            }
+        };
+
+        Self {
+            archive,
+            named_resources: Arc::new(named_resources),
+        }
+    }
+
+    fn parse_named_resources(path: PathBuf) -> anyhow::Result<HashMap<GroupVersionResource, NamedResource>> {
+
+        let api_group_discovery_list: Value = match path.is_file() {
+            true => serde_yaml::from_reader(File::open(path)?)?,
+            false => bail!("File {path:?} not found"),
+        };
+
+        let mut named_resources = HashMap::new();
+
+        if let Some(items) = api_group_discovery_list.get("items").and_then(|v| v.as_array()) {
+            for group in items {
+
+                let g = group["metadata"]["name"].as_str().map(|v| v.to_string());
+
+                if let Some(versions) = group.get("versions").and_then(|v| v.as_array()) {
+
+                    for version in versions {
+
+                        let v = version["version"].as_str().ok_or(anyhow::anyhow!("version not found"))?.to_string();
+
+                        if let Some(resources) = version.get("resources").and_then(|v| v.as_array()) {
+
+                            for res in resources {
+                                let kind = res["responseKind"]["kind"].as_str().ok_or(anyhow::anyhow!("kind not found"))?.to_string();
+                                let singular = res["singularResource"].as_str().ok_or(anyhow::anyhow!("singular not found"))?.to_string();
+                                let resource = res["resource"].as_str().ok_or(anyhow::anyhow!("singular not found"))?.to_string();
+
+                                tracing::debug!("{resource}{}/{v} : {singular} - {kind}List", g.as_ref().map(|g| format!(".{g}")).unwrap_or_default());
+
+                                named_resources.insert(GroupVersionResource::gvr(&g.clone().unwrap_or_default(), &v, &resource), NamedResource {
+                                    group: g.clone(),
+                                    version: v.clone(),
+                                    list_kind: format!("{kind}List"),
+                                    resource,
+                                    singular,
+                                });
+
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(named_resources)
+    }
+
+    pub fn join(&self, path: ArchivePath) -> PathBuf {
+        self.archive.join(path)
+    }
+
+    pub fn named_object_from_list(&self, list: List) -> NamedObject {
+
+        let gvr = GroupVersionResource::gvr(&list.group.clone().unwrap_or_default(), &list.version, &list.kind);
+        let named_resource = self.named_resources
+            .get(&gvr).map(|n| n.clone())
+            .unwrap_or(gvr.into());
+
+        NamedObject {
+            named_resource,
+            namespace: list.namespace,
+            name: None,
+        }
+    }
+
+    pub fn named_object_from_get(&self, get: Get) -> NamedObject {
+
+        let gvr = GroupVersionResource::gvr(&get.group.clone().unwrap_or_default(), &get.version, &get.kind);
+        let named_resource = self.named_resources
+            .get(&gvr).map(|n| n.clone())
+            .unwrap_or(gvr.into());
+
+        NamedObject {
+            named_resource,
+            namespace: get.namespace,
+            name: Some(get.name),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Reader {
-    archive: Archive,
+    pub archive: ArchiveReader,
     diff: Duration,
     objects_state: RefCell<HashMap<PathBuf, DynamicObject>>,
     next_patch_time: Cell<Duration>,
 }
 
 impl Reader {
-    pub fn new(archive: Archive, beginning: DateTime<Utc>) -> anyhow::Result<Self> {
+    pub fn new(archive: ArchiveReader, beginning: DateTime<Utc>) -> anyhow::Result<Self> {
         let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp")?);
         let path = archive.join(path);
         Ok(Self {
@@ -464,7 +596,7 @@ impl Reader {
     }
 
     // Load a table representation for the object
-    pub fn load_table(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
+    pub fn load_table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<serde_json::Value> {
         self.table(list, selector)?.to_value()
     }
 
@@ -477,7 +609,7 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
-    fn table(&self, list: List, selector: Selector) -> anyhow::Result<Table> {
+    fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
         tracing::trace!("Reading table...");
 
         Table::new(
@@ -493,7 +625,7 @@ impl Reader {
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
     pub fn watch_table_events(
         &self,
-        list: List,
+        list: NamedObject,
         selector: Selector,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         tracing::trace!("Watching table...");
@@ -515,7 +647,7 @@ impl Reader {
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
     pub fn watch_events(
         &self,
-        list: List,
+        list: NamedObject,
         selector: Selector,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         tracing::trace!("Watching list...");
@@ -604,7 +736,7 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(path = get.get_path().to_string()))]
-    pub fn load(&self, get: Get) -> anyhow::Result<serde_json::Value> {
+    pub fn load(&self, get: NamedObject) -> anyhow::Result<serde_json::Value> {
         tracing::debug!("Reading file...");
 
         let obj: DynamicObject = self.read(self.archive.join(get.get_path()))?;
@@ -616,7 +748,7 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
-    pub fn list(&self, list: List, selector: Selector) -> anyhow::Result<serde_json::Value> {
+    pub fn list(&self, list: NamedObject, selector: Selector) -> anyhow::Result<serde_json::Value> {
         tracing::trace!("Reading list...");
 
         let path = self.archive.join(list.get_path());
@@ -723,12 +855,16 @@ mod tests {
 
     #[test]
     fn table_columns() {
-        let list = List {
-            server: "foo".to_string(),
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: Some("my-group".to_string()),
+                version: "v1".to_string(),
+                resource: "my-kinds".to_string(),
+                singular: "my-kind".to_string(),
+                list_kind: "my-kindList".to_string(),
+            },
             namespace: Some("my-namespace".to_string()),
-            group: Some("my-group".to_string()),
-            version: "v1".to_string(),
-            kind: "my-kind".to_string(),
+            name: None,
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
@@ -747,12 +883,16 @@ mod tests {
 
     #[test]
     fn table_columns_known_kind() {
-        let list = List {
-            server: "foo".to_string(),
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: Some("my-group".to_string()),
+                version: "v1".to_string(),
+                resource: "my-kinds".to_string(),
+                singular: "type".to_string(),
+                list_kind: "TypeList".to_string(),
+            },
             namespace: Some("my-namespace".to_string()),
-            group: Some("my-group".to_string()),
-            version: "v1".to_string(),
-            kind: "type".to_string(), // name contained in PREDEFINED_TABLES
+            name: None,
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
