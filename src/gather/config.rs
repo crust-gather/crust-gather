@@ -11,7 +11,7 @@ use duration_string::DurationString;
 use futures::future::join_all;
 use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
 use kube::api::ListParams;
-use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::config::Kubeconfig;
 use kube::core::discovery::verbs::{LIST, WATCH};
 use kube::core::ApiResource;
 use kube::{discovery, Api, Client, ResourceExt};
@@ -20,6 +20,7 @@ use serde::Deserialize;
 use tokio::time::timeout;
 use tracing::instrument;
 
+use crate::cli::DebugPod;
 use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
 use crate::scanners::events::Events;
@@ -329,6 +330,7 @@ pub struct Config {
     pub additional_logs: Vec<CustomLog>,
     duration: RunDuration,
     pub systemd_units: Vec<String>,
+    pub debug_pod: DebugPod,
 }
 
 impl Config {
@@ -341,6 +343,7 @@ impl Config {
         additional_logs: Vec<CustomLog>,
         duration: RunDuration,
         systemd_units: Vec<String>,
+        debug_pod: DebugPod,
     ) -> Self {
         Self {
             client,
@@ -351,6 +354,7 @@ impl Config {
             additional_logs,
             writer: writer.into(),
             systemd_units,
+            debug_pod,
         }
     }
 
@@ -580,6 +584,7 @@ mod tests {
             duration: "10s".to_string().try_into().unwrap(),
             additional_logs: Default::default(),
             systemd_units: Default::default(),
+            debug_pod: Default::default(),
         };
 
         // Gzip archive is failing due to timeout.
@@ -609,6 +614,7 @@ mod tests {
             secrets: Default::default(),
             additional_logs: Default::default(),
             systemd_units: Default::default(),
+            debug_pod: Default::default(),
         };
 
         let result = config.collect().await;
@@ -635,6 +641,7 @@ mod tests {
             secrets: Default::default(),
             additional_logs: Default::default(),
             systemd_units: Default::default(),
+            debug_pod: Default::default(),
         };
 
         let result = config.collect().await;

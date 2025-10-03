@@ -265,6 +265,7 @@ impl GatherSettings {
             } else {
                 other.systemd_units
             },
+            debug_pod: self.debug_pod.merge(other.debug_pod),
         }
     }
 }
@@ -360,6 +361,11 @@ pub struct GatherSettings {
     #[arg(long = "systemd-unit", value_name = "SYSTEMD_UNIT", default_value = "kubelet", action = ArgAction::Append )]
     #[serde(default)]
     systemd_units: Vec<String>,
+
+    /// Collect settings to configure the pod which collect logs on nodes.
+    #[command(flatten)]
+    #[serde(default)]
+    debug_pod: DebugPod,
 }
 
 impl GatherSettings {
@@ -396,6 +402,27 @@ impl GatherSettings {
                     .await
             }
             None => KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await,
+        }
+    }
+}
+
+#[derive(Parser, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebugPod {
+    /// The image to use to collect logs on nodes.
+    /// Defaults to busybox.
+    ///
+    /// Example:
+    ///     --debug-pod-image=busybox:1.37.0
+    #[arg(long("debug-pod-image"), value_name = "IMAGE")]
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
+impl DebugPod {
+    fn merge(&self, other: Self) -> Self {
+        Self {
+            image: other.image.or(self.image.clone())
         }
     }
 }
@@ -604,6 +631,7 @@ impl GatherCommands {
                 .collect(),
             self.settings.duration.unwrap_or_default(),
             self.settings.systemd_units.clone(),
+            self.settings.debug_pod.clone(),
         ))
     }
 
@@ -1179,6 +1207,9 @@ mod tests {
         - include_namespace:
             - default
             - kube-system
+        settings:
+          debug_pod:
+            image: busybox:1.37.0
         ";
         valid.write_all(valid_config.as_bytes()).unwrap();
 

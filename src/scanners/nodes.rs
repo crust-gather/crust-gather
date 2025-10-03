@@ -20,10 +20,13 @@ use kube::{
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::gather::{
-    config::{Config, Secrets},
-    representation::{ArchivePath, LogGroup, Representation},
-    writer::Writer,
+use crate::{
+    cli::DebugPod,
+    gather::{
+        config::{Config, Secrets},
+        representation::{ArchivePath, LogGroup, Representation},
+        writer::Writer,
+    }
 };
 
 use super::{
@@ -45,6 +48,7 @@ pub enum DebugPodError {
 pub struct Nodes {
     pub collectable: Objects<Node>,
     systemd_units: Vec<String>,
+    pub debug_pod: DebugPod,
 }
 
 impl Debug for Nodes {
@@ -57,6 +61,7 @@ impl From<Config> for Nodes {
     fn from(value: Config) -> Self {
         Self {
             systemd_units: value.systemd_units.clone(),
+            debug_pod: value.debug_pod.clone(),
             collectable: Objects::new_typed(value),
         }
     }
@@ -82,7 +87,7 @@ impl Collect<Node> for Nodes {
         tracing::info!("Collecting node logs");
 
         let node_name = node.name_any();
-        let pod = Self::get_template_pod("node-debug".into(), node_name);
+        let pod = Self::get_template_pod(&self.debug_pod, "node-debug".into(), node_name);
         let pod_name = pod.name_any();
         self.get_or_create(pod).await?;
 
@@ -199,7 +204,7 @@ impl Nodes {
         }
     }
 
-    pub fn get_template_pod(log_path: String, node_name: String) -> Pod {
+    pub fn get_template_pod(debug_pod: &DebugPod, log_path: String, node_name: String) -> Pod {
         Pod {
             metadata: ObjectMeta {
                 name: Some(format!("{log_path}-{node_name}")),
@@ -228,7 +233,7 @@ impl Nodes {
                     name: "debug".into(),
                     stdin: Some(true),
                     tty: Some(true),
-                    image: Some("busybox".into()),
+                    image: debug_pod.image.clone().or(Some("busybox".into())),
                     image_pull_policy: Some("IfNotPresent".into()),
                     volume_mounts: Some(vec![VolumeMount {
                         name: "host-root".into(),

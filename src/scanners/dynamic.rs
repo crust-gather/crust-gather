@@ -166,6 +166,7 @@ mod test {
                     Default::default(),
                     "1m".to_string().try_into().unwrap(),
                     Default::default(),
+                    Default::default(),
                 ),
                 ApiResource::erase::<Pod>(&()),
             ),

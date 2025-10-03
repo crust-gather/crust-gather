@@ -19,6 +19,7 @@ use kube::{
 use tracing::instrument;
 
 use crate::{
+    cli::DebugPod,
     gather::{
         config::{Config, Secrets},
         representation::{ArchivePath, CustomLog, LogGroup, Representation},
@@ -37,6 +38,7 @@ use super::{
 pub struct UserLogs {
     pub collectable: Objects<Node>,
     pub logs: Vec<CustomLog>,
+    pub debug_pod: DebugPod,
 }
 
 impl Debug for UserLogs {
@@ -49,6 +51,7 @@ impl From<Config> for UserLogs {
     fn from(value: Config) -> Self {
         Self {
             logs: value.additional_logs.clone(),
+            debug_pod: value.debug_pod.clone(),
             collectable: Objects::new_typed(value),
         }
     }
@@ -77,7 +80,7 @@ impl Collect<Node> for UserLogs {
 
         let mut pods = vec![];
         for log in self.logs.deref() {
-            let pod = Nodes::get_template_pod(log.path.clone(), node_name.clone());
+            let pod = Nodes::get_template_pod(&self.debug_pod, log.path.clone(), node_name.clone());
             pods.push(pod.clone());
             self.get_or_create(pod).await?;
         }
