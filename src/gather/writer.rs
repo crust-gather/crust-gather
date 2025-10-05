@@ -252,7 +252,7 @@ impl Writer {
                 let file_path = archive.0.join(archive_path);
 
                 // generate diff and write
-                let original = Reader::new(archive.clone(), Utc::now())?.read(file_path.clone())?;
+                let original = Reader::new(archive.clone().into(), Utc::now())?.read(file_path.clone())?;
                 let updated = serde_yaml::from_str(repr.data())?;
                 let patch = &diff(&original, &updated);
                 if !patch.deref().is_empty() {

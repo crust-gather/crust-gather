@@ -23,7 +23,7 @@ use serde::Deserialize;
 use tokio::time::{Instant, sleep};
 
 use crate::gather::{
-    reader::{Destination, Get, List, Log, Reader, Watch},
+    reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
     writer::Archive,
 };
 
@@ -93,7 +93,7 @@ pub struct Api {
 
 #[derive(Clone)]
 struct ApiState {
-    archives: HashMap<String, Archive>,
+    archives: HashMap<String, ArchiveReader>,
     kubeconfig_path: PathBuf,
     previous_context: Option<String>,
     serve_time: DateTime<Utc>,
@@ -130,7 +130,7 @@ impl Api {
 
         let mut readers = HashMap::new();
         for archive in archives {
-            readers.insert(archive.name().to_string_lossy().to_string(), archive);
+            readers.insert(archive.name().to_string_lossy().to_string(), archive.into());
         }
 
         Ok(Self {
@@ -373,25 +373,26 @@ fn list_items(
         .get(list.get_server())
         .ok_or(anyhow::anyhow!("Server not found"))?;
     let reader = Reader::new(archive.clone(), state.serve_time)?;
+    let list = archive.named_object_from_list(list.clone());
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            reader.load_table(list.clone(), query.0)?
+            reader.load_table(list, query.0)?
         }
-        _ => reader.list(list.clone(), query.0)?,
+        _ => reader.list(list, query.0)?,
     })
 }
 
 fn watch_events(
     accept: Header<Accept>,
-    list: List,
+    list: NamedObject,
     query: Query<Selector>,
     reader: &Reader,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            reader.watch_table_events(list.clone(), query.0)?
+            reader.watch_table_events(list, query.0)?
         }
-        _ => reader.watch_events(list.clone(), query.0)?,
+        _ => reader.watch_events(list, query.0)?,
     })
 }
 
@@ -422,6 +423,7 @@ fn watch_response(
         .ok_or(anyhow::anyhow!("Server not found"))
         .map_err(error::ErrorNotFound)?;
     let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
+    let list = archive.named_object_from_list(list.clone());
     let mut refresh = Instant::now();
     let s = stream! {
         loop {
@@ -494,6 +496,7 @@ async fn logs_get(
         .ok_or(anyhow::anyhow!("Server not found"))
         .map_err(error::ErrorNotFound)?;
     let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
+    let get = archive.named_object_from_get(get.clone());
     reader
         .load_raw(get.get_logs_path(query.deref()))
         .map_err(error::ErrorNotFound)
@@ -505,5 +508,6 @@ fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<serde_
         .get(get.get_server())
         .ok_or(anyhow::anyhow!("Server not found"))?;
     let reader = Reader::new(archive.clone(), state.serve_time)?;
-    reader.load(get.clone())
+    let get = archive.named_object_from_get(get.clone());
+    reader.load(get)
 }
