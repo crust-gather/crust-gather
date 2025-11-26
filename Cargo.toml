@@ -33,7 +33,7 @@ json-patch = "4.1.0"
 jsonptr = "0.7.1"
 async-stream = "0.3.6"
 thiserror = "2.0.17"
-tracing = "0.1.41"
+tracing = "0.1.42"
 tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
 
 [features]
