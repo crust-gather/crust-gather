@@ -22,7 +22,7 @@ tokio-retry = "0.3.0"
 duration-string = { version = "0.5.3", features = ["serde"] }
 tokio-util = "0.7.17"
 trait-set = "0.3.0"
-actix-web = "4.11.0"
+actix-web = "4.12.1"
 glob = "0.3.3"
 http = "1.4.0"
 serde_json_path = "0.7.2"
