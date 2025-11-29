@@ -422,7 +422,7 @@ pub struct DebugPod {
 impl DebugPod {
     fn merge(&self, other: Self) -> Self {
         Self {
-            image: other.image.or(self.image.clone())
+            image: other.image.or(self.image.clone()),
         }
     }
 }
@@ -682,7 +682,7 @@ mod tests {
 
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
     use k8s_openapi::serde_json;
-    use kube::config::KubeConfigOptions;
+
     use kube::core::{ObjectMeta, params::ListParams};
     use kube::{Api, api::PostParams};
     use serial_test::serial;

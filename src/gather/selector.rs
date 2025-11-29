@@ -195,7 +195,7 @@ mod tests {
 
     use crate::gather::selector::ParseError;
 
-    use super::{parse_expression, parse_value_list, ParsedExpression};
+    use super::{ParsedExpression, parse_expression, parse_value_list};
 
     #[test]
     fn values_lexer() {

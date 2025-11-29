@@ -83,7 +83,7 @@ impl From<Vec<KindExclude>> for FilterType {
 #[cfg(test)]
 mod tests {
 
-    use k8s_openapi::{api::core::v1::Pod, Resource};
+    use k8s_openapi::{Resource, api::core::v1::Pod};
     use kube::core::{ApiResource, DynamicObject, TypeMeta};
 
     use super::*;

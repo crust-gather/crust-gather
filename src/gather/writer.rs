@@ -1,10 +1,10 @@
-#[cfg(feature = "archive")]
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 
 use json_patch::diff;
 use k8s_openapi::{chrono::Utc, serde_json};
 use serde::Deserialize;
 use std::{
+    borrow::Cow,
     ffi::OsStr,
     fmt::Display,
     fs::{DirBuilder, File},
@@ -13,12 +13,10 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-#[cfg(feature = "archive")]
 use tar::{Builder, Header};
 use tracing::instrument;
 use walkdir::WalkDir;
-#[cfg(feature = "archive")]
-use zip::{write::SimpleFileOptions, ZipWriter};
+use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
 use crate::gather::reader::Reader;
 
@@ -142,18 +140,14 @@ impl From<&str> for Archive {
 pub enum Encoding {
     #[default]
     Path,
-    #[cfg(feature = "archive")]
     Gzip,
-    #[cfg(feature = "archive")]
     Zip,
 }
 
 impl From<&str> for Encoding {
     fn from(value: &str) -> Self {
         match value {
-            #[cfg(feature = "archive")]
             "zip" => Self::Zip,
-            #[cfg(feature = "archive")]
             "gzip" => Self::Gzip,
             _ => Self::Path,
         }
@@ -165,10 +159,8 @@ impl From<&str> for Encoding {
 /// Zip uses the zip compression format.
 pub enum Writer {
     Path(Archive),
-    #[cfg(feature = "archive")]
-    Gzip(Archive, Builder<GzEncoder<File>>),
-    #[cfg(feature = "archive")]
-    Zip(Archive, ZipWriter<File>),
+    Gzip(Archive, Box<Builder<GzEncoder<File>>>),
+    Zip(Archive, Box<ZipWriter<File>>),
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -182,11 +174,9 @@ impl Writer {
     pub fn finish(self) -> anyhow::Result<()> {
         match self {
             Self::Path(_) => (),
-            #[cfg(feature = "archive")]
             Self::Gzip(_, mut builder) => {
                 builder.finish()?;
             }
-            #[cfg(feature = "archive")]
             Self::Zip(_, writer) => {
                 writer.finish()?;
             }
@@ -213,7 +203,6 @@ impl Writer {
                     file.write_all(data.as_bytes())?;
                 }
             }
-            #[cfg(feature = "archive")]
             Self::Gzip(Archive(archive), builder) => {
                 let mut header = Header::new_gnu();
                 header.set_size(data.len() as u64 + 1);
@@ -224,16 +213,25 @@ impl Writer {
                 let file = PathBuf::from(root_prefix).join(archive_path);
                 builder.append_data(&mut header, file, data.as_bytes())?;
             }
-            #[cfg(feature = "archive")]
             Self::Zip(Archive(archive), writer) => {
                 let path = repr.path();
                 let path = path.parent().unwrap().to_str().unwrap();
-                writer.add_directory(path, SimpleFileOptions::default())?;
+                writer
+                    .add_directory(path, SimpleFileOptions::default())
+                    .or_else(|err| match err {
+                        ZipError::InvalidArchive(Cow::Borrowed("Duplicate filename")) => Ok(()),
+                        other => Err(other),
+                    })?;
 
                 let root_prefix = archive.file_stem().unwrap();
                 let file = PathBuf::from(root_prefix).join(archive_path);
                 let file = file.to_str().unwrap();
-                writer.start_file(file, SimpleFileOptions::default())?;
+                writer
+                    .start_file(file, SimpleFileOptions::default())
+                    .or_else(|err| match err {
+                        ZipError::InvalidArchive(Cow::Borrowed("Duplicate filename")) => Ok(()),
+                        other => Err(other),
+                    })?;
                 writer.write_all(data.as_bytes())?;
             }
         }
@@ -252,7 +250,8 @@ impl Writer {
                 let file_path = archive.0.join(archive_path);
 
                 // generate diff and write
-                let original = Reader::new(archive.clone().into(), Utc::now())?.read(file_path.clone())?;
+                let original =
+                    Reader::new(archive.clone().into(), Utc::now())?.read(file_path.clone())?;
                 let updated = serde_yaml::from_str(repr.data())?;
                 let patch = &diff(&original, &updated);
                 if !patch.deref().is_empty() {
@@ -265,11 +264,9 @@ impl Writer {
                 }
                 self.store(repr)?;
             }
-            #[cfg(feature = "archive")]
             Self::Gzip(Archive(_archive), _builder) => {
                 unimplemented!();
             }
-            #[cfg(feature = "archive")]
             Self::Zip(Archive(_archive), _writer) => {
                 unimplemented!();
             }
@@ -288,18 +285,18 @@ impl Writer {
 
         Ok(match encoding {
             Encoding::Path => Self::Path(archive.clone()),
-            #[cfg(feature = "archive")]
             Encoding::Gzip => Self::Gzip(
                 archive.clone(),
-                Builder::new(GzEncoder::new(
+                Box::new(Builder::new(GzEncoder::new(
                     File::create(archive.0.with_extension("tar.gz"))?,
                     Compression::default(),
-                )),
+                ))),
             ),
-            #[cfg(feature = "archive")]
             Encoding::Zip => Self::Zip(
                 archive.clone(),
-                ZipWriter::new(File::create(archive.0.with_extension("zip"))?),
+                Box::new(ZipWriter::new(File::create(
+                    archive.0.with_extension("zip"),
+                )?)),
             ),
         })
     }
@@ -319,7 +316,6 @@ mod tests {
     use super::{Archive, Encoding, Writer};
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_new_gzip() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.tar.gz");
@@ -329,7 +325,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_new_zip() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
@@ -339,7 +334,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_add_gzip() {
         use crate::gather::representation::ArchivePath;
 
@@ -348,7 +342,7 @@ mod tests {
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Gzip).unwrap();
 
         let repr = Representation::new()
-            .with_data("content".into())
+            .with_data("content")
             .with_path(ArchivePath::Custom("test.txt".into()));
 
         assert!(writer.store(&repr).is_ok());
@@ -357,7 +351,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_add_zip() {
         use std::{
             fs::File,
@@ -366,7 +359,9 @@ mod tests {
 
         use crate::gather::representation::ArchivePath;
 
-        unsafe { env::set_var("SECRET", "secret"); }
+        unsafe {
+            env::set_var("SECRET", "secret");
+        }
 
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
@@ -374,7 +369,7 @@ mod tests {
 
         let repr = Representation::new()
             .with_path(ArchivePath::Custom("test.txt".into()))
-            .with_data("content with secret".into());
+            .with_data("content with secret");
 
         let secret: Secrets = vec!["SECRET".into()].into();
         assert!(writer.store(&secret.strip(&repr)).is_ok());
@@ -415,7 +410,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_try_into_nested_file_success() {
         let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
         let tmp_dir = tmp_dir.path();
@@ -431,7 +425,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "archive")]
     fn test_try_into_writer_empty_path() {
         assert!(Writer::new(&Archive::new("".into()), &Encoding::Zip).is_err());
     }

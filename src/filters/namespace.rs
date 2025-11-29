@@ -80,7 +80,9 @@ impl<R: ResourceThreadSafe> Filter<R> for NamespaceExclude {
             (true, _) => None,
             (false, true) => Some(true),
             (false, false) => {
-                tracing::debug!("NamespaceExclude filter excluded object as it is not present in the namespace list");
+                tracing::debug!(
+                    "NamespaceExclude filter excluded object as it is not present in the namespace list"
+                );
                 Some(false)
             }
         }

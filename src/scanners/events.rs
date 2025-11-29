@@ -5,8 +5,8 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::Time,
     chrono::{DateTime, Utc},
 };
-use kube::core::ApiResource;
 use kube::Api;
+use kube::core::ApiResource;
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},

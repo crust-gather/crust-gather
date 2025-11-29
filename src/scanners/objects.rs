@@ -8,8 +8,8 @@ use crate::{
 };
 use async_trait::async_trait;
 
-use kube::core::{ApiResource, GroupVersionKind, Resource};
 use kube::Api;
+use kube::core::{ApiResource, GroupVersionKind, Resource};
 use tracing::instrument;
 
 use std::{
@@ -100,7 +100,6 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     fn resource(&self) -> ApiResource {
         self.resource.clone()
     }
-
 }
 
 #[cfg(test)]
@@ -110,14 +109,11 @@ mod test {
         api::core::v1::{Namespace, Pod},
         serde_json,
     };
-    use kube::{config::Kubeconfig, Api, Client};
-    use kube::{
-        config::KubeConfigOptions,
-        core::{params::PostParams, ApiResource, DynamicObject},
-    };
+    use kube::core::{ApiResource, DynamicObject, params::PostParams};
+    use kube::{Api, Client, config::Kubeconfig};
     use serial_test::serial;
-    use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
+    use tokio_retry::strategy::FixedInterval;
 
     use crate::{
         filters::{
@@ -173,10 +169,8 @@ mod test {
         .expect("Timeout")
         .unwrap();
 
-        let api: Api<DynamicObject> = Api::default_namespaced_with(
-            client.clone(),
-            &ApiResource::erase::<Pod>(&()),
-        );
+        let api: Api<DynamicObject> =
+            Api::default_namespaced_with(client.clone(), &ApiResource::erase::<Pod>(&()));
         let pod = api.get("test").await.unwrap();
         let repr = Objects::new(
             Config::new(

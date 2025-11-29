@@ -183,7 +183,9 @@ impl ArchivePath {
                 LogGroup::Previous(Container(container)) => {
                     ArchivePath::Logs(path.with_extension("").join(container).join("previous.log"))
                 }
-                LogGroup::Kubelet(systemd_unit) => ArchivePath::Logs(path.with_extension("").join(format!("{systemd_unit}.log"))),
+                LogGroup::Kubelet(systemd_unit) => {
+                    ArchivePath::Logs(path.with_extension("").join(format!("{systemd_unit}.log")))
+                }
                 LogGroup::KubeletLegacy => {
                     ArchivePath::Logs(path.with_extension("").join("kubelet-log-path.log"))
                 }

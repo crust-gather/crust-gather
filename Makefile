@@ -14,4 +14,4 @@ update-crate:
 
 .PHONY: test
 test: $(TOOLS_BIN_DIR)
-	cargo t --features archive
+	cargo t

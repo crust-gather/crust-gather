@@ -11,9 +11,9 @@ use kube::Api;
 use kube::{
     api::TypeMeta,
     core::{
+        ApiResource, ResourceExt, WatchEvent,
         params::{DeleteParams, WatchParams},
         subresource::AttachParams,
-        ApiResource, ResourceExt, WatchEvent,
     },
 };
 use tracing::instrument;
