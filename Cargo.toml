@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
 
 [features]
 archive = ["dep:tar", "dep:flate2", "dep:zip"]
+default = ["archive"]
 
 [dev-dependencies]
 xid = "1.1.1"
