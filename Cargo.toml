@@ -14,7 +14,7 @@ anyhow = "1.0.100"
 async-trait = "0.1.89"
 tar = { version = "0.4.44", optional = true }
 flate2 = { version = "1.1.7", optional = true }
-zip = { version = "6.0.0", optional = true }
+zip = { version = "7.0.0", optional = true }
 build_html = "2.7.0"
 regex = "1.12.2"
 futures = "0.3.31"
