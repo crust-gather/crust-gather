@@ -491,7 +491,7 @@ impl Group {
 mod tests {
 
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         filters::filter::FilterList,
@@ -552,7 +552,7 @@ mod tests {
     fn test_strip_secrets_from_file() {
         let data = "omit password string with ip 10.10.10.10".to_string();
 
-        let tmp_dir = TempDir::new("secrets").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("secrets");
         fs::write(file_path.clone(), "password\n10.10.10.10").unwrap();
         let secrets = SecretsFile(file_path);
@@ -568,7 +568,7 @@ mod tests {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
         let client: Client = config.try_into().unwrap();
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let f = NamespaceInclude::try_from("default".to_string()).unwrap();
         let config = Config {
@@ -598,7 +598,7 @@ mod tests {
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
         let client: Client = config.try_into().unwrap();
 
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
         let config = Config {
             client,
@@ -625,7 +625,7 @@ mod tests {
         let config: Kubeconfig = test_env.kubeconfig().unwrap();
         let client: Client = config.try_into().unwrap();
 
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let config = Config {
             client,

@@ -88,7 +88,7 @@ mod test {
 
     use serde::Deserialize;
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tokio::time::timeout;
     use tokio_retry::{Retry, strategy::FixedInterval};
 
@@ -154,7 +154,7 @@ mod test {
         .expect("Timeout")
         .expect("Pod to be created");
 
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let dynamic = Dynamic {
             collectable: Objects::new(

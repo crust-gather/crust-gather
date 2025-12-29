@@ -309,7 +309,7 @@ mod tests {
         fs::{self},
     };
 
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::gather::{config::Secrets, representation::ArchivePath, writer::Representation};
 
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_new_gzip() {
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.tar.gz");
         let result = Writer::new(&Archive::new(archive), &Encoding::Gzip);
 
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_new_zip() {
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
         let result = Writer::new(&Archive::new(archive), &Encoding::Zip);
 
@@ -337,7 +337,7 @@ mod tests {
     fn test_add_gzip() {
         use crate::gather::representation::ArchivePath;
 
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Gzip).unwrap();
 
@@ -363,7 +363,7 @@ mod tests {
             env::set_var("SECRET", "secret");
         }
 
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Zip).unwrap();
 
@@ -392,7 +392,7 @@ mod tests {
     fn test_add_path() {
         unsafe { env::set_var("SECRET", "secret") };
 
-        let tmp_dir = TempDir::new("path").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("cluster1/collected");
         let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Path).unwrap();
 
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_try_into_nested_file_success() {
-        let tmp_dir = TempDir::new("archive").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let tmp_dir = tmp_dir.path();
         let writer = Writer::new(
             &Archive::new(tmp_dir.join("nested/output.zip")),
