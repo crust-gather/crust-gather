@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::scanners::interface::ResourceThreadSafe;
 

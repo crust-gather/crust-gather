@@ -4,21 +4,21 @@ use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt as _};
 use k8s_openapi::chrono::Utc;
 use k8s_openapi::serde_json;
+use kube::Api;
 use kube::api::WatchEvent;
 use kube::core::gvk::ParseGroupVersionError;
 use kube::core::params::ListParams;
 use kube::core::{DynamicObject, ErrorResponse, ResourceExt};
-use kube::Api;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use thiserror::Error;
 use tracing::instrument;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio_retry::strategy::ExponentialBackoff;
 use tokio_retry::Retry;
+use tokio_retry::strategy::ExponentialBackoff;
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
@@ -110,9 +110,11 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             data: serde_json::to_value(object)?,
         };
 
-        Ok(vec![Representation::new()
-            .with_path(self.path(object))
-            .with_data(serde_yaml::to_string(&data)?.as_str())])
+        Ok(vec![
+            Representation::new()
+                .with_path(self.path(object))
+                .with_data(serde_yaml::to_string(&data)?.as_str()),
+        ])
     }
 
     /// Returns the Kubernetes API client for the resource type this scanner handles.

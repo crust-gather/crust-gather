@@ -1,16 +1,17 @@
 use std::{
-    sync::{Arc},
-    cell::{Cell, LazyCell, RefCell},
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
     fs::File,
     io::{self, BufRead as _, Read},
     path::PathBuf,
     str::FromStr,
+    sync::Arc,
+    sync::OnceLock,
     time::Duration,
 };
 
 use anyhow::bail;
-use json_patch::{patch, AddOperation, PatchOperation, ReplaceOperation};
+use json_patch::{AddOperation, PatchOperation, ReplaceOperation, patch};
 use jsonptr::PointerBuf;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
@@ -18,14 +19,14 @@ use k8s_openapi::{
         CustomResourceDefinitionVersion,
     },
     chrono::{DateTime, Utc},
-    serde_json::{self, json, Value},
+    serde_json::{self, Value, json},
 };
 use kube::{
+    ResourceExt,
     api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent},
     core::{DynamicObject, Resource, TypeMeta},
-    ResourceExt,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json_path::JsonPath;
 use tracing::instrument;
 
@@ -43,8 +44,11 @@ const ADDED_PATH: [&str; 3] = ["metadata", "annotations", ADDED_ANNOTATION];
 const UPDATED_PATH: [&str; 3] = ["metadata", "annotations", UPDATED_ANNOTATION];
 const DELETED_PATH: [&str; 3] = ["metadata", "annotations", DELETED_ANNOTATION];
 
-const PREDEFINED_TABLES: LazyCell<BTreeMap<String, Vec<CustomResourceColumnDefinition>>> =
-    LazyCell::new(|| {
+static PREDEFINED_TABLES: OnceLock<BTreeMap<String, Vec<CustomResourceColumnDefinition>>> =
+    OnceLock::new();
+
+fn predefined_tables() -> &'static BTreeMap<String, Vec<CustomResourceColumnDefinition>> {
+    PREDEFINED_TABLES.get_or_init(|| {
         let mut map = BTreeMap::new();
         map.insert(
             "events".into(),
@@ -77,7 +81,8 @@ const PREDEFINED_TABLES: LazyCell<BTreeMap<String, Vec<CustomResourceColumnDefin
             ],
         );
         map
-    });
+    })
+}
 
 #[derive(Deserialize, Clone)]
 pub struct Destination {
@@ -193,7 +198,11 @@ impl TablePath {
 }
 
 impl Table {
-    fn new(crd_path: PathBuf, list: NamedObject, items: Vec<impl Serialize>) -> anyhow::Result<Self> {
+    fn new(
+        crd_path: PathBuf,
+        list: NamedObject,
+        items: Vec<impl Serialize>,
+    ) -> anyhow::Result<Self> {
         let mut data = vec![];
 
         data.extend(Table::table_entries(crd_path, list)?);
@@ -207,7 +216,7 @@ impl Table {
     fn table_entries(crd_path: PathBuf, list: NamedObject) -> anyhow::Result<Vec<TablePath>> {
         let crd: CustomResourceDefinition = match crd_path.is_file() {
             true => serde_yaml::from_reader(File::open(crd_path)?)?,
-            false => match PREDEFINED_TABLES.get(&list.named_resource.resource) {
+            false => match predefined_tables().get(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
                     spec: CustomResourceDefinitionSpec {
                         versions: vec![CustomResourceDefinitionVersion {
@@ -235,21 +244,23 @@ impl Table {
             .map(|columns| columns.iter().map(TablePath::new).collect())
             .unwrap_or_default();
 
-        Ok(match PREDEFINED_TABLES.get(&list.named_resource.resource) {
-            Some(_) => table_entries,
-            None => {
-                let mut data = vec![TablePath {
-                    column: CustomResourceColumnDefinition {
-                        name: "Name".to_string(),
-                        type_: "string".to_string(),
-                        ..Default::default()
-                    },
-                    json_path: JsonPath::parse("$.metadata.name").ok(),
-                }];
-                data.extend(table_entries);
-                data
-            }
-        })
+        Ok(
+            match predefined_tables().get(&list.named_resource.resource) {
+                Some(_) => table_entries,
+                None => {
+                    let mut data = vec![TablePath {
+                        column: CustomResourceColumnDefinition {
+                            name: "Name".to_string(),
+                            type_: "string".to_string(),
+                            ..Default::default()
+                        },
+                        json_path: JsonPath::parse("$.metadata.name").ok(),
+                    }];
+                    data.extend(table_entries);
+                    data
+                }
+            },
+        )
     }
 
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
@@ -350,7 +361,6 @@ trait GatherObject: ResourceExt + Sized + Serialize {
 
 impl<T: Resource + Serialize> GatherObject for T {}
 
-
 // resource is the plural lowercase version of the resource name (exposed to the k8s api)         : configmaps
 // singular is the singular lowercase version of the resource name (used to get retrieve data)    : configmap
 // kind is the PascalCase version of the resource name (not used)                                 : ConfigMap
@@ -364,17 +374,17 @@ struct NamedResource {
     list_kind: String,
 }
 
-impl Into<NamedResource> for GroupVersionResource {
-    fn into(self) -> NamedResource {
+impl From<GroupVersionResource> for NamedResource {
+    fn from(val: GroupVersionResource) -> Self {
         // Doing best effort to convert arbitrary object plural to singular.
-        let singular = if let Some(stripped) = self.resource.strip_suffix("uses") {
+        let singular = if let Some(stripped) = val.resource.strip_suffix("uses") {
             format!("{stripped}us")
-        } else if let Some(stripped) = self.resource.strip_suffix("sses") {
+        } else if let Some(stripped) = val.resource.strip_suffix("sses") {
             format!("{stripped}ss")
-        } else if let Some(stripped) = self.resource.strip_suffix("ies") {
+        } else if let Some(stripped) = val.resource.strip_suffix("ies") {
             format!("{stripped}y")
         } else {
-            self.resource.trim_end_matches('s').to_string()
+            val.resource.trim_end_matches('s').to_string()
         };
 
         // Doing best effort to convert arbitrary object list to a typed list.
@@ -383,9 +393,13 @@ impl Into<NamedResource> for GroupVersionResource {
         let list_kind = format!("{}{kind}List", kind.remove(0).to_uppercase(),);
 
         NamedResource {
-            group: if &self.group == "" { None } else { Some(self.group) },
-            version: self.version,
-            resource: self.resource,
+            group: if val.group.is_empty() {
+                None
+            } else {
+                Some(val.group)
+            },
+            version: val.version,
+            resource: val.resource,
             singular,
             list_kind,
         }
@@ -399,17 +413,18 @@ pub struct NamedObject {
     name: Option<String>,
 }
 
-impl NamedObject
-{
+impl NamedObject {
     pub fn get_path(&self) -> ArchivePath {
         ArchivePath::new_path(self, self.to_type_meta())
     }
 
     pub fn get_crd_path(&self) -> Option<ArchivePath> {
-
         self.named_resource.group.as_ref().map(|group| {
             ArchivePath::new_path(
-                NamespaceName::new(Some(format!("{}.{}", self.named_resource.resource, group)), None),
+                NamespaceName::new(
+                    Some(format!("{}.{}", self.named_resource.resource, group)),
+                    None,
+                ),
                 TypeMeta::resource::<CustomResourceDefinition>(),
             )
         })
@@ -466,8 +481,9 @@ impl From<Archive> for ArchiveReader {
 
 impl ArchiveReader {
     fn new(archive: Archive) -> Self {
-
-        let mut named_resources = match Self::parse_named_resources(archive.join(ArchivePath::Custom("apis.json".into()))) {
+        let mut named_resources = match Self::parse_named_resources(
+            archive.join(ArchivePath::Custom("apis.json".into())),
+        ) {
             Ok(named_resources) => named_resources,
             Err(e) => {
                 tracing::error!("Fail parsing apis.json : {e:?}");
@@ -488,8 +504,9 @@ impl ArchiveReader {
         }
     }
 
-    fn parse_named_resources(path: PathBuf) -> anyhow::Result<HashMap<GroupVersionResource, NamedResource>> {
-
+    fn parse_named_resources(
+        path: PathBuf,
+    ) -> anyhow::Result<HashMap<GroupVersionResource, NamedResource>> {
         let api_group_discovery_list: Value = match path.is_file() {
             true => serde_yaml::from_reader(File::open(path)?)?,
             false => bail!("File {path:?} not found"),
@@ -497,34 +514,55 @@ impl ArchiveReader {
 
         let mut named_resources = HashMap::new();
 
-        if let Some(items) = api_group_discovery_list.get("items").and_then(|v| v.as_array()) {
+        if let Some(items) = api_group_discovery_list
+            .get("items")
+            .and_then(|v| v.as_array())
+        {
             for group in items {
-
                 let g = group["metadata"]["name"].as_str().map(|v| v.to_string());
 
                 if let Some(versions) = group.get("versions").and_then(|v| v.as_array()) {
-
                     for version in versions {
+                        let v = version["version"]
+                            .as_str()
+                            .ok_or(anyhow::anyhow!("version not found"))?
+                            .to_string();
 
-                        let v = version["version"].as_str().ok_or(anyhow::anyhow!("version not found"))?.to_string();
-
-                        if let Some(resources) = version.get("resources").and_then(|v| v.as_array()) {
-
+                        if let Some(resources) = version.get("resources").and_then(|v| v.as_array())
+                        {
                             for res in resources {
-                                let kind = res["responseKind"]["kind"].as_str().ok_or(anyhow::anyhow!("kind not found"))?.to_string();
-                                let singular = res["singularResource"].as_str().ok_or(anyhow::anyhow!("singular not found"))?.to_string();
-                                let resource = res["resource"].as_str().ok_or(anyhow::anyhow!("singular not found"))?.to_string();
+                                let kind = res["responseKind"]["kind"]
+                                    .as_str()
+                                    .ok_or(anyhow::anyhow!("kind not found"))?
+                                    .to_string();
+                                let singular = res["singularResource"]
+                                    .as_str()
+                                    .ok_or(anyhow::anyhow!("singular not found"))?
+                                    .to_string();
+                                let resource = res["resource"]
+                                    .as_str()
+                                    .ok_or(anyhow::anyhow!("singular not found"))?
+                                    .to_string();
 
-                                tracing::debug!("{resource}{}/{v} : {singular} - {kind}List", g.as_ref().map(|g| format!(".{g}")).unwrap_or_default());
+                                tracing::debug!(
+                                    "{resource}{}/{v} : {singular} - {kind}List",
+                                    g.as_ref().map(|g| format!(".{g}")).unwrap_or_default()
+                                );
 
-                                named_resources.insert(GroupVersionResource::gvr(&g.clone().unwrap_or_default(), &v, &resource), NamedResource {
-                                    group: g.clone(),
-                                    version: v.clone(),
-                                    list_kind: format!("{kind}List"),
-                                    resource,
-                                    singular,
-                                });
-
+                                named_resources.insert(
+                                    GroupVersionResource::gvr(
+                                        &g.clone().unwrap_or_default(),
+                                        &v,
+                                        &resource,
+                                    ),
+                                    NamedResource {
+                                        group: g.clone(),
+                                        version: v.clone(),
+                                        list_kind: format!("{kind}List"),
+                                        resource,
+                                        singular,
+                                    },
+                                );
                             }
                         }
                     }
@@ -540,10 +578,15 @@ impl ArchiveReader {
     }
 
     pub fn named_object_from_list(&self, list: List) -> NamedObject {
-
-        let gvr = GroupVersionResource::gvr(&list.group.clone().unwrap_or_default(), &list.version, &list.kind);
-        let named_resource = self.named_resources
-            .get(&gvr).map(|n| n.clone())
+        let gvr = GroupVersionResource::gvr(
+            &list.group.clone().unwrap_or_default(),
+            &list.version,
+            &list.kind,
+        );
+        let named_resource = self
+            .named_resources
+            .get(&gvr)
+            .cloned()
             .unwrap_or(gvr.into());
 
         NamedObject {
@@ -554,10 +597,15 @@ impl ArchiveReader {
     }
 
     pub fn named_object_from_get(&self, get: Get) -> NamedObject {
-
-        let gvr = GroupVersionResource::gvr(&get.group.clone().unwrap_or_default(), &get.version, &get.kind);
-        let named_resource = self.named_resources
-            .get(&gvr).map(|n| n.clone())
+        let gvr = GroupVersionResource::gvr(
+            &get.group.clone().unwrap_or_default(),
+            &get.version,
+            &get.kind,
+        );
+        let named_resource = self
+            .named_resources
+            .get(&gvr)
+            .cloned()
             .unwrap_or(gvr.into());
 
         NamedObject {
@@ -596,7 +644,11 @@ impl Reader {
     }
 
     // Load a table representation for the object
-    pub fn load_table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<serde_json::Value> {
+    pub fn load_table(
+        &self,
+        list: NamedObject,
+        selector: Selector,
+    ) -> anyhow::Result<serde_json::Value> {
         self.table(list, selector)?.to_value()
     }
 

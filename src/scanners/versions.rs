@@ -96,15 +96,11 @@ mod tests {
     use std::{env, fs::File, io::Write, path::PathBuf, time::Duration};
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::{
-        api::PostParams,
-        config::{KubeConfigOptions, Kubeconfig},
-        Api,
-    };
+    use kube::{Api, api::PostParams, config::Kubeconfig};
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::{fs, time::timeout};
-    use tokio_retry::{strategy::FixedInterval, Retry};
+    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::cli::GatherCommands;
 
@@ -183,11 +179,13 @@ mod tests {
         let config = commands.load().await.unwrap();
 
         config.collect().await.unwrap();
-        assert!(tmp_dir
-            .path()
-            .join("collect")
-            .join("app-versions.yaml")
-            .is_file());
+        assert!(
+            tmp_dir
+                .path()
+                .join("collect")
+                .join("app-versions.yaml")
+                .is_file()
+        );
         assert_eq!(
             fs::read_to_string(tmp_dir.path().join("collect").join("app-versions.yaml"))
                 .await

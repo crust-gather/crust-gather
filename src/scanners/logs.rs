@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::{
     api::TypeMeta,
-    core::{subresource::LogParams, ApiResource, ErrorResponse, ResourceExt},
+    core::{ApiResource, ErrorResponse, ResourceExt, subresource::LogParams},
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -155,13 +155,13 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::config::{KubeConfigOptions, Kubeconfig};
-    use kube::core::params::PostParams;
     use kube::Api;
+    use kube::config::Kubeconfig;
+    use kube::core::params::PostParams;
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::time::timeout;
-    use tokio_retry::{strategy::FixedInterval, Retry};
+    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::gather::config::GatherMode;
     use crate::{

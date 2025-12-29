@@ -12,9 +12,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 clap = { version = "4.5.53", features = ["derive"] }
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-tar = { version = "0.4.44", optional = true }
-flate2 = { version = "1.1.7", optional = true }
-zip = { version = "7.0.0", optional = true }
+tar = { version = "0.4.44"}
+flate2 = { version = "1.1.5"}
+zip = { version = "7.0.0"}
 build_html = "2.7.0"
 regex = "1.12.2"
 futures = "0.3.31"
@@ -35,9 +35,7 @@ async-stream = "0.3.6"
 thiserror = "2.0.17"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["fmt", "env-filter"] }
-
-[features]
-archive = ["dep:tar", "dep:flate2", "dep:zip"]
+home = "=0.5.11"
 
 [dev-dependencies]
 xid = "1.1.1"

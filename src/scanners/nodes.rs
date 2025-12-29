@@ -12,9 +12,9 @@ use kube::Api;
 use kube::{
     api::TypeMeta,
     core::{
+        ApiResource, ObjectMeta, ResourceExt, WatchEvent,
         params::{DeleteParams, WatchParams},
         subresource::AttachParams,
-        ApiResource, ObjectMeta, ResourceExt, WatchEvent,
     },
 };
 use thiserror::Error;
@@ -26,7 +26,7 @@ use crate::{
         config::{Config, Secrets},
         representation::{ArchivePath, LogGroup, Representation},
         writer::Writer,
-    }
+    },
 };
 
 use super::{
@@ -156,16 +156,24 @@ impl Nodes {
         ];
 
         for systemd_unit in self.systemd_units.iter() {
-            representations.push(self.get_representation(
-                pod_name.as_str(),
-                vec![
-                    "sh",
-                    "-c",
-                    &format!("chroot /host /bin/sh <<\"EOT\"\njournalctl -u {systemd_unit}\n\"EOT\""),
-                ],
-                ArchivePath::logs_path(node, TypeMeta::resource::<Node>(), LogGroup::Kubelet(systemd_unit.clone())),
-            )
-            .await?);
+            representations.push(
+                self.get_representation(
+                    pod_name.as_str(),
+                    vec![
+                        "sh",
+                        "-c",
+                        &format!(
+                            "chroot /host /bin/sh <<\"EOT\"\njournalctl -u {systemd_unit}\n\"EOT\""
+                        ),
+                    ],
+                    ArchivePath::logs_path(
+                        node,
+                        TypeMeta::resource::<Node>(),
+                        LogGroup::Kubelet(systemd_unit.clone()),
+                    ),
+                )
+                .await?,
+            );
         }
 
         api.delete(&pod_name, &DeleteParams::default().grace_period(0))

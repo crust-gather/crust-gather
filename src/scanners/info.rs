@@ -6,8 +6,8 @@ use std::{
 use async_trait::async_trait;
 use http::Request;
 use k8s_openapi::{api::core::v1::Node, chrono::Utc};
-use kube::core::ApiResource;
 use kube::Api;
+use kube::core::ApiResource;
 use tracing::instrument;
 
 use crate::gather::{

@@ -4,8 +4,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kube::core::{ApiResource, DynamicObject, ResourceExt};
 use kube::Api;
+use kube::core::{ApiResource, DynamicObject, ResourceExt};
 use tracing::instrument;
 
 use crate::gather::{
@@ -57,12 +57,14 @@ impl Collect<DynamicObject> for Dynamic {
     async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         tracing::debug!("Collecting representations");
 
-        Ok(vec![Representation::new()
-            .with_path(self.path(object))
-            .with_data(&serde_yaml::to_string(&DynamicObject {
-                types: Some(self.resource().to_type_meta()),
-                ..object.clone()
-            })?)])
+        Ok(vec![
+            Representation::new()
+                .with_path(self.path(object))
+                .with_data(&serde_yaml::to_string(&DynamicObject {
+                    types: Some(self.resource().to_type_meta()),
+                    ..object.clone()
+                })?),
+        ])
     }
 
     fn get_api(&self) -> Api<DynamicObject> {
@@ -81,14 +83,14 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::config::{KubeConfigOptions, Kubeconfig};
-    use kube::core::{params::PostParams, ApiResource};
-    use kube::Client;
+    use kube::config::Kubeconfig;
+    use kube::core::{ApiResource, params::PostParams};
+
     use serde::Deserialize;
     use serial_test::serial;
     use tempdir::TempDir;
     use tokio::time::timeout;
-    use tokio_retry::{strategy::FixedInterval, Retry};
+    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::gather::config::GatherMode;
     use crate::{

@@ -8,9 +8,9 @@ on:
 
 env:
   # Define the rust version to use
-  RUST_VERSION: 1.85.1
+  RUST_VERSION: 1.86.0
   # Rust build arguments
-  BUILD_ARGS: "--release --features=archive"
+  BUILD_ARGS: "--release"
   # The binary name
   BIN_NAME: "kubectl-crust-gather"
 
