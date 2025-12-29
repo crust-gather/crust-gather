@@ -686,7 +686,7 @@ mod tests {
     use kube::core::{ObjectMeta, params::ListParams};
     use kube::{Api, api::PostParams};
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tokio::fs;
 
     use super::*;
@@ -811,7 +811,7 @@ mod tests {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config = test_env.kubeconfig().unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let commands = GatherCommands {
             settings: GatherSettings {
@@ -851,7 +851,7 @@ mod tests {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config = test_env.kubeconfig().unwrap();
 
-        let tmp_dir = TempDir::new("config").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let config_path = tmp_dir.path().join("valid.yaml");
         let mut valid = File::create(config_path.clone()).unwrap();
@@ -862,7 +862,7 @@ mod tests {
             ";
         valid.write_all(valid_config.as_bytes()).unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let config_path = config_path.to_str();
         let commands = Commands::CollectFromConfig {
@@ -927,7 +927,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let commands = Commands::CollectFromConfig {
             source: ConfigSource {
@@ -1020,7 +1020,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let commands = Commands::CollectFromConfig {
             source: ConfigSource {
@@ -1156,7 +1156,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let commands = Commands::Collect {
             config: GatherCommands {
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let tmp_dir = TempDir::new("config").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let mut valid = File::create(tmp_dir.path().join("valid.yaml")).unwrap();
         let valid_config = r"

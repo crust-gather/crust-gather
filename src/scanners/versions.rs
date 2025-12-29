@@ -98,7 +98,7 @@ mod tests {
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::{Api, api::PostParams, config::Kubeconfig};
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tokio::{fs, time::timeout};
     use tokio_retry::{Retry, strategy::FixedInterval};
 
@@ -120,7 +120,7 @@ mod tests {
         let path = temp_kubeconfig();
         fs::write(path.clone(), kubeconfig).await.unwrap();
 
-        let tmp_dir = TempDir::new("collect").expect("failed to create temp dir");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
 
         let mut valid = File::create(tmp_dir.path().join("valid.yaml")).unwrap();
         let valid_config = format!(
