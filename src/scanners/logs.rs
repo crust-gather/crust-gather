@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::{
     api::TypeMeta,
-    core::{ApiResource, ErrorResponse, ResourceExt, subresource::LogParams},
+    core::{ApiResource, ResourceExt, subresource::LogParams},
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -115,7 +115,7 @@ impl Collect<Pod> for Logs {
             {
                 Ok(logs) => Ok(logs),
                 // If a 400 error occurs, returns the current representations, as that indicates no logs exist.
-                Err(kube::Error::Api(ErrorResponse { code: 400, .. })) => {
+                Err(kube::Error::Api(status)) if status.code == 400 => {
                     tracing::info!("No logs found");
                     return Ok(representations);
                 }

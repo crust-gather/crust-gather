@@ -1,7 +1,8 @@
 use flate2::{Compression, write::GzEncoder};
 
+use chrono::Utc;
 use json_patch::diff;
-use k8s_openapi::{chrono::Utc, serde_json};
+use k8s_openapi::serde_json;
 use serde::Deserialize;
 use std::{
     borrow::Cow,
