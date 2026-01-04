@@ -1,4 +1,7 @@
-use std::fs::File;
+use std::{
+    fs::File,
+    sync::Arc,
+};
 
 use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand, arg, command};
@@ -616,23 +619,26 @@ impl GatherCommands {
 
         secrets.0.extend(env_secrets.0.into_iter());
 
-        Ok(Config::new(
-            self.client().await?,
-            self.into(),
-            (&self.settings).try_into()?,
+        let writer: Writer = (&self.settings).try_into()?;
+
+        Ok(Config {
+            client: self.client().await?,
+            filter: Arc::new(self.into()),
+            writer: writer.into(),
             secrets,
-            self.mode.clone(),
-            self.additional_logs
+            mode: self.mode.clone(),
+            additional_logs: self
+                .additional_logs
                 .logs
                 .clone()
                 .into_iter()
                 .chain(self.additional_logs.additional_logs.clone().into_iter())
                 .map(Into::into)
                 .collect(),
-            self.settings.duration.unwrap_or_default(),
-            self.settings.systemd_units.clone(),
-            self.settings.debug_pod.clone(),
-        ))
+            duration: self.settings.duration.unwrap_or_default(),
+            systemd_units: self.settings.systemd_units.clone(),
+            debug_pod: self.settings.debug_pod.clone(),
+        })
     }
 
     async fn client(&self) -> anyhow::Result<Client> {
