@@ -1,7 +1,7 @@
 use flate2::{Compression, write::GzEncoder};
 
 use json_patch::diff;
-use k8s_openapi::{chrono::Utc, serde_json};
+use k8s_openapi::{jiff::Zoned, serde_json};
 use serde::Deserialize;
 use std::{
     borrow::Cow,
@@ -250,8 +250,8 @@ impl Writer {
                 let file_path = archive.0.join(archive_path);
 
                 // generate diff and write
-                let original =
-                    Reader::new(archive.clone().into(), Utc::now())?.read(file_path.clone())?;
+                let original = Reader::new(archive.clone().into(), Zoned::now().datetime())?
+                    .read(file_path.clone())?;
                 let updated = serde_yaml::from_str(repr.data())?;
                 let patch = &diff(&original, &updated);
                 if !patch.deref().is_empty() {

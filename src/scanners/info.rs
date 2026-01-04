@@ -5,9 +5,9 @@ use std::{
 
 use async_trait::async_trait;
 use http::Request;
-use k8s_openapi::{api::core::v1::Node, chrono::Utc};
-use kube::Api;
+use k8s_openapi::{api::core::v1::Node, jiff::Zoned};
 use kube::core::ApiResource;
+use kube::{Api, core::discovery::v2};
 use tracing::instrument;
 
 use crate::gather::{
@@ -57,10 +57,7 @@ impl Collect<Node> for Info {
             .request_text(
                 Request::builder()
                     .uri("/api")
-                    .header(
-                        "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
-                    )
+                    .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
                     .body(vec![])?,
             )
             .await?;
@@ -68,15 +65,12 @@ impl Collect<Node> for Info {
             .request_text(
                 Request::builder()
                     .uri("/apis")
-                    .header(
-                        "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
-                    )
+                    .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
                     .body(vec![])?,
             )
             .await?;
 
-        let stamp = Utc::now().to_string();
+        let stamp = Zoned::now().datetime().to_string();
         let reprs = vec![
             Representation::new()
                 .with_path(ArchivePath::Custom("version.yaml".into()))
