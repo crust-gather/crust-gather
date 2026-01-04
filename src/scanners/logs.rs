@@ -152,6 +152,7 @@ impl Collect<Pod> for Logs {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
@@ -218,18 +219,19 @@ mod test {
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
-            collectable: Objects::new_typed(Config::new(
-                config.try_into().expect("client"),
-                FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
-                Writer::new(&Archive::new(file_path), &Encoding::Path)
-                    .expect("failed to create builder"),
-                Default::default(),
-                GatherMode::Collect,
-                Default::default(),
-                "1m".to_string().try_into().unwrap(),
-                Default::default(),
-                Default::default(),
-            )),
+            collectable: Objects::new_typed(Config {
+                client: config.try_into().expect("client"),
+                filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
+                writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                secrets: Default::default(),
+                mode: GatherMode::Collect,
+                additional_logs: Default::default(),
+                duration: "1m".to_string().try_into().unwrap(),
+                systemd_units: Default::default(),
+                debug_pod: Default::default(),
+            }),
             group: LogSelection::Current,
         }
         .representations(&pod)

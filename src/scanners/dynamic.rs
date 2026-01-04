@@ -158,18 +158,19 @@ mod test {
         let file_path = tmp_dir.path().join("crust-gather-test");
         let dynamic = Dynamic {
             collectable: Objects::new(
-                Config::new(
-                    config.try_into().expect("client"),
-                    FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
-                    Writer::new(&Archive::new(file_path), &Encoding::Path)
-                        .expect("failed to create builder"),
-                    Default::default(),
-                    GatherMode::Collect,
-                    Default::default(),
-                    "1m".to_string().try_into().unwrap(),
-                    Default::default(),
-                    Default::default(),
-                ),
+                Config {
+                    client: config.try_into().expect("client"),
+                    filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
+                    writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
+                        .expect("failed to create builder")
+                        .into(),
+                    secrets: Default::default(),
+                    mode: GatherMode::Collect,
+                    additional_logs: Default::default(),
+                    duration: "1m".to_string().try_into().unwrap(),
+                    systemd_units: Default::default(),
+                    debug_pod: Default::default(),
+                },
                 ApiResource::erase::<Pod>(&()),
             ),
         };
