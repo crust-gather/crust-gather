@@ -337,7 +337,20 @@ impl Config {
     /// Collect representations for resources from discovery to the specified archive file.
     #[instrument(skip_all, err)]
     pub async fn collect(&self) -> anyhow::Result<()> {
-        let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
+        let discovery = match discovery::Discovery::new(self.client.clone())
+            .run_aggregated()
+            .await
+        {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "Aggregated discovery failed, falling back to standard discovery"
+                );
+                discovery::Discovery::new(self.client.clone()).run().await?
+            }
+        };
+
         let mode = match self.mode {
             GatherMode::Collect => LIST,
             GatherMode::Record => WATCH,

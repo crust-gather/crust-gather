@@ -278,7 +278,7 @@ async fn api(
         .customize()
         .insert_header((
             CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
+            "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList",
         )))
 }
 
@@ -298,7 +298,7 @@ async fn apis(
         .customize()
         .insert_header((
             CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
+            "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList",
         )))
 }
 
