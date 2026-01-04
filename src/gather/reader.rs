@@ -19,12 +19,10 @@ use k8s_openapi::{
         CustomResourceDefinitionVersion,
     },
     chrono::{DateTime, Utc},
-    serde_json::{self, Value, json},
+    serde_json::{self, json},
 };
 use kube::{
-    ResourceExt,
-    api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent},
-    core::{DynamicObject, Resource, TypeMeta},
+    ResourceExt, api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent}, client::APIGroupDiscoveryList, core::{DynamicObject, Resource, TypeMeta}
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json_path::JsonPath;
@@ -507,65 +505,53 @@ impl ArchiveReader {
     fn parse_named_resources(
         path: PathBuf,
     ) -> anyhow::Result<HashMap<GroupVersionResource, NamedResource>> {
-        let api_group_discovery_list: Value = match path.is_file() {
-            true => serde_yaml::from_reader(File::open(path)?)?,
-            false => bail!("File {path:?} not found"),
-        };
+        let api_group_discovery_list: APIGroupDiscoveryList =
+            match path.is_file() {
+                true => serde_yaml::from_reader(File::open(path)?)?,
+                false => bail!("File {path:?} not found"),
+            };
 
         let mut named_resources = HashMap::new();
 
-        if let Some(items) = api_group_discovery_list
-            .get("items")
-            .and_then(|v| v.as_array())
-        {
-            for group in items {
-                let g = group["metadata"]["name"].as_str().map(|v| v.to_string());
+        for group in api_group_discovery_list.items {
+            let g = group.metadata.map(|m| m.name.unwrap_or_default());
 
-                if let Some(versions) = group.get("versions").and_then(|v| v.as_array()) {
-                    for version in versions {
-                        let v = version["version"]
-                            .as_str()
-                            .ok_or(anyhow::anyhow!("version not found"))?
-                            .to_string();
+            for version in group.versions {
+                let v = version
+                    .version
+                    .ok_or(anyhow::anyhow!("version not found"))?
+                    .to_string();
 
-                        if let Some(resources) = version.get("resources").and_then(|v| v.as_array())
-                        {
-                            for res in resources {
-                                let kind = res["responseKind"]["kind"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("kind not found"))?
-                                    .to_string();
-                                let singular = res["singularResource"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("singular not found"))?
-                                    .to_string();
-                                let resource = res["resource"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("singular not found"))?
-                                    .to_string();
+                for res in version.resources {
+                    let kind = res
+                        .response_kind
+                        .ok_or(anyhow::anyhow!("GVK not found"))?
+                        .kind
+                        .ok_or(anyhow::anyhow!("kind not found"))?;
+                    let singular = res
+                        .singular_resource
+                        .ok_or(anyhow::anyhow!("singular not found"))?
+                        .to_string();
+                    let resource = res
+                        .resource
+                        .ok_or(anyhow::anyhow!("singular not found"))?
+                        .to_string();
 
-                                tracing::debug!(
-                                    "{resource}{}/{v} : {singular} - {kind}List",
-                                    g.as_ref().map(|g| format!(".{g}")).unwrap_or_default()
-                                );
+                    tracing::debug!(
+                        "{resource}{}/{v} : {singular} - {kind}List",
+                        g.as_ref().map(|g| format!(".{g}")).unwrap_or_default()
+                    );
 
-                                named_resources.insert(
-                                    GroupVersionResource::gvr(
-                                        &g.clone().unwrap_or_default(),
-                                        &v,
-                                        &resource,
-                                    ),
-                                    NamedResource {
-                                        group: g.clone(),
-                                        version: v.clone(),
-                                        list_kind: format!("{kind}List"),
-                                        resource,
-                                        singular,
-                                    },
-                                );
-                            }
-                        }
-                    }
+                    named_resources.insert(
+                        GroupVersionResource::gvr(&g.clone().unwrap_or_default(), &v, &resource),
+                        NamedResource {
+                            group: g.clone(),
+                            version: v.clone(),
+                            list_kind: format!("{kind}List"),
+                            resource,
+                            singular,
+                        },
+                    );
                 }
             }
         }

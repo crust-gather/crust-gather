@@ -8,7 +8,7 @@ use kube::Api;
 use kube::api::WatchEvent;
 use kube::core::gvk::ParseGroupVersionError;
 use kube::core::params::ListParams;
-use kube::core::{DynamicObject, ErrorResponse, ResourceExt};
+use kube::core::{DynamicObject, Status, ResourceExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -52,7 +52,7 @@ pub enum WatchError {
     Sync(#[from] anyhow::Error),
 
     #[error("Failed to stream object events: {0}")]
-    Stream(#[from] ErrorResponse),
+    Stream(#[from] Box<Status>),
 
     #[error("Unable to parse froup versoin for object: {0}")]
     GroupVersion(#[from] ParseGroupVersionError),
