@@ -20,7 +20,7 @@ regex = "1.12.2"
 futures = "0.3.31"
 tokio-retry = "0.3.0"
 duration-string = { version = "0.5.3", features = ["serde"] }
-tokio-util = "0.7.17"
+tokio-util = "0.7.18"
 trait-set = "0.3.0"
 actix-web = "4.12.1"
 glob = "0.3.3"
