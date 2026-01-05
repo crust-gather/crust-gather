@@ -35,7 +35,7 @@ async-stream = "0.3.6"
 thiserror = "2.0.17"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["fmt", "env-filter"] }
-home = "=0.5.11"
+home = "=0.5.12"
 
 [dev-dependencies]
 xid = "1.1.1"
