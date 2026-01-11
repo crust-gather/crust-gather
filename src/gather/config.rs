@@ -328,40 +328,29 @@ pub struct Config {
     pub secrets: Secrets,
     pub mode: GatherMode,
     pub additional_logs: Vec<CustomLog>,
-    duration: RunDuration,
+    pub duration: RunDuration,
     pub systemd_units: Vec<String>,
     pub debug_pod: DebugPod,
 }
 
 impl Config {
-    pub fn new(
-        client: Client,
-        filter: FilterGroup,
-        writer: Writer,
-        secrets: Secrets,
-        mode: GatherMode,
-        additional_logs: Vec<CustomLog>,
-        duration: RunDuration,
-        systemd_units: Vec<String>,
-        debug_pod: DebugPod,
-    ) -> Self {
-        Self {
-            client,
-            filter: Arc::new(filter),
-            secrets,
-            duration,
-            mode,
-            additional_logs,
-            writer: writer.into(),
-            systemd_units,
-            debug_pod,
-        }
-    }
-
     /// Collect representations for resources from discovery to the specified archive file.
     #[instrument(skip_all, err)]
     pub async fn collect(&self) -> anyhow::Result<()> {
-        let discovery = discovery::Discovery::new(self.client.clone()).run().await?;
+        let discovery = match discovery::Discovery::new(self.client.clone())
+            .run_aggregated()
+            .await
+        {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "Aggregated discovery failed, falling back to standard discovery"
+                );
+                discovery::Discovery::new(self.client.clone()).run().await?
+            }
+        };
+
         let mode = match self.mode {
             GatherMode::Collect => LIST,
             GatherMode::Record => WATCH,

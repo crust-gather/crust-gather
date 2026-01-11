@@ -2,13 +2,13 @@ use anyhow;
 use async_trait::async_trait;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt as _};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Zoned;
 use k8s_openapi::serde_json;
 use kube::Api;
 use kube::api::WatchEvent;
 use kube::core::gvk::ParseGroupVersionError;
 use kube::core::params::ListParams;
-use kube::core::{DynamicObject, ErrorResponse, ResourceExt};
+use kube::core::{DynamicObject, ResourceExt, Status};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -52,7 +52,7 @@ pub enum WatchError {
     Sync(#[from] anyhow::Error),
 
     #[error("Failed to stream object events: {0}")]
-    Stream(#[from] ErrorResponse),
+    Stream(#[from] Box<Status>),
 
     #[error("Unable to parse froup versoin for object: {0}")]
     GroupVersion(#[from] ParseGroupVersionError),
@@ -204,7 +204,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             .boxed();
 
         while let Some(e) = stream.try_next().await? {
-            let now = Utc::now().to_string();
+            let now = Zoned::now().datetime().to_string();
             match e {
                 WatchEvent::Added(obj) => {
                     let mut obj = obj.clone();

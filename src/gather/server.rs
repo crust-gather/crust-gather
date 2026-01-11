@@ -15,12 +15,15 @@ use actix_web::{
 use async_stream::stream;
 use clap::Parser;
 use k8s_openapi::{
-    chrono::{DateTime, Utc},
+    jiff::{SignedDuration, Zoned, civil::DateTime},
     serde_json::{self, json},
 };
-use kube::config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
+use kube::{
+    config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext},
+    core::discovery::v2,
+};
 use serde::Deserialize;
-use tokio::time::{Instant, sleep};
+use tokio::time::sleep;
 
 use crate::gather::{
     reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
@@ -96,7 +99,7 @@ struct ApiState {
     archives: HashMap<String, ArchiveReader>,
     kubeconfig_path: PathBuf,
     previous_context: Option<String>,
-    serve_time: DateTime<Utc>,
+    serve_time: DateTime,
 }
 
 impl Api {
@@ -138,7 +141,7 @@ impl Api {
                 archives: readers,
                 kubeconfig_path,
                 previous_context,
-                serve_time: Utc::now(),
+                serve_time: Zoned::now().datetime(),
             },
             socket,
         })
@@ -276,10 +279,7 @@ async fn api(
         .load_raw(ArchivePath::Custom("api.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
-        .insert_header((
-            CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
-        )))
+        .insert_header((CONTENT_TYPE, v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
 #[get("{server}/apis")]
@@ -296,10 +296,7 @@ async fn apis(
         .load_raw(ArchivePath::Custom("apis.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
-        .insert_header((
-            CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
-        )))
+        .insert_header((CONTENT_TYPE, v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
 #[get("{server}/api/{version}/{kind}")]
@@ -424,18 +421,20 @@ fn watch_response(
         .map_err(error::ErrorNotFound)?;
     let reader = Reader::new(archive.clone(), state.serve_time).map_err(error::ErrorNotFound)?;
     let list = archive.named_object_from_list(list.clone());
-    let mut refresh = Instant::now();
+    let mut refresh = Zoned::now().datetime().duration_since(DateTime::MIN);
     let s = stream! {
         loop {
             for event in watch_events(accept.clone(), list.clone(), query.clone(), &reader)? {
                 yield publish(event);
             }
             let next_event_time = reader.pop_next_event_time();
-            if next_event_time == Duration::MAX {
+            if next_event_time == SignedDuration::MAX {
                 break;
             }
-            sleep(next_event_time.checked_sub(refresh.elapsed()).unwrap_or_default()).await;
-            refresh = Instant::now();
+            if let Some(sleep_needed) = next_event_time.checked_sub(refresh) {
+                sleep(sleep_needed.unsigned_abs()).await;
+            }
+            refresh = Zoned::now().datetime().duration_since(DateTime::MIN);
         }
     };
 
