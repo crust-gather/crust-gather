@@ -13,7 +13,7 @@ clap = { version = "4.5.54", features = ["derive"] }
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 tar = { version = "0.4.44"}
-flate2 = { version = "1.1.5"}
+flate2 = { version = "1.1.8"}
 zip = { version = "7.0.0"}
 build_html = "2.7.0"
 regex = "1.12.2"
