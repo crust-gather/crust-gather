@@ -7,18 +7,19 @@ use actix_web::{
     App, HttpResponse, HttpServer, Responder, error, get,
     http::{
         KeepAlive,
-        header::{Accept, CONTENT_TYPE, QualityItem},
+        header::{Accept, CONTENT_TYPE, QualityItem, VARY},
     },
     post,
     web::{self, Bytes, Header, Path, Query},
 };
 use async_stream::stream;
+use chrono::{DateTime, Utc};
 use clap::Parser;
-use k8s_openapi::{
-    chrono::{DateTime, Utc},
-    serde_json::{self, json},
+use k8s_openapi::serde_json::{self, json};
+use kube::{
+    config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext},
+    core::discovery::v2,
 };
-use kube::config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
 use serde::Deserialize;
 use tokio::time::{Instant, sleep};
 
@@ -271,15 +272,21 @@ async fn api(
         .archives
         .get(server.get_server())
         .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+
+    let latest_discovery_version = v2::ACCEPT_AGGREGATED_DISCOVERY_V2
+        .split(',')
+        .next()
+        .unwrap_or(v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
+        .trim();
+
     Ok(Reader::new(archive.clone(), state.serve_time)
         .map_err(error::ErrorNotFound)?
         .load_raw(ArchivePath::Custom("api.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
-        .insert_header((
-            CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
-        )))
+        .insert_header((CONTENT_TYPE, latest_discovery_version))
+        .insert_header((VARY, "Accept"))
+        .insert_header(("X-Varied-Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
 #[get("{server}/apis")]
@@ -291,15 +298,20 @@ async fn apis(
         .archives
         .get(server.get_server())
         .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+    let latest_discovery_version = v2::ACCEPT_AGGREGATED_DISCOVERY_V2
+        .split(',')
+        .next()
+        .unwrap_or(v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
+        .trim();
+
     Ok(Reader::new(archive.clone(), state.serve_time)
         .map_err(error::ErrorNotFound)?
         .load_raw(ArchivePath::Custom("apis.json".into()))
         .map_err(error::ErrorNotFound)?
         .customize()
-        .insert_header((
-            CONTENT_TYPE,
-            "application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList",
-        )))
+        .insert_header((CONTENT_TYPE, latest_discovery_version))
+        .insert_header((VARY, "Accept"))
+        .insert_header(("X-Varied-Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
 #[get("{server}/api/{version}/{kind}")]

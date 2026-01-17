@@ -3,7 +3,7 @@ use build_html::{Html, HtmlContainer, TableCell, TableRow};
 use k8s_openapi::{
     api::core::v1::Event,
     apimachinery::pkg::apis::meta::v1::Time,
-    chrono::{DateTime, Utc},
+    jiff::{civil::DateTime, tz::TimeZone},
 };
 use kube::Api;
 use kube::core::ApiResource;
@@ -69,9 +69,9 @@ impl Collect<Event> for Events {
         let row = TableRow::new()
             .with_cell(TableCell::default().with_raw({
                 let (creation, first, last) = (
-                    event.metadata.creation_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
-                    event.first_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0,
-                    event.last_timestamp.clone().unwrap_or(Time(DateTime::<Utc>::MIN_UTC)).0
+                    event.metadata.creation_timestamp.clone().unwrap_or(Time(DateTime::ZERO.to_zoned(TimeZone::UTC)?.timestamp())).0,
+                    event.first_timestamp.clone().unwrap_or(Time(DateTime::ZERO.to_zoned(TimeZone::UTC)?.timestamp())).0,
+                    event.last_timestamp.clone().unwrap_or(Time(DateTime::ZERO.to_zoned(TimeZone::UTC)?.timestamp())).0
                 );
                 let count = event.count.unwrap_or(1).to_string();
                 format!("<time datetime=\"{creation}\" title=\"First Seen: {first}\">{last}</time> <small>(x{count})</small>")}))

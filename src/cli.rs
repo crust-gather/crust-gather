@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    sync::Arc,
-};
+use std::{fs::File, sync::Arc};
 
 use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand, arg, command};

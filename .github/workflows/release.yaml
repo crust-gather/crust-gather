@@ -8,7 +8,7 @@ on:
 
 env:
   # Define the rust version to use
-  RUST_VERSION: 1.86.0
+  RUST_VERSION: 1.88.0
   # Rust build arguments
   BUILD_ARGS: "--release"
   # The binary name
@@ -109,7 +109,7 @@ jobs:
         if: contains(matrix.platform.target, 'apple')
         # We use a dedicated Rust image containing required Apple libraries to cross-compile on multiple archs
         run: |
-          docker run --rm --volume "${PWD}":/root/src --workdir /root/src joseluisq/rust-linux-darwin-builder:$RUST_VERSION \
+          docker run --rm --volume "${PWD}":/root/src --workdir /root/src ghcr.io/crust-gather/rust-linux-darwin-builder:$RUST_VERSION \
           sh -c "CC=o64-clang CXX=o64-clang++ cargo build $BUILD_ARGS --target ${{ matrix.platform.target }}"
 
       - name: Store artifact

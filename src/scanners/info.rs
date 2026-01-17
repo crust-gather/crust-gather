@@ -4,10 +4,11 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::Utc;
 use http::Request;
-use k8s_openapi::{api::core::v1::Node, chrono::Utc};
-use kube::Api;
+use k8s_openapi::api::core::v1::Node;
 use kube::core::ApiResource;
+use kube::{Api, core::discovery::v2};
 use tracing::instrument;
 
 use crate::gather::{
@@ -57,10 +58,7 @@ impl Collect<Node> for Info {
             .request_text(
                 Request::builder()
                     .uri("/api")
-                    .header(
-                        "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
-                    )
+                    .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
                     .body(vec![])?,
             )
             .await?;
@@ -68,10 +66,7 @@ impl Collect<Node> for Info {
             .request_text(
                 Request::builder()
                     .uri("/apis")
-                    .header(
-                        "Accept",
-                        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json",
-                    )
+                    .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
                     .body(vec![])?,
             )
             .await?;
