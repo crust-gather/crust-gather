@@ -129,7 +129,7 @@ mod test {
     };
     use tokio::time::timeout;
 
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
     #[serial]
@@ -173,18 +173,19 @@ mod test {
             Api::default_namespaced_with(client.clone(), &ApiResource::erase::<Pod>(&()));
         let pod = api.get("test").await.unwrap();
         let repr = Objects::new(
-            Config::new(
+            Config {
                 client,
-                FilterGroup(vec![FilterList(vec![vec![filter].into()])]),
-                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder"),
-                Default::default(),
-                GatherMode::Collect,
-                Default::default(),
-                "1m".to_string().try_into().unwrap(),
-                Default::default(),
-                Default::default(),
-            ),
+                filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
+                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                secrets: Default::default(),
+                mode: GatherMode::Collect,
+                additional_logs: Default::default(),
+                duration: "1m".to_string().try_into().unwrap(),
+                systemd_units: Default::default(),
+                debug_pod: Default::default(),
+            },
             ApiResource::erase::<Pod>(&()),
         )
         .representations(&pod)
@@ -207,18 +208,19 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
         let collectable = Objects::new(
-            Config::new(
+            Config {
                 client,
-                FilterGroup(vec![FilterList(vec![])]),
-                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder"),
-                Default::default(),
-                GatherMode::Collect,
-                Default::default(),
-                "1m".to_string().try_into().unwrap(),
-                Default::default(),
-                Default::default(),
-            ),
+                filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
+                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                secrets: Default::default(),
+                mode: GatherMode::Collect,
+                additional_logs: Default::default(),
+                duration: "1m".to_string().try_into().unwrap(),
+                systemd_units: Default::default(),
+                debug_pod: Default::default(),
+            },
             ApiResource::erase::<Namespace>(&()),
         );
 
@@ -238,18 +240,19 @@ mod test {
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         let collectable = Objects::new(
-            Config::new(
+            Config {
                 client,
-                FilterGroup(vec![FilterList(vec![])]),
-                Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder"),
-                Default::default(),
-                GatherMode::Collect,
-                Default::default(),
-                "1m".to_string().try_into().unwrap(),
-                Default::default(),
-                Default::default(),
-            ),
+                filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
+                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
+                    .expect("failed to create builder")
+                    .into(),
+                secrets: Default::default(),
+                mode: GatherMode::Collect,
+                additional_logs: Default::default(),
+                duration: "1m".to_string().try_into().unwrap(),
+                systemd_units: Default::default(),
+                debug_pod: Default::default(),
+            },
             ApiResource::erase::<Pod>(&()),
         );
 
