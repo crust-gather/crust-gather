@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::bail;
+use chrono::{DateTime, Utc};
 use json_patch::{AddOperation, PatchOperation, ReplaceOperation, patch};
 use jsonptr::PointerBuf;
 use k8s_openapi::{
@@ -18,12 +19,12 @@ use k8s_openapi::{
         CustomResourceColumnDefinition, CustomResourceDefinition, CustomResourceDefinitionSpec,
         CustomResourceDefinitionVersion,
     },
-    chrono::{DateTime, Utc},
-    serde_json::{self, Value, json},
+    serde_json::{self, json},
 };
 use kube::{
     ResourceExt,
     api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent},
+    client::{APIGroupDiscovery, APIGroupDiscoveryList, APIResourceDiscovery, APIVersionDiscovery},
     core::{DynamicObject, Resource, TypeMeta},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -406,6 +407,101 @@ impl From<GroupVersionResource> for NamedResource {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct NamedResources(HashMap<GroupVersionResource, NamedResource>);
+
+impl NamedResources {
+    fn from_discovery_file(path: PathBuf) -> anyhow::Result<Self> {
+        if !path.is_file() {
+            bail!("File {path:?} not found")
+        };
+
+        let discovery = serde_yaml::from_reader(File::open(path)?)?;
+        Ok(Self::from_discovery_groups(discovery))
+    }
+
+    fn from_discovery_groups(groups: APIGroupDiscoveryList) -> Self {
+        let mut resources = Self::default();
+
+        for api_group in groups.items {
+            resources.insert_group(api_group);
+        }
+
+        resources
+    }
+
+    fn insert_group(&mut self, api_group: APIGroupDiscovery) -> Option<()> {
+        self.insert_discovery_versions(&api_group.metadata?.name?, api_group.versions);
+        Some(())
+    }
+
+    fn insert_discovery_versions(&mut self, group: &str, versions: Vec<APIVersionDiscovery>) {
+        for api_version in versions {
+            self.insert_version(group, api_version);
+        }
+    }
+
+    fn insert_version(&mut self, group: &str, api_version: APIVersionDiscovery) -> Option<()> {
+        self.insert_discovery_resources(group, &api_version.version?, api_version.resources);
+        Some(())
+    }
+
+    fn insert_discovery_resources(
+        &mut self,
+        group: &str,
+        version: &str,
+        resources: Vec<APIResourceDiscovery>,
+    ) {
+        for res in resources {
+            self.insert_resource(group, version, res);
+        }
+    }
+
+    fn parse_discovery_resource(
+        group: &str,
+        version: &str,
+        resource: APIResourceDiscovery,
+    ) -> Option<NamedResource> {
+        let gvk = resource.response_kind?;
+        let kind = gvk.kind?;
+
+        Some(NamedResource {
+            group: Some(gvk.group.unwrap_or_else(|| group.to_string())),
+            version: gvk.version.unwrap_or_else(|| version.to_string()),
+            list_kind: format!("{kind}List"),
+            resource: resource.resource?,
+            singular: resource.singular_resource.unwrap_or_default(),
+        })
+    }
+
+    fn get(&self, gvr: &GroupVersionResource) -> Option<&NamedResource> {
+        self.0.get(gvr)
+    }
+
+    fn extend(&mut self, other: NamedResources) {
+        self.0.extend(other.0);
+    }
+
+    fn insert_resource(
+        &mut self,
+        group: &str,
+        version: &str,
+        res: APIResourceDiscovery,
+    ) -> Option<NamedResource> {
+        let res = Self::parse_discovery_resource(group, version, res)?;
+        tracing::debug!("{res:?}");
+
+        self.0.insert(
+            GroupVersionResource::gvr(
+                res.group.as_deref().unwrap_or_default(),
+                &res.version,
+                &res.resource,
+            ),
+            res,
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NamedObject {
     named_resource: NamedResource,
@@ -470,7 +566,7 @@ impl NamespacedName for &NamedObject {
 #[derive(Clone)]
 pub struct ArchiveReader {
     archive: Archive,
-    named_resources: Arc<HashMap<GroupVersionResource, NamedResource>>,
+    named_resources: Arc<NamedResources>,
 }
 
 impl From<Archive> for ArchiveReader {
@@ -481,17 +577,19 @@ impl From<Archive> for ArchiveReader {
 
 impl ArchiveReader {
     fn new(archive: Archive) -> Self {
-        let mut named_resources = match Self::parse_named_resources(
+        let mut named_resources = match NamedResources::from_discovery_file(
             archive.join(ArchivePath::Custom("apis.json".into())),
         ) {
             Ok(named_resources) => named_resources,
             Err(e) => {
                 tracing::error!("Fail parsing apis.json : {e:?}");
-                HashMap::new()
+                NamedResources::default()
             }
         };
 
-        match Self::parse_named_resources(archive.join(ArchivePath::Custom("api.json".into()))) {
+        match NamedResources::from_discovery_file(
+            archive.join(ArchivePath::Custom("api.json".into())),
+        ) {
             Ok(nrs) => named_resources.extend(nrs),
             Err(e) => {
                 tracing::error!("Fail parsing api.json : {e:?}");
@@ -502,75 +600,6 @@ impl ArchiveReader {
             archive,
             named_resources: Arc::new(named_resources),
         }
-    }
-
-    fn parse_named_resources(
-        path: PathBuf,
-    ) -> anyhow::Result<HashMap<GroupVersionResource, NamedResource>> {
-        let api_group_discovery_list: Value = match path.is_file() {
-            true => serde_yaml::from_reader(File::open(path)?)?,
-            false => bail!("File {path:?} not found"),
-        };
-
-        let mut named_resources = HashMap::new();
-
-        if let Some(items) = api_group_discovery_list
-            .get("items")
-            .and_then(|v| v.as_array())
-        {
-            for group in items {
-                let g = group["metadata"]["name"].as_str().map(|v| v.to_string());
-
-                if let Some(versions) = group.get("versions").and_then(|v| v.as_array()) {
-                    for version in versions {
-                        let v = version["version"]
-                            .as_str()
-                            .ok_or(anyhow::anyhow!("version not found"))?
-                            .to_string();
-
-                        if let Some(resources) = version.get("resources").and_then(|v| v.as_array())
-                        {
-                            for res in resources {
-                                let kind = res["responseKind"]["kind"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("kind not found"))?
-                                    .to_string();
-                                let singular = res["singularResource"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("singular not found"))?
-                                    .to_string();
-                                let resource = res["resource"]
-                                    .as_str()
-                                    .ok_or(anyhow::anyhow!("singular not found"))?
-                                    .to_string();
-
-                                tracing::debug!(
-                                    "{resource}{}/{v} : {singular} - {kind}List",
-                                    g.as_ref().map(|g| format!(".{g}")).unwrap_or_default()
-                                );
-
-                                named_resources.insert(
-                                    GroupVersionResource::gvr(
-                                        &g.clone().unwrap_or_default(),
-                                        &v,
-                                        &resource,
-                                    ),
-                                    NamedResource {
-                                        group: g.clone(),
-                                        version: v.clone(),
-                                        list_kind: format!("{kind}List"),
-                                        resource,
-                                        singular,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(named_resources)
     }
 
     pub fn join(&self, path: ArchivePath) -> PathBuf {
@@ -625,6 +654,7 @@ pub struct Reader {
 }
 
 impl Reader {
+    #[instrument(skip_all, err)]
     pub fn new(archive: ArchiveReader, beginning: DateTime<Utc>) -> anyhow::Result<Self> {
         let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp")?);
         let path = archive.join(path);
