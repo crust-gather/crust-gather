@@ -124,7 +124,7 @@ impl fmt::Display for LogGroup {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ArchivePath {
     #[default]
     Empty,

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -17,6 +17,7 @@ use kube::core::discovery::verbs::{LIST, WATCH};
 use kube::{Api, Client, ResourceExt, discovery};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::instrument;
 
@@ -376,12 +377,14 @@ impl Config {
             }
         }
 
-        self.finish()
+        self.finish().await
     }
 
-    fn finish(&self) -> anyhow::Result<()> {
-        let writer = &self.writer;
-        drop(writer.lock().unwrap());
+    async fn finish(&self) -> anyhow::Result<()> {
+        let writer = &self.writer.clone();
+        writer.lock().await.finish_oci().await?;
+        writer.lock().await.finish_gzip()?;
+        drop(writer.lock().await);
         Ok(())
     }
 
@@ -563,7 +566,8 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Zip)
+            writer: Writer::new(&Archive::new(file_path), &Encoding::Zip, None, None)
+                .await
                 .expect("failed to create builder")
                 .into(),
             secrets: Default::default(),
@@ -592,7 +596,8 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip)
+            writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip, None, None)
+                .await
                 .expect("failed to create builder")
                 .into(),
             duration: "1m".to_string().try_into().unwrap(),
@@ -619,7 +624,8 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
+            writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
+                .await
                 .expect("failed to create builder")
                 .into(),
             duration: "1m".to_string().try_into().unwrap(),

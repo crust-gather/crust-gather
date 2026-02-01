@@ -16,7 +16,7 @@ pub enum ParseError {
 
 type Result<T> = std::result::Result<T, ParseError>;
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Selector {
     #[serde(rename = "labelSelector")]
     label_selector: Option<String>,

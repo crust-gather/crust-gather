@@ -7,10 +7,8 @@ use k8s_openapi::{
 };
 use kube::Api;
 use kube::core::ApiResource;
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::gather::{
@@ -148,10 +146,14 @@ impl Collect<Event> for Events {
             }
         }
 
-        self.get_writer().lock().unwrap().store(
-            &Representation::new()
-                .with_path(self.path(&Event::default()))
-                .with_data(format!(include_str!("templates/event-filter.html"), data).as_str()),
-        )
+        self.get_writer()
+            .lock()
+            .await
+            .store(
+                &Representation::new()
+                    .with_path(self.path(&Event::default()))
+                    .with_data(format!(include_str!("templates/event-filter.html"), data).as_str()),
+            )
+            .await
     }
 }

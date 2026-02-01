@@ -10,12 +10,10 @@ use async_trait::async_trait;
 
 use kube::Api;
 use kube::core::{ApiResource, GroupVersionKind, Resource};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use super::interface::{Collect, CollectError, ResourceReq, ResourceThreadSafe};
 
@@ -176,9 +174,15 @@ mod test {
             Config {
                 client,
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
-                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                writer: Writer::new(
+                    &Archive::new("crust-gather".into()),
+                    &Encoding::Path,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to create builder")
+                .into(),
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),
@@ -211,9 +215,15 @@ mod test {
             Config {
                 client,
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                writer: Writer::new(
+                    &Archive::new("crust-gather".into()),
+                    &Encoding::Path,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to create builder")
+                .into(),
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),
@@ -243,9 +253,15 @@ mod test {
             Config {
                 client,
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-                writer: Writer::new(&Archive::new("crust-gather".into()), &Encoding::Path)
-                    .expect("failed to create builder")
-                    .into(),
+                writer: Writer::new(
+                    &Archive::new("crust-gather".into()),
+                    &Encoding::Path,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to create builder")
+                .into(),
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),

@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Debug, Display},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -11,6 +11,7 @@ use kube::{
     core::{ApiResource, ResourceExt, subresource::LogParams},
 };
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::gather::{
@@ -222,7 +223,8 @@ mod test {
             collectable: Objects::new_typed(Config {
                 client: config.try_into().expect("client"),
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
-                writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
+                writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
+                    .await
                     .expect("failed to create builder")
                     .into(),
                 secrets: Default::default(),

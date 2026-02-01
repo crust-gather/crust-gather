@@ -1,13 +1,11 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Pod;
 use kube::core::ApiResource;
 use kube::{Api, Resource};
 use serde::Serialize;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::gather::{
@@ -73,11 +71,15 @@ impl Collect<Pod> for Versions {
             })
             .collect::<Vec<_>>();
 
-        self.get_writer().lock().unwrap().store(
-            &Representation::new()
-                .with_path(ArchivePath::Custom("app-versions.yaml".into()))
-                .with_data(serde_yaml::to_string(&data)?.as_str()),
-        )
+        self.get_writer()
+            .lock()
+            .await
+            .store(
+                &Representation::new()
+                    .with_path(ArchivePath::Custom("app-versions.yaml".into()))
+                    .with_data(serde_yaml::to_string(&data)?.as_str()),
+            )
+            .await
     }
 
     fn get_api(&self) -> Api<Pod> {

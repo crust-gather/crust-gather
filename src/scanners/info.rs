@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -9,6 +6,7 @@ use http::Request;
 use k8s_openapi::api::core::v1::Node;
 use kube::core::ApiResource;
 use kube::{Api, core::discovery::v2};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::gather::{
@@ -88,7 +86,7 @@ impl Collect<Node> for Info {
         ];
 
         for repr in reprs {
-            self.get_writer().lock().unwrap().store(&repr)?;
+            self.get_writer().lock().await.store(&repr).await?;
         }
 
         Ok(())

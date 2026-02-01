@@ -1,17 +1,18 @@
 use std::{
-    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
     fs::File,
+    hash::Hash,
     io::{self, BufRead as _, Read},
     path::PathBuf,
+    pin::pin,
     str::FromStr,
-    sync::Arc,
-    sync::OnceLock,
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::{StreamExt as _, TryStreamExt as _, future, stream};
 use json_patch::{AddOperation, PatchOperation, ReplaceOperation, patch};
 use jsonptr::PointerBuf;
 use k8s_openapi::{
@@ -27,11 +28,16 @@ use kube::{
     client::{APIGroupDiscovery, APIGroupDiscoveryList, APIResourceDiscovery, APIVersionDiscovery},
     core::{DynamicObject, Resource, TypeMeta},
 };
+use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json_path::JsonPath;
+use tokio::{
+    io::{AsyncWrite, AsyncWriteExt},
+    sync,
+};
 use tracing::instrument;
 
-use crate::scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION};
+use crate::{gather::storage::Storage, scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION}};
 
 use super::{
     representation::{
@@ -163,12 +169,15 @@ impl ObjectValueList {
 }
 
 #[derive(Clone)]
-pub struct Table(Vec<TablePath>, Vec<serde_json::Value>);
+pub struct Table {
+    pub data: Vec<TablePath>,
+    pub items: Vec<serde_json::Value>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
-struct TablePath {
-    column: CustomResourceColumnDefinition,
-    json_path: Option<JsonPath>,
+pub struct TablePath {
+    pub column: CustomResourceColumnDefinition,
+    pub json_path: Option<JsonPath>,
 }
 
 impl TablePath {
@@ -199,24 +208,36 @@ impl TablePath {
 }
 
 impl Table {
-    fn new(
+    async fn new(
         crd_path: PathBuf,
         list: NamedObject,
         items: Vec<impl Serialize>,
+        storage: &Storage,
     ) -> anyhow::Result<Self> {
         let mut data = vec![];
 
-        data.extend(Table::table_entries(crd_path, list)?);
+        data.extend(Table::table_entries(storage, crd_path, list).await?);
         let items: anyhow::Result<Vec<serde_json::Value>> = items
             .into_iter()
             .map(|i| serde_json::to_value(i).map_err(Into::into))
             .collect();
-        Ok(Self(data, items?))
+        Ok(Self {
+            data,
+            items: items?,
+        })
     }
 
-    fn table_entries(crd_path: PathBuf, list: NamedObject) -> anyhow::Result<Vec<TablePath>> {
+    async fn table_entries(
+        storage: &Storage,
+        crd_path: PathBuf,
+        list: NamedObject,
+    ) -> anyhow::Result<Vec<TablePath>> {
         let crd: CustomResourceDefinition = match crd_path.is_file() {
-            true => serde_yaml::from_reader(File::open(crd_path)?)?,
+            true => {
+                let mut file = vec![];
+                storage.read(crd_path, &mut file).await?;
+                serde_yaml::from_slice(&file)?
+            }
             false => match predefined_tables().get(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
                     spec: CustomResourceDefinitionSpec {
@@ -265,7 +286,7 @@ impl Table {
     }
 
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
-        let Table(rows, _) = self;
+        let Table { data: rows, .. } = self;
         let obj = serde_json::to_value(obj)?;
         let cells: Vec<&serde_json::Value> = rows
             .iter()
@@ -284,11 +305,11 @@ impl Table {
     }
 
     fn definitions(&self) -> Vec<serde_json::Value> {
-        self.0.iter().map(|r| r.to_definition()).collect()
+        self.data.iter().map(|r| r.to_definition()).collect()
     }
 
     fn rows(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let Table(_, items) = self;
+        let Table { items, .. } = self;
         items.iter().map(|i| self.to_row(i)).collect()
     }
 
@@ -349,13 +370,16 @@ trait GatherObject: ResourceExt + Sized + Serialize {
         self.annotations().contains_key(DELETED_ANNOTATION)
     }
 
-    fn table_watch_event(
+    async fn table_watch_event(
         &self,
         crd_path: PathBuf,
         list: NamedObject,
+        storage: &Storage,
     ) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::to_value(self.event()(
-            Table::new(crd_path, list, vec![&self])?.to_value()?,
+            Table::new(crd_path, list, vec![&self], storage)
+                .await?
+                .to_value()?,
         ))?)
     }
 }
@@ -366,7 +390,7 @@ impl<T: Resource + Serialize> GatherObject for T {}
 // singular is the singular lowercase version of the resource name (used to get retrieve data)    : configmap
 // kind is the PascalCase version of the resource name (not used)                                 : ConfigMap
 // list_kind is the PascalCase version of the resource name + List                                : ConfigMapList
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct NamedResource {
     group: Option<String>,
     version: String,
@@ -411,12 +435,11 @@ impl From<GroupVersionResource> for NamedResource {
 struct NamedResources(HashMap<GroupVersionResource, NamedResource>);
 
 impl NamedResources {
-    fn from_discovery_file(path: PathBuf) -> anyhow::Result<Self> {
-        if !path.is_file() {
-            bail!("File {path:?} not found")
-        };
+    async fn from_discovery_file(path: PathBuf, storage: &Storage) -> anyhow::Result<Self> {
+        let mut object = vec![];
+        storage.read(path.clone(), &mut object).await?;
 
-        let discovery = serde_yaml::from_reader(File::open(path)?)?;
+        let discovery = serde_yaml::from_slice(&object)?;
         Ok(Self::from_discovery_groups(discovery))
     }
 
@@ -502,7 +525,7 @@ impl NamedResources {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct NamedObject {
     named_resource: NamedResource,
     namespace: Option<String>,
@@ -569,17 +592,14 @@ pub struct ArchiveReader {
     named_resources: Arc<NamedResources>,
 }
 
-impl From<Archive> for ArchiveReader {
-    fn from(archive: Archive) -> Self {
-        ArchiveReader::new(archive)
-    }
-}
-
 impl ArchiveReader {
-    fn new(archive: Archive) -> Self {
+    pub async fn new(archive: Archive, storage: &Storage) -> Self {
         let mut named_resources = match NamedResources::from_discovery_file(
             archive.join(ArchivePath::Custom("apis.json".into())),
-        ) {
+            storage,
+        )
+        .await
+        {
             Ok(named_resources) => named_resources,
             Err(e) => {
                 tracing::error!("Fail parsing apis.json : {e:?}");
@@ -589,7 +609,10 @@ impl ArchiveReader {
 
         match NamedResources::from_discovery_file(
             archive.join(ArchivePath::Custom("api.json".into())),
-        ) {
+            storage,
+        )
+        .await
+        {
             Ok(nrs) => named_resources.extend(nrs),
             Err(e) => {
                 tracing::error!("Fail parsing api.json : {e:?}");
@@ -649,37 +672,57 @@ impl ArchiveReader {
 pub struct Reader {
     pub archive: ArchiveReader,
     diff: Duration,
-    objects_state: RefCell<HashMap<PathBuf, DynamicObject>>,
-    next_patch_time: Cell<Duration>,
+    objects_state: Arc<Mutex<HashMap<PathBuf, DynamicObject>>>,
+    next_patch_time: Arc<Mutex<Duration>>,
+    storage: Storage,
 }
+
+impl Hash for Reader {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+impl PartialEq for Reader {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Reader {}
 
 impl Reader {
     #[instrument(skip_all, err)]
-    pub fn new(archive: ArchiveReader, beginning: DateTime<Utc>) -> anyhow::Result<Self> {
+    pub async fn new(
+        archive: ArchiveReader,
+        beginning: DateTime<Utc>,
+        storage: Storage,
+    ) -> anyhow::Result<Self> {
         let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp")?);
         let path = archive.join(path);
+        let diff = match storage.exist(&path) {
+            true => {
+                let mut file = vec![];
+                storage.read(path, &mut file).await?;
+                let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)?;
+                beginning.signed_duration_since(record_timestamp).to_std()?
+            }
+            false => Default::default(),
+        };
         Ok(Self {
             archive,
-            diff: match path.exists() {
-                true => {
-                    let file = File::open(path)?;
-                    let record_timestamp: DateTime<Utc> = serde_json::from_reader(file)?;
-                    beginning.signed_duration_since(record_timestamp).to_std()?
-                }
-                false => Default::default(),
-            },
-            next_patch_time: Duration::MAX.into(),
-            objects_state: Default::default(),
+            storage,
+            diff,
+            next_patch_time: Arc::new(Mutex::new(Duration::MAX)),
+            objects_state: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     // Load a table representation for the object
-    pub fn load_table(
+    pub async fn load_table(
         &self,
         list: NamedObject,
         selector: Selector,
     ) -> anyhow::Result<serde_json::Value> {
-        self.table(list, selector)?.to_value()
+        self.table(list, selector).await?.to_value()
     }
 
     fn archive_time(&self) -> DateTime<Utc> {
@@ -687,25 +730,32 @@ impl Reader {
     }
 
     pub fn pop_next_event_time(&self) -> Duration {
-        self.next_patch_time.replace(Duration::MAX)
+        let mut next_patch_time = self
+            .next_patch_time
+            .lock()
+            .expect("next_patch_time lock poisoned");
+        std::mem::replace(&mut *next_patch_time, Duration::MAX)
     }
 
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
-    fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
+    async fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
         tracing::trace!("Reading table...");
 
         Table::new(
             self.archive.join(list.get_crd_path().unwrap_or_default()),
             list.clone(),
-            self.items(self.archive.join(list.get_path()), selector)?
+            self.items(self.archive.join(list.get_path()), selector)
+                .await?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
+            &self.storage,
         )
+        .await
     }
 
     // Watch events as a series of table representation for objects
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
-    pub fn watch_table_events(
+    pub async fn watch_table_events(
         &self,
         list: NamedObject,
         selector: Selector,
@@ -714,11 +764,14 @@ impl Reader {
 
         let mut events = vec![];
         for object in self
-            .objects(list.get_path())?
+            .objects(list.get_path())
+            .await?
             .filter(|obj| selector.matches(obj.labels()))
         {
             let crd_path = self.archive.join(list.get_crd_path().unwrap_or_default());
-            let event = object.table_watch_event(crd_path, list.clone())?;
+            let event = object
+                .table_watch_event(crd_path, list.clone(), &self.storage)
+                .await?;
             events.push(event)
         }
 
@@ -727,40 +780,46 @@ impl Reader {
 
     // Watch events as a series of json enoded objects
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
-    pub fn watch_events(
+    pub async fn watch_events(
         &self,
         list: NamedObject,
         selector: Selector,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         tracing::trace!("Watching list...");
 
-        self.objects(list.get_path())?
+        self.objects(list.get_path())
+            .await?
             .filter(|obj| selector.matches(obj.labels()))
             .map(|obj| obj.watch_event())
             .map(|ev| serde_json::to_value(ev).map_err(Into::into))
             .collect()
     }
 
-    fn objects(&self, path: ArchivePath) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
+    async fn objects(
+        &self,
+        path: ArchivePath,
+    ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
         let mut new_objects = HashMap::new();
-        let objects = self.objects_state.take();
-        let path = self.archive.join(path);
-        let paths = glob::glob(
-            path.to_str()
-                .map_or_else(|| bail!("Unable to convert path to string: {path:?}"), Ok)?,
-        )?;
+        let objects = {
+            let mut objects_state = self
+                .objects_state
+                .lock()
+                .expect("objects_state lock poisoned");
+            std::mem::take(&mut *objects_state)
+        };
         let mut items = vec![];
-        for path in paths {
-            let path = path?;
+        for path in self.storage.matching_paths(self.archive.join(path))? {
             match objects.get(&path) {
-                Some(previous) if path.with_extension("patch").exists() => {
+                Some(previous) if self.storage.exist(&path.with_extension("patch")) => {
                     new_objects.insert(path.clone(), previous.clone());
-                    let versions = self.interpolate(
-                        previous,
-                        path.with_extension("patch"),
-                        previous.last_sync_timestamp().unwrap_or_default(),
-                        self.archive_time(),
-                    )?;
+                    let versions = self
+                        .interpolate(
+                            previous,
+                            path.with_extension("patch"),
+                            previous.last_sync_timestamp().unwrap_or_default(),
+                            self.archive_time(),
+                        )
+                        .await?;
                     for version in versions
                         .into_iter()
                         .filter(|obj| obj.older(self.archive_time()))
@@ -774,7 +833,8 @@ impl Reader {
                 }
                 None => {
                     for version in self
-                        .versions(path.clone())?
+                        .versions(path.clone())
+                        .await?
                         .into_iter()
                         .filter(|obj: &DynamicObject| obj.older(self.archive_time()))
                     {
@@ -785,43 +845,56 @@ impl Reader {
             };
         }
 
-        self.objects_state.replace(new_objects);
-
-        Ok(items.into_iter())
-    }
-
-    fn items(
-        &self,
-        path: PathBuf,
-        selector: Selector,
-    ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
-        let paths = glob::glob(
-            path.to_str()
-                .map_or_else(|| bail!("Unable to convert path to string: {path:?}"), Ok)?,
-        )?;
-        let mut items = vec![];
-        for path in paths {
-            let obj: DynamicObject = self.read(path?)?;
-            if selector.matches(obj.labels()) {
-                items.push(obj);
-            }
+        {
+            let mut objects_state = self
+                .objects_state
+                .lock()
+                .expect("objects_state lock poisoned");
+            *objects_state = new_objects;
         }
 
         Ok(items.into_iter())
     }
 
+    async fn items(
+        &self,
+        path: PathBuf,
+        selector: Selector,
+    ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
+        let items = Arc::new(sync::Mutex::new(vec![]));
+        stream::iter(self.storage.matching_paths(path)?.into_iter())
+            .map(|path| {
+                let selector = &selector;
+                let items = items.clone();
+                async move {
+                    let obj: DynamicObject = self.read(path).await?;
+                    if selector.matches(obj.labels()) {
+                        items.lock().await.push(obj);
+                    }
+
+                    anyhow::Result::Ok(())
+                }
+            })
+            .boxed()
+            .buffered(1024)
+            .try_for_each(future::ok::<(), anyhow::Error>)
+            .await?;
+
+        Ok(items.lock().await.clone().into_iter())
+    }
+
     #[instrument(skip_all, fields(path = path.to_string()))]
-    pub fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
+    pub async fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
         tracing::debug!("Reading file...");
 
-        Reader::read_raw(self.archive.join(path))
+        self.storage.read_raw(self.archive.join(path)).await
     }
 
     #[instrument(skip_all, fields(path = get.get_path().to_string()))]
-    pub fn load(&self, get: NamedObject) -> anyhow::Result<serde_json::Value> {
+    pub async fn load(&self, get: NamedObject) -> anyhow::Result<serde_json::Value> {
         tracing::debug!("Reading file...");
 
-        let obj: DynamicObject = self.read(self.archive.join(get.get_path()))?;
+        let obj: DynamicObject = self.read(self.archive.join(get.get_path())).await?;
         if obj.deleted() {
             bail!("Object was deleted")
         }
@@ -830,55 +903,69 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
-    pub fn list(&self, list: NamedObject, selector: Selector) -> anyhow::Result<serde_json::Value> {
+    pub async fn list(
+        &self,
+        list: NamedObject,
+        selector: Selector,
+    ) -> anyhow::Result<serde_json::Value> {
         tracing::trace!("Reading list...");
 
         let path = self.archive.join(list.get_path());
 
         serde_json::to_value(ObjectValueList::new(
             list,
-            self.items(path, selector)?
+            self.items(path, selector)
+                .await?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
         ))
         .map_err(Into::into)
     }
 
-    pub fn read<R: DeserializeOwned + Clone>(&self, path: PathBuf) -> anyhow::Result<R> {
-        self.versions(path)?
+    pub async fn read<R: DeserializeOwned + Clone>(&self, path: PathBuf) -> anyhow::Result<R> {
+        self.versions(path)
+            .await?
             .last()
             .cloned()
             .ok_or(anyhow::anyhow!("failed to find object"))
     }
 
     // Collect a sequence of versions for the given object until clusters equivalent of Utc::now()
-    fn versions<R: DeserializeOwned>(&self, path: PathBuf) -> anyhow::Result<Vec<R>> {
-        let object = File::open(path.clone())?;
-        match path.with_extension("patch").exists() {
-            false => Ok(vec![serde_yaml::from_reader(object)?]),
+    async fn versions<R: DeserializeOwned>(&self, path: PathBuf) -> anyhow::Result<Vec<R>> {
+        let mut object = vec![];
+        self.storage.read(path.clone(), &mut object).await?;
+        match self.storage.exist(&path.with_extension("patch")) {
+            false => Ok(vec![serde_yaml::from_slice(&object)?]),
             true => {
-                let original: serde_json::Value = serde_yaml::from_reader(object)?;
+                let original: serde_json::Value = serde_yaml::from_slice(&object)?;
                 Some(original.clone())
                     .into_iter()
-                    .chain(self.interpolate(
-                        &original,
-                        path.with_extension("patch"),
-                        Default::default(),
-                        self.archive_time(),
-                    )?)
+                    .chain(
+                        self.interpolate(
+                            &original,
+                            path.with_extension("patch"),
+                            Default::default(),
+                            self.archive_time(),
+                        )
+                        .await?,
+                    )
                     .map(|version| serde_json::from_value(version).map_err(Into::into))
                     .collect()
             }
         }
     }
 
-    fn read_lines(filename: PathBuf) -> io::Result<io::Lines<io::BufReader<File>>> {
-        let file = File::open(filename)?;
-        Ok(io::BufReader::new(file).lines())
+    async fn read_lines(
+        &self,
+        filename: PathBuf,
+    ) -> anyhow::Result<io::Lines<io::BufReader<impl io::Read>>> {
+        let mut file = vec![];
+        self.storage.read(filename, &mut file).await?;
+        Ok(io::BufReader::new(io::Cursor::new(file)).lines())
     }
 
     // Goes through all json patches and applies them on the resource in order
-    fn interpolate<R: Serialize + DeserializeOwned>(
+    async fn interpolate<R: Serialize + DeserializeOwned>(
         &self,
         target: &R,
         patches_file: PathBuf,
@@ -887,7 +974,7 @@ impl Reader {
     ) -> anyhow::Result<Vec<R>> {
         let mut target = serde_json::to_value(target)?;
         let mut versions = vec![];
-        for list in Reader::read_lines(patches_file)? {
+        for list in self.read_lines(patches_file).await? {
             let patches: Vec<PatchOperation> = serde_json::from_str(&list?)?;
             let mut do_apply = false;
             for p in patches.clone() {
@@ -901,8 +988,11 @@ impl Reader {
                         let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
                         if last_sync_timestamp >= until {
                             let wait_duration = (last_sync_timestamp - until).to_std()?;
-                            self.next_patch_time
-                                .replace(self.next_patch_time.take().min(wait_duration));
+                            let mut next_patch_time = self
+                                .next_patch_time
+                                .lock()
+                                .expect("next_patch_time lock poisoned");
+                            *next_patch_time = (*next_patch_time).min(wait_duration);
                             return Ok(versions);
                         } else if last_sync_timestamp <= from {
                             break;
@@ -922,21 +1012,14 @@ impl Reader {
 
         Ok(versions)
     }
-
-    fn read_raw(path: PathBuf) -> anyhow::Result<String> {
-        let mut file = File::open(path)?;
-        let mut data = String::new();
-        File::read_to_string(&mut file, &mut data)?;
-        Ok(data)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn table_columns() {
+    #[tokio::test]
+    async fn table_columns() {
         let list = NamedObject {
             named_resource: NamedResource {
                 group: Some("my-group".to_string()),
@@ -949,7 +1032,13 @@ mod tests {
             name: None,
         };
         let items = vec!["foo", "bar", "baz"];
-        let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await;
 
         let expected_paths = vec![TablePath {
             column: CustomResourceColumnDefinition {
@@ -960,11 +1049,11 @@ mod tests {
             json_path: JsonPath::parse("$.metadata.name").ok(),
         }];
 
-        assert_eq!(expected_paths, tbl.unwrap().0);
+        assert_eq!(expected_paths, tbl.unwrap().data);
     }
 
-    #[test]
-    fn table_columns_known_kind() {
+    #[tokio::test]
+    async fn table_columns_known_kind() {
         let list = NamedObject {
             named_resource: NamedResource {
                 group: Some("my-group".to_string()),
@@ -977,7 +1066,13 @@ mod tests {
             name: None,
         };
         let items = vec!["foo", "bar", "baz"];
-        let tbl = Table::new(PathBuf::from("hello".to_string()), list, items);
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await;
 
         let expected_paths = vec![TablePath {
             column: CustomResourceColumnDefinition {
@@ -988,6 +1083,6 @@ mod tests {
             json_path: JsonPath::parse("$.metadata.name").ok(),
         }];
 
-        assert_eq!(expected_paths, tbl.unwrap().0);
+        assert_eq!(expected_paths, tbl.unwrap().data);
     }
 }
