@@ -4,7 +4,6 @@ use anyhow::bail;
 use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
-
 #[derive(Clone)]
 pub enum Storage {
     FS,

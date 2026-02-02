@@ -1,10 +1,8 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    fs::File,
     hash::Hash,
     io::{self, BufRead as _, Read},
     path::PathBuf,
-    pin::pin,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
@@ -28,16 +26,15 @@ use kube::{
     client::{APIGroupDiscovery, APIGroupDiscoveryList, APIResourceDiscovery, APIVersionDiscovery},
     core::{DynamicObject, Resource, TypeMeta},
 };
-use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json_path::JsonPath;
-use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
-    sync,
-};
+use tokio::sync;
 use tracing::instrument;
 
-use crate::{gather::storage::Storage, scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION}};
+use crate::{
+    gather::storage::Storage,
+    scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION},
+};
 
 use super::{
     representation::{

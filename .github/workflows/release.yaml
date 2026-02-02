@@ -21,7 +21,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Git repo
         uses: actions/checkout@v6
@@ -50,7 +50,7 @@ jobs:
     name: Build - ${{ matrix.platform.name }}
     needs: test
     # By default, runs on Ubuntu, otherwise, override with the desired os
-    runs-on: ${{ matrix.platform.os || 'ubuntu-22.04' }}
+    runs-on: ${{ matrix.platform.os || 'ubuntu-24.04' }}
     strategy:
       matrix:
         # Set platforms you want to build your binaries on
@@ -68,11 +68,17 @@ jobs:
           - name: MacOS x86_64
             target: x86_64-apple-darwin
 
+          - name: MacOS aarch64
+            target: aarch64-apple-darwin
+
           # Windows
           - name: Windows x86_64
-            # Use another GitHub action OS
             os: windows-latest
             target: x86_64-pc-windows-msvc
+
+          - name: Windows aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
 
     steps:
       - name: Checkout Git repo
@@ -83,34 +89,17 @@ jobs:
         shell: bash
         run: sed -i -E "s/^version = \".+\"/version = \"${GITHUB_REF_NAME#v}\"/" Cargo.toml
 
-      # Linux & Windows
       - name: Install rust toolchain
-        if: ${{ !contains(matrix.platform.target, 'apple') }}
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          # We setup Rust toolchain and the desired target
-          profile: minimal
           toolchain: "${{ env.RUST_VERSION }}"
-          override: true
-          target: ${{ matrix.platform.target }}
+          targets: ${{ matrix.platform.target }}
           components: rustfmt, clippy
 
       - name: Build ${{ matrix.platform.name }} binary
-        if: ${{ !contains(matrix.platform.target, 'apple') }}
-        uses: actions-rs/cargo@v1
-        # We use cross-rs if not running on x86_64 architecture on Linux
-        with:
-          command: build
-          use-cross: true
-          args: ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
-
-      # Mac OS
-      - name: Build ${{ matrix.platform.name }} binary
-        if: contains(matrix.platform.target, 'apple')
-        # We use a dedicated Rust image containing required Apple libraries to cross-compile on multiple archs
         run: |
-          docker run --rm --volume "${PWD}":/root/src --workdir /root/src ghcr.io/crust-gather/rust-linux-darwin-builder:$RUST_VERSION \
-          sh -c "CC=o64-clang CXX=o64-clang++ cargo build $BUILD_ARGS --target ${{ matrix.platform.target }}"
+          cargo install cargo-cross
+          cargo cross build $BUILD_ARGS --target ${{ matrix.platform.target }}
 
       - name: Store artifact
         uses: actions/upload-artifact@v6

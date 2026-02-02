@@ -29,7 +29,10 @@ use tracing::{info, instrument};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
-use crate::gather::{reader::{ArchiveReader, Reader}, storage::Storage};
+use crate::gather::{
+    reader::{ArchiveReader, Reader},
+    storage::Storage,
+};
 
 use super::representation::{ArchivePath, Representation};
 
@@ -198,7 +201,7 @@ impl Writer {
         builder.finish()?;
         Ok(())
     }
-    
+
     /// Finish gzip archive
     pub fn finish_gzip(&mut self) -> anyhow::Result<()> {
         let Self::Gzip(_, builder) = self else {

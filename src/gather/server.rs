@@ -29,7 +29,9 @@ use tokio::time::{Instant, sleep};
 use crate::{
     cli::OCISettings,
     gather::{
-        reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch}, storage::{OCIState, Storage}, writer::Archive
+        reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
+        storage::{OCIState, Storage},
+        writer::Archive,
     },
 };
 
