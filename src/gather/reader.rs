@@ -324,8 +324,11 @@ impl Table {
 }
 
 #[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Watch {
     pub watch: Option<bool>,
+    pub allow_watch_bookmarks: Option<bool>,
+    pub send_initial_events: Option<bool>,
 }
 
 trait GatherObject: ResourceExt + Sized + Serialize {
