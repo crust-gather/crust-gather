@@ -13,9 +13,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_retry::Retry;
 use tokio_retry::strategy::ExponentialBackoff;
@@ -185,8 +186,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         for repr in representations {
             writer
                 .lock()
-                .unwrap()
-                .store(&self.get_secrets().strip(&repr))?;
+                .await
+                .store(&self.get_secrets().strip(&repr))
+                .await?;
         }
 
         Ok(())
@@ -243,8 +245,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         for repr in representations {
             writer
                 .lock()
-                .unwrap()
-                .sync(&self.get_secrets().strip(&repr))?;
+                .await
+                .sync(&self.get_secrets().strip(&repr))
+                .await?;
         }
 
         Ok(())

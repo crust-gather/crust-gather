@@ -12,7 +12,7 @@ case $go_arch in
 esac
 case $go_os in
     linux) rust_os='linux' ;;
-    darwin) rust_os='apple-darwin' rust_arch='x86_64' ;;
+    darwin) rust_os='apple-darwin' ;;
     windows) rust_os='windows' ;;
     *) echo "unknown os: $go_os" && exit 1 ;;
 esac

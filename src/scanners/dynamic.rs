@@ -1,11 +1,9 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use kube::Api;
 use kube::core::{ApiResource, DynamicObject, ResourceExt};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::gather::{
@@ -161,7 +159,8 @@ mod test {
                 Config {
                     client: config.try_into().expect("client"),
                     filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
-                    writer: Writer::new(&Archive::new(file_path), &Encoding::Path)
+                    writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
+                        .await
                         .expect("failed to create builder")
                         .into(),
                     secrets: Default::default(),

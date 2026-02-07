@@ -1,9 +1,17 @@
-use std::{fs::File, sync::Arc};
+use std::{
+    fs::{self, File},
+    sync::Arc,
+};
 
 use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand, arg, command};
 use k8s_openapi::serde::Deserialize;
 use kube::{Client, config::Kubeconfig};
+use oci_client::{
+    Reference,
+    client::{self, ClientConfig, ClientProtocol},
+    secrets::RegistryAuth,
+};
 use tracing::level_filters::LevelFilter;
 
 use crate::{
@@ -113,7 +121,9 @@ impl Commands {
                     .collect()
                     .await
             }
-            Commands::Serve { serve } => serve.get_api()?.serve().await.map_err(|e| anyhow!(e)),
+            Commands::Serve { serve } => {
+                serve.get_api().await?.serve().await.map_err(|e| anyhow!(e))
+            }
             Commands::Record { config } => {
                 let config = GatherCommands {
                     mode: GatherMode::Record,
@@ -253,6 +263,7 @@ impl GatherSettings {
                 .or(self.insecure_skip_tls_verify),
             file: other.file.or(self.file.clone()),
             encoding: other.encoding.or(self.encoding.clone()),
+            oci: other.oci.merge(self.oci.clone()),
             secrets: if other.secrets.is_empty() {
                 self.secrets.clone()
             } else {
@@ -314,7 +325,15 @@ pub struct GatherSettings {
     ///     --encoding=zip
     #[arg(short, long, value_enum)]
     #[serde(default)]
+    #[arg(conflicts_with = "reference")]
     encoding: Option<Encoding>,
+
+    /// OCI destination for crust gather collection. Stores cluster state in the provided image reference
+    /// with optional authentication.
+    #[clap(flatten)]
+    #[serde(flatten)]
+    #[serde(default)]
+    oci: OCISettings,
 
     /// Secret environment variable name with data to exclude in the collected artifacts.
     /// Can be specified multiple times to exclude multiple values.
@@ -368,6 +387,109 @@ pub struct GatherSettings {
     debug_pod: DebugPod,
 }
 
+/// OCI Registry storage options.
+#[derive(Parser, Clone, Default, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OCISettings {
+    /// Token to use for the registry authentication
+    #[arg(short, long)]
+    #[arg(conflicts_with = "regular")]
+    #[serde(default)]
+    pub token: Option<String>,
+
+    /// Username and password for the registry authentication
+    #[command(flatten)]
+    #[serde(flatten)]
+    #[serde(default)]
+    pub regular: Option<UsernamePassword>,
+
+    /// Use HTTP to interact with the registry
+    #[arg(long)]
+    #[serde(default)]
+    pub insecure: bool,
+
+    /// CA file to use for registry communication
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Reference> {Ok(arg.try_into()?)})]
+    #[serde(default)]
+    pub ca_file: Option<Certificate>,
+
+    /// OCI Image reference
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Reference> {Ok(arg.parse()?)})]
+    #[serde(default)]
+    pub reference: Option<Reference>,
+}
+
+/// Username/password authentication payload.
+#[derive(Parser, Clone, Default, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+#[group(id = "regular", conflicts_with = "token")]
+pub(crate) struct UsernamePassword {
+    /// Username to use for the registry authentication
+    #[arg(short, long, required = false)]
+    pub username: String,
+
+    /// Password to use for the registry authentication
+    #[arg(short, long, required = false)]
+    pub password: String,
+}
+
+/// A x509 certificate
+#[derive(Debug, Clone, Deserialize)]
+pub struct Certificate {
+    pub data: Vec<u8>,
+}
+
+impl TryFrom<String> for Certificate {
+    type Error = anyhow::Error;
+
+    fn try_from(ca_file: String) -> Result<Self, Self::Error> {
+        Ok(Self {
+            data: fs::read_to_string(ca_file)?.as_bytes().to_vec(),
+        })
+    }
+}
+
+impl OCISettings {
+    fn merge(&self, other: Self) -> Self {
+        Self {
+            token: self.token.clone().or(other.token),
+            regular: self.regular.clone().or(other.regular),
+            insecure: self.insecure || other.insecure,
+            ca_file: self.ca_file.clone().or(other.ca_file),
+            reference: self.reference.clone().or(other.reference),
+        }
+    }
+
+    pub fn to_client_config(&self) -> ClientConfig {
+        let mut config = ClientConfig::default();
+        if self.insecure {
+            config.protocol = ClientProtocol::Http;
+        };
+
+        if let Some(cert) = self.ca_file.as_ref() {
+            config.extra_root_certificates.push(client::Certificate {
+                encoding: client::CertificateEncoding::Pem,
+                data: cert.data.clone(),
+            });
+        }
+
+        config.max_concurrent_upload = 512;
+
+        config
+    }
+
+    pub fn to_auth(&self) -> RegistryAuth {
+        let mut auth = RegistryAuth::Anonymous;
+        if let Some(token) = self.token.as_ref() {
+            auth = RegistryAuth::Bearer(token.clone())
+        } else if let Some(up) = self.regular.as_ref() {
+            auth = RegistryAuth::Basic(up.username.clone(), up.password.clone())
+        }
+
+        auth
+    }
+}
+
 impl GatherSettings {
     pub async fn client(&self) -> anyhow::Result<Client> {
         let origin = self.origin_client().await?;
@@ -403,6 +525,36 @@ impl GatherSettings {
             }
             None => KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await,
         }
+    }
+
+    pub async fn to_writer(&self) -> anyhow::Result<Writer> {
+        let encoding = if let Some(reference) = self.oci.reference.as_ref() {
+            &Encoding::Oci(reference.clone())
+        } else if let Some(encoding) = self.encoding.as_ref() {
+            encoding
+        } else {
+            &Encoding::Path
+        };
+
+        let client_config = if self.oci.reference.as_ref().is_some() {
+            Some(self.oci.to_client_config())
+        } else {
+            None
+        };
+
+        let auth = if self.oci.reference.as_ref().is_some() {
+            Some(self.oci.to_auth())
+        } else {
+            None
+        };
+
+        Writer::new(
+            &self.file.clone().unwrap_or_default(),
+            encoding,
+            client_config,
+            auth,
+        )
+        .await
     }
 }
 
@@ -616,7 +768,7 @@ impl GatherCommands {
 
         secrets.0.extend(env_secrets.0.into_iter());
 
-        let writer: Writer = (&self.settings).try_into()?;
+        let writer: Writer = self.settings.to_writer().await?;
 
         Ok(Config {
             client: self.client().await?,
@@ -640,17 +792,6 @@ impl GatherCommands {
 
     async fn client(&self) -> anyhow::Result<Client> {
         self.settings.client().await
-    }
-}
-
-impl TryInto<Writer> for &GatherSettings {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<Writer, Self::Error> {
-        Writer::new(
-            &self.file.clone().unwrap_or_default(),
-            self.encoding.as_ref().map_or(&Encoding::Path, |e| e),
-        )
     }
 }
 

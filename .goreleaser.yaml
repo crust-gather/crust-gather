@@ -10,9 +10,6 @@ builds:
       - amd64
       - arm64
     binary: kubectl-crust-gather
-    ignore:
-      - goos: windows
-        goarch: arm64
     hooks:
       post: ./.goreleaser_hook.sh {{ .Arch }} {{ .Os }} kubectl-{{ .ProjectName }}
 

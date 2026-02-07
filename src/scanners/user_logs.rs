@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Debug},
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ use kube::{
         subresource::AttachParams,
     },
 };
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::{

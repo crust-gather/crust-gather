@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Debug},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -18,6 +18,7 @@ use kube::{
     },
 };
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::{
