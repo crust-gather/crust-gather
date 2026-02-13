@@ -19,8 +19,12 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use k8s_openapi::serde_json::{self, json};
 use kube::{
+    api::{TypeMeta, WatchEvent},
     config::{Cluster, Context, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext},
-    core::discovery::v2,
+    core::{
+        discovery::v2,
+        watch::{Bookmark, BookmarkMeta},
+    },
 };
 use oci_client::Client;
 use serde::Deserialize;
@@ -30,6 +34,7 @@ use crate::{
     cli::OCISettings,
     gather::{
         reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
+        representation::TypeMetaGetter,
         storage::{OCIState, Storage},
         writer::Archive,
     },
@@ -429,6 +434,7 @@ async fn apis(
         .insert_header(("X-Varied-Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
+// TODO: I want to log all query parameters passed in stdout, as a qick debug. Even those which are not defined here
 #[get("{server}/api/{version}/{kind}")]
 async fn api_list(
     accept: Header<Accept>,
@@ -438,7 +444,7 @@ async fn api_list(
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
     match watch.watch {
-        Some(true) => watch_response(accept, list, query, state).await,
+        Some(true) => watch_response(accept, list, query, state, watch).await,
         None | Some(false) => list_response(accept, list, query, state).await,
     }
 }
@@ -452,7 +458,7 @@ async fn apis_list(
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
     match watch.watch {
-        Some(true) => watch_response(accept, list, query, state).await,
+        Some(true) => watch_response(accept, list, query, state, watch).await,
         None | Some(false) => list_response(accept, list, query, state).await,
     }
 }
@@ -466,7 +472,7 @@ async fn api_namespaced_list(
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
     match watch.watch {
-        Some(true) => watch_response(accept, list, query, state).await,
+        Some(true) => watch_response(accept, list, query, state, watch).await,
         None | Some(false) => list_response(accept, list, query, state).await,
     }
 }
@@ -484,7 +490,7 @@ async fn apis_namespaced_list(
     state: web::Data<ApiState>,
 ) -> actix_web::Result<impl Responder> {
     match watch.watch {
-        Some(true) => watch_response(accept, list, query, state).await,
+        Some(true) => watch_response(accept, list, query, state, watch).await,
         None | Some(false) => list_response(accept, list, query, state).await,
     }
 }
@@ -525,6 +531,16 @@ async fn watch_events(
     })
 }
 
+fn bookmark_event(types: TypeMeta) -> WatchEvent<()> {
+    WatchEvent::Bookmark(Bookmark {
+        types,
+        metadata: BookmarkMeta {
+            resource_version: "0".to_string(),
+            annotations: [("k8s.io/initial-events-end".to_string(), "true".to_string())].into(),
+        },
+    })
+}
+
 // Regular responder with list of objects
 async fn list_response(
     accept: Header<Accept>,
@@ -547,6 +563,7 @@ async fn watch_response(
     list: Path<List>,
     query: Query<Selector>,
     state: web::Data<ApiState>,
+    watch: Query<Watch>,
 ) -> actix_web::Result<HttpResponse> {
     let archive = state
         .archives
@@ -559,11 +576,21 @@ async fn watch_response(
         .map_err(error::ErrorServiceUnavailable)?;
     let list = archive.named_object_from_list(list.clone());
     let mut refresh = Instant::now();
+    let mut bookmark_published = false;
     let s = stream! {
         loop {
+            if let Some(true) = watch.allow_watch_bookmarks &&
+                let Some(true) = watch.send_initial_events &&
+                !bookmark_published {
+                let event = bookmark_event(list.to_type_meta());
+                yield publish(serde_json::to_value(event)?);
+                bookmark_published = true
+            }
+
             for event in watch_events(accept.clone(), list.clone(), query.clone(), &reader).await? {
                 yield publish(event);
             }
+
             let next_event_time = reader.pop_next_event_time();
             if next_event_time == Duration::MAX {
                 break;
