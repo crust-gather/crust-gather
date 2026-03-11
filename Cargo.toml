@@ -38,7 +38,7 @@ tracing-subscriber = { version = "0.3.22", features = ["fmt", "env-filter"] }
 chrono = { version = "0.4.44", features = ["now", "serde"] }
 oci-client = "0.16.1"
 sha2 = "0.10.9"
-cached = { version = "0.56.0", features = ["async"] }
+cached = { version = "0.58.0", features = ["async"] }
 
 [dev-dependencies]
 xid = "1.1.1"
