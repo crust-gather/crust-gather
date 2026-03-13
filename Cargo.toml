@@ -34,7 +34,7 @@ jsonptr = "0.7.1"
 async-stream = "0.3.6"
 thiserror = "2.0.18"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 chrono = { version = "0.4.44", features = ["now", "serde"] }
 oci-client = "0.16.1"
 sha2 = "0.10.9"
