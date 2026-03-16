@@ -1021,10 +1021,12 @@ dependencies = [
 
 [[package]]
 name = "envtest"
-version = "0.0.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8716f09166d28a4e95ce3a84a6a21288a32b8399596de141b932dce97b79e4e"
+checksum = "ce14cfe6406ca36a47189f60910342384b7eee57138956e736c78c6cc7ef0bb1"
 dependencies = [
+ "k8s-openapi",
+ "kube",
  "rust2go",
  "serde",
  "serde_json",
@@ -1107,6 +1109,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs-set-times"
+version = "0.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
+dependencies = [
+ "io-lifetimes",
+ "rustix",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1681,6 +1694,12 @@ checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
 dependencies = [
  "rustversion",
 ]
+
+[[package]]
+name = "io-lifetimes"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
 
 [[package]]
 name = "ipnet"
@@ -2719,11 +2738,12 @@ dependencies = [
 
 [[package]]
 name = "rust2go"
-version = "0.4.1"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b72d44674ddf3acb250c3cf3a608e928c6a0aa176f0f8fa9f83e7778ae713519"
+checksum = "021695cb0d56dbef5f29b24d2dd9a23552464500574260a41c198fe17c78a3fe"
 dependencies = [
  "bindgen",
+ "fs-set-times",
  "rust2go-cli",
  "rust2go-convert",
  "rust2go-macro",
@@ -2732,9 +2752,9 @@ dependencies = [
 
 [[package]]
 name = "rust2go-cli"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f5b73395abf8ad750730351b7bcb5b8fc637dadf3d900f55dc59953a5b15bf6"
+checksum = "8490df1c618176bfd681c0e27b46fa98f42739c441c12a8f7bc85eb6550e54fe"
 dependencies = [
  "cbindgen",
  "clap",
@@ -2744,10 +2764,11 @@ dependencies = [
 
 [[package]]
 name = "rust2go-common"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04274cfe9552d6893cf9cb17652de327c3b0f4f912b5372a904d9d97da9204c5"
+checksum = "a27eb858d3df960a07bc7f7e43f642d6a8368cc32110d7daacb6aa069eb7f9c5"
 dependencies = [
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2755,15 +2776,15 @@ dependencies = [
 
 [[package]]
 name = "rust2go-convert"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c9b9dcfbeec346b228b700861dc2b43f32ab6679b6440db3eedc459ef024be"
+checksum = "21ee4d6efac91720550e564892b1fddfe103683f7f0b19196f59dae1621e6e83"
 
 [[package]]
 name = "rust2go-macro"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f195b1658c4984e70f0aef27b49a1d2b98e106a1418542017dfc9d11636e7c4"
+checksum = "a694d2aa8c7265126b0f3c712bd8411e5415d5e5f906fa2996a10beb81b5efca"
 dependencies = [
  "proc-macro2",
  "quote",
