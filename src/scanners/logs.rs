@@ -158,9 +158,7 @@ mod test {
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
-    use kube::config::Kubeconfig;
     use kube::core::params::PostParams;
-    use serial_test::serial;
     use tempfile::TempDir;
     use tokio::time::timeout;
     use tokio_retry::{Retry, strategy::FixedInterval};
@@ -181,13 +179,11 @@ mod test {
     use super::Logs;
 
     #[tokio::test]
-    #[serial]
     async fn collect_logs() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let pod_api: Api<Pod> = Api::default_namespaced(config.clone().try_into().expect("client"));
+        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().expect("client"));
 
         let pod = timeout(
             Duration::new(10, 0),
@@ -221,7 +217,7 @@ mod test {
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
             collectable: Objects::new_typed(Config {
-                client: config.try_into().expect("client"),
+                client: test_env.client().expect("client"),
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
                 writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
                     .await

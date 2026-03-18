@@ -81,11 +81,9 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::config::Kubeconfig;
     use kube::core::{ApiResource, params::PostParams};
 
     use serde::Deserialize;
-    use serial_test::serial;
     use tempfile::TempDir;
     use tokio::time::timeout;
     use tokio_retry::{Retry, strategy::FixedInterval};
@@ -113,14 +111,12 @@ mod test {
     );
 
     #[tokio::test]
-    #[serial]
     async fn collect_dynamic_object() {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
         let api: Api<DynamicObject> = Api::default_namespaced_with(
-            config.clone().try_into().expect("client"),
+            test_env.client().expect("client"),
             &ApiResource::erase::<Pod>(&()),
         );
 
@@ -157,7 +153,7 @@ mod test {
         let dynamic = Dynamic {
             collectable: Objects::new(
                 Config {
-                    client: config.try_into().expect("client"),
+                    client: test_env.client().expect("client"),
                     filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
                     writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
                         .await

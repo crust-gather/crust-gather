@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     hash::Hash,
-    io::{self, BufRead as _, Read},
+    io::{self, BufRead as _},
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},

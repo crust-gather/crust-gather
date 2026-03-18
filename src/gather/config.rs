@@ -482,7 +482,6 @@ impl Group {
 #[cfg(test)]
 mod tests {
 
-    use serial_test::serial;
     use tempfile::TempDir;
 
     use crate::{
@@ -555,11 +554,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_gzip_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.try_into().unwrap();
+        let client = test_env.client().expect("client");
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
         let f = NamespaceInclude::try_from("default".to_string()).unwrap();
@@ -585,11 +582,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_zip_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.try_into().unwrap();
+        let client = test_env.client().expect("client");
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.tar.gz");
@@ -613,11 +608,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_path_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.try_into().unwrap();
+        let client = test_env.client().expect("client");
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
