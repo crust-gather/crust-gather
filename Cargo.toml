@@ -43,9 +43,8 @@ cached = { version = "0.58.0", features = ["async"] }
 [dev-dependencies]
 xid = "1.1.1"
 tempfile = "3.27.0"
-serial_test = "3.4.0"
 serde_with = "3.18.0"
-envtest = "0.0.1"
+envtest = "0.1.2"
 
 [profile.release]
 strip = true

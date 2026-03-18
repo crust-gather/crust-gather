@@ -108,8 +108,7 @@ mod test {
         serde_json,
     };
     use kube::core::{ApiResource, DynamicObject, params::PostParams};
-    use kube::{Api, Client, config::Kubeconfig};
-    use serial_test::serial;
+    use kube::Api;
     use tokio_retry::Retry;
     use tokio_retry::strategy::FixedInterval;
 
@@ -130,11 +129,9 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
-    #[serial]
     async fn collect_pod() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
-        let client: Client = config.try_into().expect("client");
+        let client = test_env.client().expect("client");
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
@@ -203,11 +200,9 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_path_cluster_scoped() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
-        let client = config.try_into().expect("client");
+        let client = test_env.client().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
 
@@ -241,11 +236,9 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_path_namespaced() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
-        let client = config.try_into().expect("client");
+        let client = test_env.client().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 

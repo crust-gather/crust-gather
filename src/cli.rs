@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use clap::{ArgAction, Parser, Subcommand, arg, command};
+use clap::{ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::Deserialize;
 use kube::{Client, config::Kubeconfig};
 use oci_client::{
@@ -825,11 +825,9 @@ mod tests {
     use std::{collections::BTreeMap, env, io::Write};
 
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
-    use k8s_openapi::serde_json;
 
     use kube::core::{ObjectMeta, params::ListParams};
     use kube::{Api, api::PostParams};
-    use serial_test::serial;
     use tempfile::TempDir;
     use tokio::fs;
 
@@ -842,11 +840,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_client_from_kubeconfig() {
         let test_env = envtest::Environment::default().create().expect("cluster");
 
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
@@ -873,11 +870,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_insecure_client_from_kubeconfig() {
         let test_env = envtest::Environment::default().create().expect("cluster");
 
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
@@ -905,11 +901,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_client_from_default() {
         let test_env = envtest::Environment::default().create().expect("cluster");
 
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
+        let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
@@ -930,7 +925,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_insecure_client_from_default() {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config = test_env.kubeconfig().unwrap();
@@ -950,7 +944,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect() {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config = test_env.kubeconfig().unwrap();
@@ -990,7 +983,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect_from_config() {
         let test_env = envtest::Environment::default().create().expect("cluster");
         let config = test_env.kubeconfig().unwrap();
@@ -1044,11 +1036,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect_from_config_map() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.clone().try_into().unwrap();
+        let config = test_env.kubeconfig().unwrap();
+        let client = test_env.client().expect("client");
 
         let valid_config = r"
             filters:
@@ -1108,19 +1099,18 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect_kubeconfig_from_secret() {
         let test_env = envtest::Environment::default()
             .create()
             .expect("cluster one");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.clone().try_into().unwrap();
+        let config = test_env.kubeconfig().unwrap();
+        let client = test_env.client().expect("client");
 
         let other_env = envtest::Environment::default()
             .create()
             .expect("cluster two");
 
-        let other_kubeconfig: serde_json::Value = other_env.kubeconfig().unwrap();
+        let other_kubeconfig = other_env.kubeconfig().unwrap();
         let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
         fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await
@@ -1266,19 +1256,18 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect_kubeconfig_from_secret_by_name() {
         let test_env = envtest::Environment::default()
             .create()
             .expect("cluster one");
-        let config: Kubeconfig = test_env.kubeconfig().unwrap();
-        let client: Client = config.clone().try_into().unwrap();
+        let config = test_env.kubeconfig().unwrap();
+        let client = test_env.client().expect("client");
 
         let other_env = envtest::Environment::default()
             .create()
             .expect("cluster two");
 
-        let other_kubeconfig: serde_json::Value = other_env.kubeconfig().unwrap();
+        let other_kubeconfig = other_env.kubeconfig().unwrap();
         let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
         fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await

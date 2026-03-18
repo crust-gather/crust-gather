@@ -98,8 +98,7 @@ mod tests {
     use std::{env, fs::File, io::Write, path::PathBuf, time::Duration};
 
     use k8s_openapi::{api::core::v1::Pod, serde_json};
-    use kube::{Api, api::PostParams, config::Kubeconfig};
-    use serial_test::serial;
+    use kube::{Api, api::PostParams};
     use tempfile::TempDir;
     use tokio::{fs, time::timeout};
     use tokio_retry::{Retry, strategy::FixedInterval};
@@ -113,10 +112,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_collect_versions() {
         let test_env = envtest::Environment::default().create().expect("cluster");
-        let kubeconfig: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
+        let kubeconfig = test_env.kubeconfig().expect("kubeconfig");
 
         let kubeconfig = serde_yaml::to_string(&kubeconfig).unwrap();
         let path = temp_kubeconfig();
@@ -136,10 +134,7 @@ mod tests {
         );
         valid.write_all(valid_config.as_bytes()).unwrap();
 
-        let config: Kubeconfig = test_env.kubeconfig().expect("kubeconfig");
-        let client = config.try_into().expect("client");
-
-        let pod_api: Api<Pod> = Api::default_namespaced(client);
+        let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().expect("client"));
         timeout(
             Duration::new(10, 0),
             Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
