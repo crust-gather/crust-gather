@@ -1,7 +1,11 @@
-use std::fmt::{Debug, Display};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+};
 
 use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
+use rmcp::schemars::{self, Schema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::scanners::interface::ResourceThreadSafe;
@@ -9,6 +13,7 @@ use crate::scanners::interface::ResourceThreadSafe;
 use super::{
     group::{GroupExclude, GroupInclude},
     kind::{KindExclude, KindInclude},
+    name::{NameExclude, NameInclude},
     namespace::{NamespaceExclude, NamespaceInclude},
 };
 
@@ -60,6 +65,8 @@ pub enum FilterType {
     KindExclude(Vec<KindExclude>),
     GroupInclude(Vec<GroupInclude>),
     GroupExclude(Vec<GroupExclude>),
+    NameInclude(Vec<NameInclude>),
+    NameExclude(Vec<NameExclude>),
 }
 
 impl From<&Self> for FilterType {
@@ -91,9 +98,11 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterList {
                 FilterType::NamespaceExclude(e) => e.filter_object(obj, gvk),
                 FilterType::KindExclude(e) => e.filter_object(obj, gvk),
                 FilterType::GroupExclude(e) => e.filter_object(obj, gvk),
+                FilterType::NameExclude(e) => e.filter_object(obj, gvk),
                 FilterType::NamespaceInclude(_) => None,
                 FilterType::KindInclude(_) => None,
                 FilterType::GroupInclude(_) => None,
+                FilterType::NameInclude(_) => None,
             })
             .peekable();
 
@@ -105,9 +114,11 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterList {
             FilterType::NamespaceExclude(_) => None,
             FilterType::KindExclude(_) => None,
             FilterType::GroupExclude(_) => None,
+            FilterType::NameExclude(_) => None,
             FilterType::NamespaceInclude(i) => i.filter_object(obj, gvk),
             FilterType::KindInclude(i) => i.filter_object(obj, gvk),
             FilterType::GroupInclude(i) => i.filter_object(obj, gvk),
+            FilterType::NameInclude(i) => i.filter_object(obj, gvk),
         });
 
         Some(includes.all(|allowed| allowed))
@@ -118,9 +129,28 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterList {
 #[serde(try_from = "String")]
 pub struct FilterRegex(pub Regex);
 
+impl schemars::JsonSchema for FilterRegex {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("FilterRegex")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> Schema {
+        String::json_schema(generator)
+    }
+}
+
 impl Default for FilterRegex {
     fn default() -> Self {
         Self(Regex::new("").unwrap())
+    }
+}
+
+impl Serialize for FilterRegex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.0.as_str())
     }
 }
 

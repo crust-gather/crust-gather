@@ -26,8 +26,9 @@ use kube::{
         watch::{Bookmark, BookmarkMeta},
     },
 };
-use oci_client::Client;
+use oci_client::{Client, Reference};
 use serde::Deserialize;
+use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep};
 
 use crate::{
@@ -54,6 +55,14 @@ impl Default for Socket {
 impl Display for Socket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for Socket {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Ok(Self(value.parse()?))
     }
 }
 
@@ -186,7 +195,7 @@ impl Api {
         })
     }
 
-    pub async fn new_oci(
+    pub(crate) async fn new_oci(
         oci: OCISettings,
         socket: Socket,
         kubeconfig: Option<PathBuf>,
@@ -194,6 +203,8 @@ impl Api {
         let Some(reference) = &oci.reference else {
             anyhow::bail!("missing reference");
         };
+
+        let reference: Reference = reference.clone().into();
 
         let Socket(socket) = socket;
 
@@ -216,7 +227,7 @@ impl Api {
 
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
-        let (manifest, _) = client.pull_image_manifest(reference, &auth).await?;
+        let (manifest, _) = client.pull_image_manifest(&reference, &auth).await?;
         let mut index = HashMap::new();
 
         for layer in manifest.layers {
@@ -305,9 +316,13 @@ impl Api {
     }
 
     pub async fn serve(self) -> anyhow::Result<()> {
+        self.serve_with_shutdown(oneshot::channel::<()>().1).await
+    }
+
+    pub async fn serve_with_shutdown(self, shutdown: oneshot::Receiver<()>) -> anyhow::Result<()> {
         let state = self.state.clone();
 
-        HttpServer::new(move || {
+        let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
                 .service(version)
@@ -327,8 +342,16 @@ impl Api {
         .keep_alive(KeepAlive::Timeout(Duration::from_secs(30)))
         .client_disconnect_timeout(Duration::from_secs(5))
         .bind_auto_h2c(self.socket)?
-        .run()
-        .await?;
+        .run();
+
+        let handle = server.handle();
+
+        tokio::spawn(async move {
+            let _ = shutdown.await;
+            handle.stop(true).await;
+        });
+
+        server.await?;
 
         Self::clean_kubeconfig(state)?;
 

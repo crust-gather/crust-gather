@@ -1,14 +1,15 @@
 use std::fmt::Display;
 
 use kube::core::GroupVersionKind;
-use serde::Deserialize;
+use rmcp::schemars;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
 use super::filter::{Filter, FilterRegex, FilterType};
 
-#[derive(Clone, Default, Deserialize, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct Group {
     group: FilterRegex,
@@ -21,7 +22,7 @@ impl Group {
     }
 }
 
-#[derive(Clone, Default, Deserialize, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct GroupInclude {
     group: Group,
@@ -86,7 +87,7 @@ impl From<Vec<GroupInclude>> for FilterType {
     }
 }
 
-#[derive(Clone, Default, Deserialize, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct GroupExclude {
     group: Group,
