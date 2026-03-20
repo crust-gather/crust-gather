@@ -5,13 +5,14 @@ use std::{
 
 use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand};
-use k8s_openapi::serde::Deserialize;
+use k8s_openapi::serde::{Deserialize, Serialize};
 use kube::{Client, config::Kubeconfig};
 use oci_client::{
     Reference,
     client::{self, ClientConfig, ClientProtocol},
     secrets::RegistryAuth,
 };
+use rmcp::schemars;
 use tracing::level_filters::LevelFilter;
 
 use crate::{
@@ -20,6 +21,7 @@ use crate::{
         group::{GroupExclude, GroupInclude},
         kind::{KindExclude, KindInclude},
         log::UserLog,
+        name::{NameExclude, NameInclude},
         namespace::{NamespaceExclude, NamespaceInclude},
     },
     gather::{
@@ -30,8 +32,10 @@ use crate::{
         server::Server,
         writer::{Archive, Encoding, Writer},
     },
+    mcp_server,
 };
 
+use tracing_subscriber::Layer;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -52,8 +56,15 @@ pub struct Cli {
 
 impl Cli {
     pub fn init(&self) {
+        let fmt_layer = if matches!(self.command, Commands::Mcp) {
+            // The MCP transport owns stdout, so logs must go to stderr in this mode.
+            fmt::layer().with_writer(std::io::stderr).boxed()
+        } else {
+            fmt::layer().boxed()
+        };
+
         tracing_subscriber::registry()
-            .with(fmt::layer())
+            .with(fmt_layer)
             .with(EnvFilter::from_default_env().add_directive(self.verbosity.into()))
             .init();
     }
@@ -99,6 +110,9 @@ pub enum Commands {
         #[command(flatten)]
         serve: Server,
     },
+
+    /// Start the MCP server over stdio.
+    Mcp,
 }
 
 impl Commands {
@@ -124,6 +138,7 @@ impl Commands {
             Commands::Serve { serve } => {
                 serve.get_api().await?.serve().await.map_err(|e| anyhow!(e))
             }
+            Commands::Mcp => mcp_server::run().await,
             Commands::Record { config } => {
                 let config = GatherCommands {
                     mode: GatherMode::Record,
@@ -291,11 +306,11 @@ pub struct GatherSettings {
     ///     --kubeconfig=./kubeconfig
     #[arg(short, long, value_name = "PATH",
         value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
-    kubeconfig: Option<KubeconfigFile>,
+    pub kubeconfig: Option<KubeconfigFile>,
 
     /// Collect kubeconfig from a secret.
     #[command(flatten)]
-    kubeconfig_secret: Option<KubeconfigFromSecret>,
+    pub kubeconfig_secret: Option<KubeconfigFromSecret>,
 
     /// Pass an insecure flag to kubeconfig file.
     /// If not provided, defaults to false and kubeconfig will be uses as-is.
@@ -304,7 +319,7 @@ pub struct GatherSettings {
     ///     --insecure-skip-tls-verify
     #[arg(short, long)]
     #[serde(default)]
-    insecure_skip_tls_verify: Option<bool>,
+    pub insecure_skip_tls_verify: Option<bool>,
 
     /// The output file path.
     /// Defaults to a new archive with name "crust-gather".
@@ -313,7 +328,7 @@ pub struct GatherSettings {
     ///     --file=./artifacts
     #[arg(short, long, value_name = "PATH")]
     #[serde(default)]
-    file: Option<Archive>,
+    pub file: Option<Archive>,
 
     /// Encoding for the output file.
     /// By default there is no encoding and data is written to the filesystem.
@@ -326,14 +341,14 @@ pub struct GatherSettings {
     #[arg(short, long, value_enum)]
     #[serde(default)]
     #[arg(conflicts_with = "reference")]
-    encoding: Option<Encoding>,
+    pub encoding: Option<Encoding>,
 
     /// OCI destination for crust gather collection. Stores cluster state in the provided image reference
     /// with optional authentication.
     #[clap(flatten)]
     #[serde(flatten)]
     #[serde(default)]
-    oci: OCISettings,
+    pub oci: OCISettings,
 
     /// Secret environment variable name with data to exclude in the collected artifacts.
     /// Can be specified multiple times to exclude multiple values.
@@ -342,7 +357,7 @@ pub struct GatherSettings {
     ///     --secret=MY_ENV_SECRET_DATA --secret=SOME_OTHER_SECRET_DATA
     #[arg(short, long = "secret", action = ArgAction::Append)]
     #[serde(default)]
-    secrets: Vec<String>,
+    pub secrets: Vec<String>,
 
     /// Secret file name with secret data to exclude in the collected artifacts.
     /// Can be supplied only once.
@@ -358,7 +373,7 @@ pub struct GatherSettings {
     #[arg(long = "secrets-file", value_name = "PATH", verbatim_doc_comment,
         value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg.to_string())?)})]
     #[serde(default)]
-    secrets_file: Option<SecretsFile>,
+    pub secrets_file: Option<SecretsFile>,
 
     /// The duration to run the collection for.
     /// Defaults to 60 seconds.
@@ -368,7 +383,7 @@ pub struct GatherSettings {
     #[arg(short, long, value_name = "DURATION",
         value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
     #[serde(default)]
-    duration: Option<RunDuration>,
+    pub duration: Option<RunDuration>,
 
     /// Name of the kubelet systemd unit.
     ///
@@ -379,18 +394,18 @@ pub struct GatherSettings {
     ///     --systemd-unit=rke2-agent
     #[arg(long = "systemd-unit", value_name = "SYSTEMD_UNIT", default_value = "kubelet", action = ArgAction::Append )]
     #[serde(default)]
-    systemd_units: Vec<String>,
+    pub systemd_units: Vec<String>,
 
     /// Collect settings to configure the pod which collect logs on nodes.
     #[command(flatten)]
     #[serde(default)]
-    debug_pod: DebugPod,
+    pub debug_pod: DebugPod,
 }
 
 /// OCI Registry storage options.
-#[derive(Parser, Clone, Default, Deserialize, Debug)]
+#[derive(Parser, Clone, Default, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OCISettings {
+pub struct OCISettings {
     /// Token to use for the registry authentication
     #[arg(short, long)]
     #[arg(conflicts_with = "regular")]
@@ -409,21 +424,76 @@ pub(crate) struct OCISettings {
     pub insecure: bool,
 
     /// CA file to use for registry communication
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Reference> {Ok(arg.try_into()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Certificate> {Ok(arg.to_string().try_into()?)})]
     #[serde(default)]
     pub ca_file: Option<Certificate>,
 
     /// OCI Image reference
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Reference> {Ok(arg.parse()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<OCIReference> {Ok(arg.to_string().try_into()?)})]
     #[serde(default)]
-    pub reference: Option<Reference>,
+    pub reference: Option<OCIReference>,
+}
+
+#[derive(
+    Clone, Hash, PartialEq, Eq, Debug, Serialize, Deserialize, schemars::JsonSchema, Default,
+)]
+pub struct OCIReference {
+    pub registry: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_registry: Option<String>,
+    pub repository: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+impl From<OCIReference> for Reference {
+    fn from(reference: OCIReference) -> Self {
+        let mut r = if let Some(tag) = reference.tag {
+            Reference::with_tag(reference.registry, reference.repository, tag)
+        } else {
+            Reference::with_digest(
+                reference.registry,
+                reference.repository,
+                reference.digest.unwrap_or_default(),
+            )
+        };
+
+        if let Some(mirror) = reference.mirror_registry {
+            r.set_mirror_registry(mirror)
+        }
+
+        r
+    }
+}
+
+impl From<Reference> for OCIReference {
+    fn from(reference: Reference) -> Self {
+        Self {
+            registry: reference.registry().to_string(),
+            mirror_registry: reference.namespace().map(ToString::to_string),
+            repository: reference.repository().to_string(),
+            tag: reference.tag().map(ToString::to_string),
+            digest: reference.digest().map(ToString::to_string),
+        }
+    }
+}
+
+impl TryFrom<String> for OCIReference {
+    type Error = anyhow::Error;
+
+    fn try_from(reference: String) -> Result<Self, Self::Error> {
+        let reference: Reference = reference.parse()?;
+        Ok(reference.into())
+    }
 }
 
 /// Username/password authentication payload.
-#[derive(Parser, Clone, Default, Deserialize, Debug)]
+#[derive(Parser, Clone, Default, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[group(id = "regular", conflicts_with = "token")]
-pub(crate) struct UsernamePassword {
+pub struct UsernamePassword {
     /// Username to use for the registry authentication
     #[arg(short, long, required = false)]
     pub username: String,
@@ -434,7 +504,7 @@ pub(crate) struct UsernamePassword {
 }
 
 /// A x509 certificate
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct Certificate {
     pub data: Vec<u8>,
 }
@@ -529,7 +599,7 @@ impl GatherSettings {
 
     pub async fn to_writer(&self) -> anyhow::Result<Writer> {
         let encoding = if let Some(reference) = self.oci.reference.as_ref() {
-            &Encoding::Oci(reference.clone())
+            &Encoding::Oci(reference.clone().into())
         } else if let Some(encoding) = self.encoding.as_ref() {
             encoding
         } else {
@@ -652,7 +722,7 @@ pub struct AdditionalLogs {
     additional_logs: Vec<UserLog>,
 }
 
-#[derive(Parser, Clone, Default, Deserialize)]
+#[derive(Parser, Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Filters {
     /// Namespace to include in the resource collection.
@@ -668,7 +738,7 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<NamespaceInclude> {Ok(NamespaceInclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    include_namespace: Vec<NamespaceInclude>,
+    pub include_namespace: Vec<NamespaceInclude>,
 
     /// Namespace to exclude from the resource collection.
     ///
@@ -683,7 +753,7 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<NamespaceExclude> {Ok(NamespaceExclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    exclude_namespace: Vec<NamespaceExclude>,
+    pub exclude_namespace: Vec<NamespaceExclude>,
 
     /// Resource kind to include in the resource collection.
     ///
@@ -698,7 +768,7 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<KindInclude> {Ok(KindInclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    include_kind: Vec<KindInclude>,
+    pub include_kind: Vec<KindInclude>,
 
     /// Resource kind to exclude from the resource collection.
     ///
@@ -713,7 +783,7 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<KindExclude> {Ok(KindExclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    exclude_kind: Vec<KindExclude>,
+    pub exclude_kind: Vec<KindExclude>,
 
     /// API group/kind to include in the resource collection.
     ///
@@ -730,7 +800,7 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<GroupInclude> {Ok(GroupInclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    include_group: Vec<GroupInclude>,
+    pub include_group: Vec<GroupInclude>,
 
     /// API groups/kind to exclude from the resource collection.
     ///
@@ -747,7 +817,33 @@ pub struct Filters {
             value_parser = |arg: &str| -> anyhow::Result<GroupExclude> {Ok(GroupExclude::try_from(arg.to_string())?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    exclude_group: Vec<GroupExclude>,
+    pub exclude_group: Vec<GroupExclude>,
+
+    /// Resource name to include in the resource collection.
+    ///
+    /// By default all resource names are collected.
+    /// Name can be specified as a regular string or as a regex string.
+    ///
+    /// Example:
+    ///     --include-name=my-pod --include-name=frontend-.*
+    #[arg(long, value_name = "NAME",
+            value_parser = |arg: &str| -> anyhow::Result<NameInclude> {Ok(NameInclude::try_from(arg.to_string())?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub include_name: Vec<NameInclude>,
+
+    /// Resource name to exclude from the resource collection.
+    ///
+    /// By default all resource names are collected.
+    /// Name can be specified as a regular string or as a regex string.
+    ///
+    /// Example:
+    ///     --exclude-name=my-secret --exclude-name=internal-.*
+    #[arg(long, value_name = "NAME",
+            value_parser = |arg: &str| -> anyhow::Result<NameExclude> {Ok(NameExclude::try_from(arg.to_string())?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub exclude_name: Vec<NameExclude>,
 }
 
 impl TryFrom<String> for GatherCommands {
@@ -759,6 +855,16 @@ impl TryFrom<String> for GatherCommands {
 }
 
 impl GatherCommands {
+    pub fn new(mode: GatherMode, filter: Option<Filters>, settings: GatherSettings) -> Self {
+        Self {
+            mode,
+            additional_logs: AdditionalLogs::default(),
+            filters: vec![],
+            filter,
+            settings,
+        }
+    }
+
     pub async fn load(&self) -> anyhow::Result<Config> {
         let env_secrets: Secrets = self.settings.secrets.clone().into();
         let mut secrets: Secrets = match self.settings.secrets_file.clone() {
@@ -813,6 +919,8 @@ impl From<&Filters> for FilterList {
             filter.exclude_kind.clone().into(),
             filter.include_group.clone().into(),
             filter.exclude_group.clone().into(),
+            filter.include_name.clone().into(),
+            filter.exclude_name.clone().into(),
         ];
 
         Self(data.iter().map(Clone::clone).collect())

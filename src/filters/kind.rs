@@ -1,12 +1,13 @@
 use kube::core::GroupVersionKind;
-use serde::Deserialize;
+use rmcp::schemars;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::scanners::interface::ResourceThreadSafe;
 
 use super::filter::{Filter, FilterRegex, FilterType};
 
-#[derive(Clone, Default, Deserialize, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct KindInclude {
     kind: FilterRegex,
@@ -43,7 +44,7 @@ impl From<Vec<KindInclude>> for FilterType {
     }
 }
 
-#[derive(Clone, Default, Deserialize, Debug)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 pub struct KindExclude {
     kinds: FilterRegex,

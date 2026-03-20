@@ -133,6 +133,33 @@ impl From<String> for ConfigFromConfigMap {
 pub struct KubeconfigFile(pub Kubeconfig);
 
 impl KubeconfigFile {
+    pub fn with_context(mut self, context: Option<&str>) -> anyhow::Result<Self> {
+        let Some(context) = context else {
+            return Ok(self);
+        };
+
+        if !self
+            .0
+            .contexts
+            .iter()
+            .any(|candidate| candidate.name == context)
+        {
+            bail!("context not found in kubeconfig: {context}");
+        }
+
+        self.0.current_context = Some(context.to_string());
+        Ok(self)
+    }
+
+    pub fn infer_file() -> anyhow::Result<Self> {
+        Ok(Self(Kubeconfig::read()?))
+    }
+
+    pub fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
+        serde_yaml::to_writer(File::create(path)?, &self.0)?;
+        Ok(())
+    }
+
     /// Creates a new Kubernetes client from the `KubeconfigFile`.
     pub async fn client(&self, insecure: bool) -> anyhow::Result<Client> {
         let kubeconfig = match insecure {

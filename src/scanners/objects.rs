@@ -107,8 +107,8 @@ mod test {
         api::core::v1::{Namespace, Pod},
         serde_json,
     };
-    use kube::core::{ApiResource, DynamicObject, params::PostParams};
     use kube::Api;
+    use kube::core::{ApiResource, DynamicObject, params::PostParams};
     use tokio_retry::Retry;
     use tokio_retry::strategy::FixedInterval;
 
