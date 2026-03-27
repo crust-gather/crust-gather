@@ -39,7 +39,7 @@ chrono = { version = "0.4.44", features = ["now", "serde"] }
 oci-client = "0.16.1"
 sha2 = "0.10.9"
 cached = { version = "0.59.0", features = ["async"] }
-rmcp = { version = "1.2.0", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "1.3.0", features = ["server", "macros", "transport-io"] }
 serde_json = "1.0.149"
 tempfile = "3.27.0"
 
