@@ -1,4 +1,4 @@
-name: Dependency bump automerge
+name: Bot PR automerge
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review]
@@ -10,7 +10,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  dependabot:
+  bot-prs:
     runs-on: ubuntu-latest
     if: |
       github.event.pull_request.user.login == 'dependabot[bot]' ||
