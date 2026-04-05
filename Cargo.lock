@@ -802,6 +802,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "hex",
  "http 1.4.0",
  "json-patch",
  "jsonptr",
