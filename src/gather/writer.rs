@@ -251,7 +251,10 @@ impl Writer {
                     File::read_to_string(&mut file, &mut data)
                         .context(format!("failed to read file {archive_path}"))?;
                     let size = data.len() as i64;
-                    let digest = format!("sha256:{:x}", sha2::Sha256::digest(data.as_bytes()));
+                    let digest = format!(
+                        "sha256:{}",
+                        hex::encode(sha2::Sha256::digest(data.as_bytes()))
+                    );
                     {
                         layers.lock().await.push(OciDescriptor {
                             urls: None,
@@ -285,7 +288,8 @@ impl Writer {
         let mut manifest = OciImageManifest::default();
         manifest.config.media_type = config.media_type.to_string();
         manifest.config.size = config.data.len() as i64;
-        manifest.config.digest = format!("sha256:{:x}", sha2::Sha256::digest(&config.data));
+        manifest.config.digest =
+            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&config.data)));
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
 
