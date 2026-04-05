@@ -251,7 +251,10 @@ impl Writer {
                     File::read_to_string(&mut file, &mut data)
                         .context(format!("failed to read file {archive_path}"))?;
                     let size = data.len() as i64;
-                    let digest = format!("sha256:{}", hex::encode(sha2::Sha256::digest(data.as_bytes())));
+                    let digest = format!(
+                        "sha256:{}",
+                        hex::encode(sha2::Sha256::digest(data.as_bytes()))
+                    );
                     {
                         layers.lock().await.push(OciDescriptor {
                             urls: None,
