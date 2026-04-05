@@ -15,10 +15,7 @@ jobs:
     if: |
       github.event.pull_request.user.login == 'dependabot[bot]' ||
       (
-        (
-          github.event.pull_request.user.login == 'copilot[bot]' ||
-          github.event.pull_request.user.login == 'copilot-swe-agent[bot]'
-        ) &&
+        contains(fromJSON('["copilot[bot]","copilot-swe-agent[bot]"]'), github.event.pull_request.user.login) &&
         !github.event.pull_request.draft
       )
     steps:
