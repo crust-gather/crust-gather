@@ -9,13 +9,16 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  COPILOT_BOT_LOGINS: '["copilot[bot]","copilot-swe-agent[bot]"]'
+
 jobs:
   bot-prs:
     runs-on: ubuntu-latest
     if: |
       github.event.pull_request.user.login == 'dependabot[bot]' ||
       (
-        contains(fromJSON('["copilot[bot]","copilot-swe-agent[bot]"]'), github.event.pull_request.user.login) &&
+        contains(fromJSON(env.COPILOT_BOT_LOGINS), github.event.pull_request.user.login) &&
         !github.event.pull_request.draft
       )
     steps:
