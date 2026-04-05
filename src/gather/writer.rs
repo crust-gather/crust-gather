@@ -16,7 +16,7 @@ use sha2::Digest as _;
 use std::{
     borrow::Cow,
     ffi::OsStr,
-    fmt::{Display, Write as _},
+    fmt::Display,
     fs::{DirBuilder, File},
     io::{Read as _, Write as _},
     ops::Deref,
@@ -193,11 +193,7 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 
 impl Writer {
     fn sha256_digest(data: &[u8]) -> String {
-        let mut digest_value = String::from("sha256:");
-        for byte in sha2::Sha256::digest(data) {
-            write!(&mut digest_value, "{byte:02x}").expect("writing to string should not fail");
-        }
-        digest_value
+        format!("sha256:{}", hex::encode(sha2::Sha256::digest(data)))
     }
 
     /// Finish zip archive
