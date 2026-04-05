@@ -16,7 +16,7 @@ use sha2::Digest as _;
 use std::{
     borrow::Cow,
     ffi::OsStr,
-    fmt::Display,
+    fmt::{Display, Write as _},
     fs::{DirBuilder, File},
     io::{Read as _, Write as _},
     ops::Deref,
@@ -192,6 +192,14 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 }
 
 impl Writer {
+    fn sha256_digest(data: &[u8]) -> String {
+        let mut digest_value = String::from("sha256:");
+        for byte in sha2::Sha256::digest(data) {
+            write!(&mut digest_value, "{byte:02x}").expect("writing to string should not fail");
+        }
+        digest_value
+    }
+
     /// Finish zip archive
     pub fn finish_zip(self) -> anyhow::Result<()> {
         let Self::Zip(_, builder) = self else {
@@ -251,7 +259,7 @@ impl Writer {
                     File::read_to_string(&mut file, &mut data)
                         .context(format!("failed to read file {archive_path}"))?;
                     let size = data.len() as i64;
-                    let digest = format!("sha256:{:x}", sha2::Sha256::digest(data.as_bytes()));
+                    let digest = Self::sha256_digest(data.as_bytes());
                     {
                         layers.lock().await.push(OciDescriptor {
                             urls: None,
@@ -285,7 +293,7 @@ impl Writer {
         let mut manifest = OciImageManifest::default();
         manifest.config.media_type = config.media_type.to_string();
         manifest.config.size = config.data.len() as i64;
-        manifest.config.digest = format!("sha256:{:x}", sha2::Sha256::digest(&config.data));
+        manifest.config.digest = Self::sha256_digest(&config.data);
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
 
