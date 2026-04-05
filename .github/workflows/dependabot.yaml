@@ -10,7 +10,7 @@ permissions:
   pull-requests: write
 
 env:
-  COPILOT_BOT_LOGINS: '["copilot[bot]","copilot-swe-agent[bot]"]'
+  COPILOT_BOT_LOGINS: '["Copilot"]'
 
 jobs:
   bot-prs:
