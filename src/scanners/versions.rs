@@ -113,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_versions() {
-        let test_env = envtest::Environment::default().create().expect("cluster");
+        let test_env = envtest::Environment::default().create().await.expect("cluster");
         let kubeconfig = test_env.kubeconfig().expect("kubeconfig");
 
         let kubeconfig = serde_yaml::to_string(&kubeconfig).unwrap();

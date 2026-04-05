@@ -130,7 +130,7 @@ mod test {
 
     #[tokio::test]
     async fn collect_pod() {
-        let test_env = envtest::Environment::default().create().expect("cluster");
+        let test_env = envtest::Environment::default().create().await.expect("cluster");
         let client = test_env.client().expect("client");
 
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
@@ -201,7 +201,7 @@ mod test {
 
     #[tokio::test]
     async fn test_path_cluster_scoped() {
-        let test_env = envtest::Environment::default().create().expect("cluster");
+        let test_env = envtest::Environment::default().create().await.expect("cluster");
         let client = test_env.client().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
@@ -237,7 +237,7 @@ mod test {
 
     #[tokio::test]
     async fn test_path_namespaced() {
-        let test_env = envtest::Environment::default().create().expect("cluster");
+        let test_env = envtest::Environment::default().create().await.expect("cluster");
         let client = test_env.client().expect("client");
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
