@@ -102,6 +102,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
 
 #[cfg(test)]
 mod test {
+    use backon::{ConstantBuilder, Retryable};
 
     use k8s_openapi::{
         api::core::v1::{Namespace, Pod},
@@ -109,8 +110,6 @@ mod test {
     };
     use kube::Api;
     use kube::core::{ApiResource, DynamicObject, params::PostParams};
-    use tokio_retry::Retry;
-    use tokio_retry::strategy::FixedInterval;
 
     use crate::{
         filters::{
@@ -141,7 +140,7 @@ mod test {
         let pod_api: Api<Pod> = Api::default_namespaced(client.clone());
         timeout(
             Duration::new(10, 0),
-            Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+            (|| async {
                 pod_api
                     .create(
                         &PostParams::default(),
@@ -161,7 +160,8 @@ mod test {
                         .expect("Serialize"),
                     )
                     .await
-            }),
+            })
+            .retry(ConstantBuilder::default().with_delay(Duration::from_secs(1))),
         )
         .await
         .expect("Timeout")

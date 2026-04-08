@@ -304,13 +304,25 @@ impl Writer {
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
 
         let push = || client.push_blob(image_ref, config.data.clone(), &manifest.config.digest);
-        push.retry(ExponentialBuilder::default().with_max_times(20).with_max_delay(Duration::from_secs(10)).with_jitter())
-            .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 )).await?;
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
 
         let manifest = &manifest.into();
         let push = || client.push_manifest(image_ref, manifest);
-        push.retry(ExponentialBuilder::default().with_max_times(20).with_max_delay(Duration::from_secs(10)).with_jitter())
-            .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 )).await?;
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
 
         Ok(())
     }

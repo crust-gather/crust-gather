@@ -80,13 +80,13 @@ mod test {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use backon::{ConstantBuilder, Retryable};
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::core::{ApiResource, params::PostParams};
 
     use serde::Deserialize;
     use tempfile::TempDir;
     use tokio::time::timeout;
-    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::gather::config::GatherMode;
     use crate::{
@@ -125,7 +125,7 @@ mod test {
 
         timeout(
             Duration::new(10, 0),
-            Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+            (|| async {
                 api.create(
                     &PostParams::default(),
                     &serde_json::from_value(serde_json::json!({
@@ -145,7 +145,8 @@ mod test {
                     .expect("Serialize"),
                 )
                 .await
-            }),
+            })
+            .retry(ConstantBuilder::default().with_delay(Duration::from_secs(1))),
         )
         .await
         .expect("Timeout")
