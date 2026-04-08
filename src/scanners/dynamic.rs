@@ -112,7 +112,10 @@ mod test {
 
     #[tokio::test]
     async fn collect_dynamic_object() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let api: Api<DynamicObject> = Api::default_namespaced_with(

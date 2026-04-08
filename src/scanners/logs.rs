@@ -180,7 +180,10 @@ mod test {
 
     #[tokio::test]
     async fn collect_logs() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().expect("client"));

@@ -276,7 +276,7 @@ impl CrustGatherMcp {
         Ok(CommandResponse {
             operation: "collect_archive",
             status: "completed",
-            summary: format!("Collected archive into {}", archive_path),
+            summary: format!("Collected archive into {archive_path}"),
             details: CommandDetails::Collect(CollectResult {
                 destination: archive_path,
                 kubeconfig,
@@ -321,10 +321,7 @@ impl CrustGatherMcp {
         Ok(CommandResponse {
             operation: "collect_oci",
             status: "completed",
-            summary: format!(
-                "Collected archive and pushed it to {}",
-                image_reference_value
-            ),
+            summary: format!("Collected archive and pushed it to {image_reference_value}"),
             details: CommandDetails::Collect(CollectResult {
                 destination: image_reference_value.to_string(),
                 kubeconfig,
@@ -385,7 +382,7 @@ impl CrustGatherMcp {
         Ok(CommandResponse {
             operation: "serve_archive",
             status: "started",
-            summary: format!("Serving archive on {}", socket_value),
+            summary: format!("Serving archive on {socket_value}"),
             details: CommandDetails::Serve(serve_result),
         })
     }
@@ -444,7 +441,7 @@ impl CrustGatherMcp {
         Ok(CommandResponse {
             operation: "serve_oci",
             status: "started",
-            summary: format!("Serving OCI source on {}", socket_value),
+            summary: format!("Serving OCI source on {socket_value}"),
             details: CommandDetails::Serve(serve_result),
         })
     }

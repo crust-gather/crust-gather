@@ -543,7 +543,7 @@ impl OCISettings {
             });
         }
 
-        config.max_concurrent_upload = 512;
+        config.max_concurrent_upload = 32;
 
         config
     }
@@ -949,7 +949,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_from_kubeconfig() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
 
         let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
@@ -979,7 +982,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_insecure_client_from_kubeconfig() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
 
         let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
@@ -1010,7 +1016,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_from_default() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
 
         let config = test_env.kubeconfig().unwrap();
         let kubeconfig_path = temp_kubeconfig();
@@ -1034,7 +1043,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_insecure_client_from_default() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let config = test_env.kubeconfig().unwrap();
 
         let commands = GatherCommands {
@@ -1053,7 +1065,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let config = test_env.kubeconfig().unwrap();
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
@@ -1092,7 +1107,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_from_config() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let config = test_env.kubeconfig().unwrap();
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
@@ -1145,7 +1163,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_from_config_map() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let config = test_env.kubeconfig().unwrap();
         let client = test_env.client().expect("client");
 
