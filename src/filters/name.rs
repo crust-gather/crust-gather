@@ -3,64 +3,60 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::scanners::interface::ResourceThreadSafe;
+use crate::{
+    filters::filter::{Exclude, Include, Match},
+    scanners::interface::ResourceThreadSafe,
+};
 
 use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
-pub struct NameInclude {
+pub struct Name<M: Match> {
     name: FilterRegex,
+
+    #[serde(skip)]
+    #[schemars(skip)]
+    matcher: std::marker::PhantomData<M>,
 }
 
-impl<R: ResourceThreadSafe> Filter<R> for NameInclude {
+impl<R: ResourceThreadSafe, M> Filter<R> for Name<M>
+where
+    M: Match + Send + Sync,
+{
     #[instrument(skip_all, fields(name = obj.name_any(), include = self.name.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
-        Some(self.name.matches(&obj.name_any()))
+        Some(M::matches(self.name.matches(&obj.name_any())))
     }
 }
 
-impl TryFrom<String> for NameInclude {
+impl<M: Match> TryFrom<&str> for Name<M> {
     type Error = anyhow::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.try_into()?,
+            matcher: std::marker::PhantomData,
         })
     }
 }
 
-impl From<Vec<NameInclude>> for FilterType {
-    fn from(val: Vec<NameInclude>) -> Self {
+impl<M: Match> TryFrom<String> for Name<M> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl From<Vec<Name<Include>>> for FilterType {
+    fn from(val: Vec<Name<Include>>) -> Self {
         Self::NameInclude(val)
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
-#[serde(try_from = "String")]
-pub struct NameExclude {
-    name: FilterRegex,
-}
-
-impl<R: ResourceThreadSafe> Filter<R> for NameExclude {
-    #[instrument(skip_all, fields(name = obj.name_any(), exclude = self.name.to_string()))]
-    fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
-        Some(!self.name.matches(&obj.name_any()))
-    }
-}
-
-impl TryFrom<String> for NameExclude {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(Self {
-            name: value.try_into()?,
-        })
-    }
-}
-
-impl From<Vec<NameExclude>> for FilterType {
-    fn from(val: Vec<NameExclude>) -> Self {
+impl From<Vec<Name<Exclude>>> for FilterType {
+    fn from(val: Vec<Name<Exclude>>) -> Self {
         Self::NameExclude(val)
     }
 }
@@ -79,7 +75,7 @@ mod tests {
     #[test]
     fn test_name_include_filter() {
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let filter = NameInclude::try_from("test.*".to_string()).unwrap();
+        let filter = Name::<Include>::try_from("test.*").unwrap();
         let obj = DynamicObject::new("test-pod", &ApiResource::erase::<Pod>(&())).within("default");
         assert_eq!(
             filter.filter_object(
@@ -93,7 +89,7 @@ mod tests {
     #[test]
     fn test_name_exclude_filter() {
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let filter = NameExclude::try_from("secret.*".to_string()).unwrap();
+        let filter = Name::<Exclude>::try_from("secret.*").unwrap();
         let obj =
             DynamicObject::new("public-pod", &ApiResource::erase::<Pod>(&())).within("default");
         assert_eq!(

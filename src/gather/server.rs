@@ -58,10 +58,10 @@ impl Display for Socket {
     }
 }
 
-impl TryFrom<String> for Socket {
+impl TryFrom<&str> for Socket {
     type Error = anyhow::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self(value.parse()?))
     }
 }
@@ -103,7 +103,7 @@ pub struct Server {
     /// Example:
     ///     --socket=192.168.1.100:8088
     #[arg(short, long, value_name = "SOCKET", default_value_t = Default::default(),
-        value_parser = |arg: &str| -> anyhow::Result<Socket> {Ok(Socket(arg.to_string().parse()?))})]
+        value_parser = |arg: &str| -> anyhow::Result<Socket> {Socket::try_from(arg)})]
     #[serde(default)]
     socket: Socket,
 }

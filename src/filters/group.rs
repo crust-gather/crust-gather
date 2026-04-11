@@ -5,18 +5,21 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::scanners::interface::ResourceThreadSafe;
+use crate::{
+    filters::filter::{Exclude, Include, Match},
+    scanners::interface::ResourceThreadSafe,
+};
 
 use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
-pub struct Group {
+pub struct GroupRegex {
     group: FilterRegex,
     kind: FilterRegex,
 }
 
-impl Group {
+impl GroupRegex {
     pub fn matches(&self, gvk: &GroupVersionKind) -> bool {
         self.group.matches(&gvk.group) && self.kind.matches(&gvk.kind)
     }
@@ -24,29 +27,34 @@ impl Group {
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
-pub struct GroupInclude {
-    group: Group,
+pub struct Group<M: Match> {
+    group: GroupRegex,
+
+    #[serde(skip)]
+    #[schemars(skip)]
+    matcher: std::marker::PhantomData<M>,
 }
 
-impl<R: ResourceThreadSafe> Filter<R> for GroupInclude {
+impl<R: ResourceThreadSafe, M: Match> Filter<R> for Group<M>
+where
+    M: Match + Send + Sync,
+{
     #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, group_list = self.group.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let accepted = self.group.matches(gvk);
+        let accepted = M::matches(self.group.matches(gvk));
 
         if !accepted {
-            tracing::debug!(
-                "GroupInclude filter excluded object as it is not present in the group list",
-            );
+            tracing::debug!("Group filter excluded object as it is not in the matching group list",);
         }
 
         Some(accepted)
     }
 }
 
-impl TryFrom<String> for Group {
+impl TryFrom<&str> for GroupRegex {
     type Error = anyhow::Error;
 
-    fn try_from(s: String) -> Result<Self, Self::Error> {
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         let gksplit = s.splitn(2, '/').collect::<Vec<_>>();
         let (groups, kinds) = match *gksplit.as_slice() {
             ["", k] => ("^$", k), // empty group case
@@ -57,69 +65,55 @@ impl TryFrom<String> for Group {
         };
 
         Ok(Self {
-            group: groups.to_string().try_into()?,
-            kind: kinds.to_string().try_into()?,
+            group: groups.try_into()?,
+            kind: kinds.try_into()?,
         })
+    }
+}
+
+impl TryFrom<String> for GroupRegex {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
     }
 }
 
 /// Formats the group and kind for display.
 /// Example: "<Group: ^$, Kind: Pod>
-impl Display for Group {
+impl Display for GroupRegex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<Group: {}, Kind: {}>", self.group, self.kind)
     }
 }
 
-impl TryFrom<String> for GroupInclude {
+impl<M: Match> TryFrom<&str> for Group<M> {
     type Error = anyhow::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
             group: value.try_into()?,
+            matcher: std::marker::PhantomData,
         })
     }
 }
 
-impl From<Vec<GroupInclude>> for FilterType {
-    fn from(val: Vec<GroupInclude>) -> Self {
+impl<M: Match> TryFrom<String> for Group<M> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl From<Vec<Group<Include>>> for FilterType {
+    fn from(val: Vec<Group<Include>>) -> Self {
         Self::GroupInclude(val)
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
-#[serde(try_from = "String")]
-pub struct GroupExclude {
-    group: Group,
-}
-
-impl<R: ResourceThreadSafe> Filter<R> for GroupExclude {
-    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, exclude = self.group.to_string()))]
-    fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let accepted = !self.group.matches(gvk);
-
-        if !accepted {
-            tracing::debug!(
-                "GroupExclude filter excluded object as it is present in the exclude group list",
-            );
-        }
-
-        Some(accepted)
-    }
-}
-
-impl TryFrom<String> for GroupExclude {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(Self {
-            group: value.try_into()?,
-        })
-    }
-}
-
-impl From<Vec<GroupExclude>> for FilterType {
-    fn from(val: Vec<GroupExclude>) -> Self {
+impl From<Vec<Group<Exclude>>> for FilterType {
+    fn from(val: Vec<Group<Exclude>>) -> Self {
         Self::GroupExclude(val)
     }
 }
@@ -146,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_group_include_filter() {
-        let filter = GroupInclude::try_from("apps/(Deployment|ReplicaSet)".to_string()).unwrap();
+        let filter = Group::<Include>::try_from("apps/(Deployment|ReplicaSet)").unwrap();
 
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
@@ -155,7 +149,7 @@ mod tests {
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         assert_eq!(
-            <GroupInclude as Filter<DynamicObject>>::filter_object(
+            <Group<Include> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
@@ -163,7 +157,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            <GroupInclude as Filter<DynamicObject>>::filter_object(
+            <Group<Include> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
@@ -171,7 +165,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            <GroupInclude as Filter<DynamicObject>>::filter_object(
+            <Group<Include> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(replicaset_tm).expect("parse GVK")
@@ -182,10 +176,10 @@ mod tests {
 
     #[test]
     fn test_from_string_list() {
-        let filter = GroupInclude::try_from("/Pod".to_string()).unwrap();
+        let filter = Group::<Include>::try_from("/Pod").unwrap();
         assert_eq!(filter.group.to_string(), "<Group: ^$, Kind: Pod>");
 
-        let filter = GroupInclude::try_from("apps".to_string()).unwrap();
+        let filter = Group::<Include>::try_from("apps").unwrap();
         assert_eq!(filter.group.to_string(), "<Group: apps, Kind: .*>");
     }
 
@@ -201,9 +195,9 @@ mod tests {
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
-        let exclude = GroupExclude::try_from(Pod::GROUP.to_string()).unwrap();
+        let exclude = Group::<Exclude>::try_from(Pod::GROUP).unwrap();
         assert_eq!(
-            <GroupExclude as Filter<DynamicObject>>::filter_object(
+            <Group<Exclude> as Filter<DynamicObject>>::filter_object(
                 &exclude,
                 &obj,
                 &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
@@ -211,7 +205,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            <GroupExclude as Filter<DynamicObject>>::filter_object(
+            <Group<Exclude> as Filter<DynamicObject>>::filter_object(
                 &exclude,
                 &obj,
                 &GroupVersionKind::try_from(other_tm).expect("parse GVK")
@@ -222,13 +216,13 @@ mod tests {
 
     #[test]
     fn test_try_from_include() {
-        let filter = GroupInclude::try_from("apps/Deployment|ReplicaSet".to_string()).unwrap();
+        let filter = Group::<Include>::try_from("apps/Deployment|ReplicaSet").unwrap();
         assert_eq!(
             filter.group.to_string(),
             "<Group: apps, Kind: Deployment|ReplicaSet>"
         );
 
-        let filter = GroupInclude::try_from(String::new()).unwrap();
+        let filter = Group::<Include>::try_from("").unwrap();
         assert_eq!(filter.group.to_string(), "<Group: ^$, Kind: .*>");
     }
 }

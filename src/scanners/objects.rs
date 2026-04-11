@@ -105,7 +105,7 @@ mod test {
     use backon::{ConstantBuilder, Retryable};
 
     use k8s_openapi::{
-        api::core::v1::{Namespace, Pod},
+        api::core::v1::{self, Pod},
         serde_json,
     };
     use kube::Api;
@@ -113,8 +113,8 @@ mod test {
 
     use crate::{
         filters::{
-            filter::{FilterGroup, FilterList},
-            namespace::NamespaceInclude,
+            filter::{FilterGroup, FilterList, Include},
+            namespace::Namespace,
         },
         gather::{
             config::{Config, GatherMode},
@@ -135,7 +135,7 @@ mod test {
             .expect("cluster");
         let client = test_env.client().expect("client");
 
-        let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
+        let filter = Namespace::<Include>::try_from("default").unwrap();
 
         let pod_api: Api<Pod> = Api::default_namespaced(client.clone());
         timeout(
@@ -186,7 +186,7 @@ mod test {
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),
-                duration: "1m".to_string().try_into().unwrap(),
+                duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
             },
@@ -210,7 +210,7 @@ mod test {
             .expect("cluster");
         let client = test_env.client().expect("client");
 
-        let obj = DynamicObject::new("test", &ApiResource::erase::<Namespace>(&()));
+        let obj = DynamicObject::new("test", &ApiResource::erase::<v1::Namespace>(&()));
 
         let collectable = Objects::new(
             Config {
@@ -228,11 +228,11 @@ mod test {
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),
-                duration: "1m".to_string().try_into().unwrap(),
+                duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
             },
-            ApiResource::erase::<Namespace>(&()),
+            ApiResource::erase::<v1::Namespace>(&()),
         );
 
         let expected = ArchivePath::Cluster("cluster/v1/namespace/test.yaml".into());
@@ -267,7 +267,7 @@ mod test {
                 secrets: Default::default(),
                 mode: GatherMode::Collect,
                 additional_logs: Default::default(),
-                duration: "1m".to_string().try_into().unwrap(),
+                duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
             },

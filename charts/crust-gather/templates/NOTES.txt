@@ -1,0 +1,18 @@
+crust-gather installed a one-shot Job:
+  {{ include "crust-gather.fullname" . }}
+
+Job collected the cluster snapshot and pushed it to the OCI reference below:
+
+  {{ .Values.reference | default "<set .Values.reference>" }}
+
+Next steps:
+
+1. Serve the collected snapshot locally:
+
+  docker run --rm -i -p 9095:9095 \
+    -v "${KUBECONFIG:-$HOME/.kube/config}:/home/nonroot/.kube/config:rw" \
+    {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }} serve -r {{ .Values.reference | default "ttl.sh/my-cluster-snapshot:1h" }}{{ if and .Values.token (not .Values.hideSensitive) }} --token {{ .Values.token }}{{ end }}{{ if and .Values.username (not .Values.hideSensitive) }} --username {{ .Values.username }} --password {{ .Values.password }}{{ end }}{{ if .Values.ca_file }} --ca-file {{ .Values.ca_file }}{{ end }} &
+
+2. Point `kubectl` at the served snapshot:
+
+  kubectl get ns

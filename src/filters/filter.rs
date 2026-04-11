@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::scanners::interface::ResourceThreadSafe;
 
 use super::{
-    group::{GroupExclude, GroupInclude},
-    kind::{KindExclude, KindInclude},
-    name::{NameExclude, NameInclude},
-    namespace::{NamespaceExclude, NamespaceInclude},
+    group::Group,
+    kind::Kind,
+    name::Name,
+    namespace::Namespace,
+    selector::{Annotations, Labels, Selector},
 };
 
 pub trait Filter<R>: Sync + Send
@@ -59,14 +60,18 @@ pub struct FilterGroup(pub Vec<FilterList>);
 
 #[derive(Clone, Debug)]
 pub enum FilterType {
-    NamespaceExclude(Vec<NamespaceExclude>),
-    NamespaceInclude(Vec<NamespaceInclude>),
-    KindInclude(Vec<KindInclude>),
-    KindExclude(Vec<KindExclude>),
-    GroupInclude(Vec<GroupInclude>),
-    GroupExclude(Vec<GroupExclude>),
-    NameInclude(Vec<NameInclude>),
-    NameExclude(Vec<NameExclude>),
+    NamespaceExclude(Vec<Namespace<Exclude>>),
+    NamespaceInclude(Vec<Namespace<Include>>),
+    KindInclude(Vec<Kind<Include>>),
+    KindExclude(Vec<Kind<Exclude>>),
+    GroupInclude(Vec<Group<Include>>),
+    GroupExclude(Vec<Group<Exclude>>),
+    NameInclude(Vec<Name<Include>>),
+    NameExclude(Vec<Name<Exclude>>),
+    LabelSelectorInclude(Vec<Selector<Include, Labels>>),
+    LabelSelectorExclude(Vec<Selector<Exclude, Labels>>),
+    AnnotationSelectorInclude(Vec<Selector<Include, Annotations>>),
+    AnnotationSelectorExclude(Vec<Selector<Exclude, Annotations>>),
 }
 
 impl From<&Self> for FilterType {
@@ -91,38 +96,36 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterGroup {
 
 impl<R: ResourceThreadSafe> Filter<R> for FilterList {
     fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let mut excludes = self
-            .0
+        self.0
             .iter()
             .filter_map(|f| match f {
-                FilterType::NamespaceExclude(e) => e.filter_object(obj, gvk),
-                FilterType::KindExclude(e) => e.filter_object(obj, gvk),
-                FilterType::GroupExclude(e) => e.filter_object(obj, gvk),
-                FilterType::NameExclude(e) => e.filter_object(obj, gvk),
-                FilterType::NamespaceInclude(_) => None,
-                FilterType::KindInclude(_) => None,
-                FilterType::GroupInclude(_) => None,
-                FilterType::NameInclude(_) => None,
+                FilterType::NamespaceExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::KindExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::GroupExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::NameExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::LabelSelectorExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::AnnotationSelectorExclude(e) => Some(eval_exclude(e, obj, gvk)),
+                FilterType::NamespaceInclude(i) => i.filter_object(obj, gvk),
+                FilterType::KindInclude(i) => i.filter_object(obj, gvk),
+                FilterType::GroupInclude(i) => i.filter_object(obj, gvk),
+                FilterType::NameInclude(i) => i.filter_object(obj, gvk),
+                FilterType::LabelSelectorInclude(i) => i.filter_object(obj, gvk),
+                FilterType::AnnotationSelectorInclude(i) => i.filter_object(obj, gvk),
             })
-            .peekable();
-
-        if excludes.peek().is_some() && excludes.filter(|&e| !e).any(|allowed| !allowed) {
-            return Some(false);
-        }
-
-        let mut includes = self.0.iter().filter_map(|f| match f {
-            FilterType::NamespaceExclude(_) => None,
-            FilterType::KindExclude(_) => None,
-            FilterType::GroupExclude(_) => None,
-            FilterType::NameExclude(_) => None,
-            FilterType::NamespaceInclude(i) => i.filter_object(obj, gvk),
-            FilterType::KindInclude(i) => i.filter_object(obj, gvk),
-            FilterType::GroupInclude(i) => i.filter_object(obj, gvk),
-            FilterType::NameInclude(i) => i.filter_object(obj, gvk),
-        });
-
-        Some(includes.all(|allowed| allowed))
+            .all(|allowed| allowed)
+            .into()
     }
+}
+
+fn eval_exclude<R, F>(filters: &Vec<F>, obj: &R, gvk: &GroupVersionKind) -> bool
+where
+    F: Filter<R>,
+    R: ResourceThreadSafe,
+{
+    filters
+        .iter()
+        .filter_map(|f| f.filter_object(obj, gvk))
+        .all(|allowed| allowed)
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -166,11 +169,41 @@ impl Display for FilterRegex {
     }
 }
 
+impl TryFrom<&str> for FilterRegex {
+    type Error = anyhow::Error;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Ok(Self(Regex::new(s)?))
+    }
+}
+
 impl TryFrom<String> for FilterRegex {
     type Error = anyhow::Error;
 
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        Ok(Self(Regex::new(s.as_str())?))
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
+pub struct Include;
+
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
+pub struct Exclude;
+
+pub trait Match: Debug {
+    fn matches(matches: bool) -> bool;
+}
+
+impl Match for Include {
+    fn matches(matches: bool) -> bool {
+        matches
+    }
+}
+
+impl Match for Exclude {
+    fn matches(matches: bool) -> bool {
+        !matches
     }
 }
 
@@ -180,7 +213,10 @@ mod tests {
     use k8s_openapi::api::core::v1::Pod;
     use kube::core::{ApiResource, DynamicObject, TypeMeta};
 
-    use crate::filters::namespace::{NamespaceExclude, NamespaceInclude};
+    use crate::filters::{
+        namespace::Namespace,
+        selector::{Labels, Selector},
+    };
 
     use super::*;
 
@@ -195,9 +231,9 @@ mod tests {
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
         assert_eq!(
             FilterList(vec![FilterType::NamespaceInclude(vec![
-                NamespaceInclude::try_from("test".to_string()).unwrap(),
-                NamespaceInclude::try_from("other".to_string()).unwrap(),
-                NamespaceInclude::try_from("test".to_string()).unwrap(),
+                Namespace::<Include>::try_from("test").unwrap(),
+                Namespace::<Include>::try_from("other").unwrap(),
+                Namespace::<Include>::try_from("test").unwrap(),
             ]),])
             .filter_object(
                 &obj,
@@ -208,12 +244,8 @@ mod tests {
 
         assert_eq!(
             FilterList(vec![
-                FilterType::NamespaceInclude(vec![
-                    NamespaceInclude::try_from("test".to_string()).unwrap()
-                ]),
-                FilterType::NamespaceExclude(vec![
-                    NamespaceExclude::try_from("test".to_string()).unwrap()
-                ]),
+                FilterType::NamespaceInclude(vec![Namespace::<Include>::try_from("test").unwrap()]),
+                FilterType::NamespaceExclude(vec![Namespace::<Exclude>::try_from("test").unwrap()]),
             ])
             .filter_object(
                 &obj,
@@ -225,11 +257,9 @@ mod tests {
         assert_eq!(
             FilterList(vec![
                 FilterType::NamespaceExclude(vec![
-                    NamespaceExclude::try_from("other".to_string()).unwrap()
+                    Namespace::<Exclude>::try_from("other").unwrap()
                 ]),
-                FilterType::NamespaceExclude(vec![
-                    NamespaceExclude::try_from("test".to_string()).unwrap()
-                ]),
+                FilterType::NamespaceExclude(vec![Namespace::<Exclude>::try_from("test").unwrap()]),
             ])
             .filter_object(
                 &obj,
@@ -248,8 +278,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_excludes_are_combined_with_or() {
+        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+
+        let mut app_obj =
+            DynamicObject::new("app", &ApiResource::erase::<Pod>(&())).within("default");
+        app_obj.metadata.labels = Some(
+            [(
+                "app.kubernetes.io/name".to_string(),
+                "crust-gather".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+
+        let mut name_obj =
+            DynamicObject::new("name", &ApiResource::erase::<Pod>(&())).within("default");
+        name_obj.metadata.labels = Some(
+            [("name".to_string(), "crust-gather".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        let filter = FilterList(vec![FilterType::LabelSelectorExclude(vec![
+            Selector::<Exclude, Labels>::try_from("app.kubernetes.io/name=crust-gather").unwrap(),
+            Selector::<Exclude, Labels>::try_from("name=crust-gather").unwrap(),
+        ])]);
+
+        let gvk = GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK");
+        assert_eq!(filter.filter_object(&app_obj, &gvk), Some(false));
+        assert_eq!(filter.filter_object(&name_obj, &gvk), Some(false));
+    }
+
+    #[test]
     fn test_matches() {
-        let list = FilterRegex::try_from("foo|bar".to_string()).unwrap();
+        let list = FilterRegex::try_from("foo|bar").unwrap();
         assert!(list.matches("foo"));
         assert!(list.matches("bar"));
         assert!(!list.matches("baz"));

@@ -167,15 +167,8 @@ mod tests {
         .expect("Timeout")
         .unwrap();
 
-        let commands = GatherCommands::try_from(
-            tmp_dir
-                .path()
-                .join("valid.yaml")
-                .to_str()
-                .unwrap()
-                .to_string(),
-        )
-        .unwrap();
+        let commands =
+            GatherCommands::try_from(tmp_dir.path().join("valid.yaml").to_str().unwrap()).unwrap();
 
         let config = commands.load().await.unwrap();
 

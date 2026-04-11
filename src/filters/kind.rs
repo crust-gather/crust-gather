@@ -3,24 +3,34 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::scanners::interface::ResourceThreadSafe;
+use crate::{
+    filters::filter::{Exclude, Include, Match},
+    scanners::interface::ResourceThreadSafe,
+};
 
 use super::filter::{Filter, FilterRegex, FilterType};
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
 #[serde(try_from = "String")]
-pub struct KindInclude {
+pub struct Kind<M: Match> {
     kind: FilterRegex,
+
+    #[serde(skip)]
+    #[schemars(skip)]
+    matcher: std::marker::PhantomData<M>,
 }
 
-impl<R: ResourceThreadSafe> Filter<R> for KindInclude {
+impl<R: ResourceThreadSafe, M: Match> Filter<R> for Kind<M>
+where
+    M: Match + Send + Sync,
+{
     #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, kind_list = self.kind.to_string()))]
     fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let accepted = self.kind.matches(&gvk.kind);
+        let accepted = M::matches(self.kind.matches(&gvk.kind));
 
         if !accepted {
             tracing::debug!(
-                "KindInclude filter excluded object as it is not present in the kind list"
+                "Kind filter excluded object as it is not present in the expected kind list"
             );
         }
 
@@ -28,55 +38,33 @@ impl<R: ResourceThreadSafe> Filter<R> for KindInclude {
     }
 }
 
-impl TryFrom<String> for KindInclude {
+impl<M: Match> TryFrom<&str> for Kind<M> {
     type Error = anyhow::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
             kind: value.try_into()?,
+            matcher: std::marker::PhantomData,
         })
     }
 }
 
-impl From<Vec<KindInclude>> for FilterType {
-    fn from(val: Vec<KindInclude>) -> Self {
+impl<M: Match> TryFrom<String> for Kind<M> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl From<Vec<Kind<Include>>> for FilterType {
+    fn from(val: Vec<Kind<Include>>) -> Self {
         Self::KindInclude(val)
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
-#[serde(try_from = "String")]
-pub struct KindExclude {
-    kinds: FilterRegex,
-}
-
-impl<R: ResourceThreadSafe> Filter<R> for KindExclude {
-    #[instrument(skip_all, fields(group = gvk.group, kind = gvk.kind, exclude = self.kinds.to_string()))]
-    fn filter_object(&self, _: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let accepted = !self.kinds.matches(&gvk.kind);
-
-        if !accepted {
-            tracing::debug!(
-                "KindExclude filter excluded object as it is present in the exclude kind list",
-            );
-        }
-
-        Some(accepted)
-    }
-}
-
-impl TryFrom<String> for KindExclude {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(Self {
-            kinds: value.try_into()?,
-        })
-    }
-}
-
-impl From<Vec<KindExclude>> for FilterType {
-    fn from(val: Vec<KindExclude>) -> Self {
+impl From<Vec<Kind<Exclude>>> for FilterType {
+    fn from(val: Vec<Kind<Exclude>>) -> Self {
         Self::KindExclude(val)
     }
 }
@@ -100,14 +88,14 @@ mod tests {
 
     #[test]
     fn test_kind_include_filter() {
-        let filter = KindInclude::try_from(Pod::KIND.to_string()).expect("Parse KindInclude");
+        let filter = Kind::<Include>::try_from(Pod::KIND).expect("Parse KindInclude");
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
         let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
         assert_eq!(
-            <KindInclude as Filter<DynamicObject>>::filter_object(
+            <Kind<Include> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
@@ -115,7 +103,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            <KindInclude as Filter<DynamicObject>>::filter_object(
+            <Kind<Include> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")
@@ -126,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_from_string() {
-        let filter = KindInclude::try_from("Pod".to_string()).expect("Parse KindInclude");
+        let filter = Kind::<Include>::try_from("Pod").expect("Parse KindInclude");
         assert_eq!(filter.kind.0.as_str(), "Pod");
     }
 
@@ -137,9 +125,9 @@ mod tests {
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
-        let filter = KindExclude::try_from("Pod".to_string()).expect("KindExclude");
+        let filter = Kind::<Exclude>::try_from("Pod").expect("KindExclude");
         assert_eq!(
-            <KindExclude as Filter<DynamicObject>>::filter_object(
+            <Kind<Exclude> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
@@ -147,7 +135,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            <KindExclude as Filter<DynamicObject>>::filter_object(
+            <Kind<Exclude> as Filter<DynamicObject>>::filter_object(
                 &filter,
                 &obj,
                 &GroupVersionKind::try_from(deploy_tm).expect("parse GVK")

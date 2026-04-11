@@ -209,19 +209,17 @@ impl Table {
         Ok(match has_predefined_table(&list.named_resource.resource) {
             true => predefined_table(&list.named_resource.resource).unwrap_or_default(),
             false => {
-                let mut data = vec![
-                    TablePath {
-                        column: ColumnDefinition {
-                            source: CustomResourceColumnDefinition {
-                                name: "Name".to_string(),
-                                type_: "string".to_string(),
-                                ..Default::default()
-                            },
+                let mut data = vec![TablePath {
+                    column: ColumnDefinition {
+                        source: CustomResourceColumnDefinition {
+                            name: "Name".to_string(),
+                            type_: "string".to_string(),
                             ..Default::default()
                         },
-                        json_path: JsonPath::parse("$.metadata.name").ok(),
+                        ..Default::default()
                     },
-                ];
+                    json_path: JsonPath::parse("$.metadata.name").ok(),
+                }];
                 data.extend(
                     table_entries
                         .into_iter()

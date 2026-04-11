@@ -345,7 +345,7 @@ impl CrustGatherMcp {
         let client_kubeconfig = temp_kubeconfig.path().display().to_string();
         let api = Api::new(
             archives,
-            Socket::try_from(socket.clone())?,
+            Socket::try_from(socket.as_str())?,
             Some(temp_kubeconfig.path().to_path_buf()),
         )
         .await?;
@@ -409,7 +409,7 @@ impl CrustGatherMcp {
         };
         let api = Api::new_oci(
             registry,
-            Socket::try_from(socket.clone())?,
+            Socket::try_from(socket.as_str())?,
             Some(temp_kubeconfig.path().to_path_buf()),
         )
         .await?;
@@ -617,7 +617,9 @@ fn prepare_redaction(redaction: Option<RedactionOptions>) -> Result<PreparedReda
     }
 
     Ok(PreparedRedaction {
-        secrets_file: Some(SecretsFile::try_from(temp.path().display().to_string())?),
+        secrets_file: Some(SecretsFile::try_from(
+            temp.path().to_string_lossy().as_ref(),
+        )?),
         _temp_file: Some(temp),
         normalized: NormalizedRedaction {
             secret_value_count: secrets.len(),
@@ -648,7 +650,7 @@ fn resolve_kubeconfig(
     match (kubeconfig, context) {
         (None, None) => Ok(None),
         (Some(path), context) => Ok(Some(
-            KubeconfigFile::try_from(path)?.with_context(context.as_deref())?,
+            KubeconfigFile::try_from(path.as_str())?.with_context(context.as_deref())?,
         )),
         (None, Some(context)) => Ok(Some(
             KubeconfigFile::infer_file()?.with_context(Some(context.as_str()))?,
@@ -667,7 +669,7 @@ fn resolve_archives(path: &str) -> Vec<Archive> {
 }
 
 fn parse_reference(reference: &str) -> Result<OCIReference> {
-    OCIReference::try_from(reference.to_string())
+    OCIReference::try_from(reference)
         .with_context(|| format!("invalid OCI image reference: {reference}"))
 }
 
@@ -675,7 +677,7 @@ fn parse_duration(duration: Option<String>) -> Result<Option<RunDuration>> {
     duration
         .map(|duration| {
             let duration = normalize_required_string(duration, "duration")?;
-            RunDuration::try_from(duration)
+            RunDuration::try_from(duration.as_str())
                 .with_context(|| "invalid duration, expected values like '60s' or '2m'")
         })
         .transpose()
