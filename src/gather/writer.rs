@@ -1,4 +1,5 @@
 use anyhow::Context;
+use backon::{ExponentialBuilder, Retryable};
 use flate2::{Compression, write::GzEncoder};
 
 use chrono::Utc;
@@ -8,6 +9,7 @@ use k8s_openapi::serde_json;
 use oci_client::{
     Client, Reference,
     client::{ClientConfig, Config},
+    errors::OciDistributionError,
     manifest::{IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest},
     secrets::RegistryAuth,
 };
@@ -22,10 +24,11 @@ use std::{
     ops::Deref,
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 use tar::{Builder, Header};
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
@@ -250,6 +253,11 @@ impl Writer {
                     let mut data = String::new();
                     File::read_to_string(&mut file, &mut data)
                         .context(format!("failed to read file {archive_path}"))?;
+                    if data.is_empty() {
+                        // That could only happen for empty logs, so we publish an empty json instead
+                        // as ghcr doesn't allow empty layers
+                        data = "{}".to_string();
+                    };
                     let size = data.len() as i64;
                     let digest = format!(
                         "sha256:{}",
@@ -272,8 +280,10 @@ impl Writer {
                     }
 
                     info!("Pushing layer: {:?}", archive_path);
-                    client
-                        .push_blob(image_ref, data, &digest)
+                    let push = || client.push_blob(image_ref, data.clone(), &digest);
+                    push.retry(ExponentialBuilder::default().with_max_times(20).with_max_delay(Duration::from_secs(10)).with_jitter())
+                        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+                        .notify(|e, dur| debug!("Pushing layer: {archive_path:?} - retry after {dur:?} due to {e:?}"))
                         .await
                         .context(format!("failed to push layer for file {archive_path}"))?;
 
@@ -281,7 +291,7 @@ impl Writer {
                 }
             })
             .boxed() // Workaround to rustc issue https://github.com/rust-lang/rust/issues/104382
-            .buffer_unordered(1024)
+            .buffer_unordered(32)
             .try_for_each(future::ok::<(), anyhow::Error>)
             .await?;
 
@@ -293,10 +303,26 @@ impl Writer {
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
 
-        client
-            .push_blob(image_ref, config.data, &manifest.config.digest)
-            .await?;
-        client.push_manifest(image_ref, &manifest.into()).await?;
+        let push = || client.push_blob(image_ref, config.data.clone(), &manifest.config.digest);
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
+
+        let manifest = &manifest.into();
+        let push = || client.push_manifest(image_ref, manifest);
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
 
         Ok(())
     }

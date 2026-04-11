@@ -156,12 +156,12 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use backon::{ConstantBuilder, Retryable};
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::Api;
     use kube::core::params::PostParams;
     use tempfile::TempDir;
     use tokio::time::timeout;
-    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::gather::config::GatherMode;
     use crate::{
@@ -180,14 +180,17 @@ mod test {
 
     #[tokio::test]
     async fn collect_logs() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
 
         let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().expect("client"));
 
         let pod = timeout(
             Duration::new(10, 0),
-            Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+            (|| async {
                 pod_api
                     .create(
                         &PostParams::default(),
@@ -207,7 +210,8 @@ mod test {
                         .expect("Serialize"),
                     )
                     .await
-            }),
+            })
+            .retry(ConstantBuilder::default().with_delay(Duration::from_secs(1))),
         )
         .await
         .expect("Timeout")

@@ -582,7 +582,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_gzip_collect() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let client = test_env.client().expect("client");
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test.zip");
@@ -610,7 +613,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_zip_collect() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let client = test_env.client().expect("client");
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
@@ -636,7 +642,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_collect() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let client = test_env.client().expect("client");
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");

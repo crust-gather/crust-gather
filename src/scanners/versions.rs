@@ -97,11 +97,11 @@ mod tests {
 
     use std::{env, fs::File, io::Write, path::PathBuf, time::Duration};
 
+    use backon::{ConstantBuilder, Retryable};
     use k8s_openapi::{api::core::v1::Pod, serde_json};
     use kube::{Api, api::PostParams};
     use tempfile::TempDir;
     use tokio::{fs, time::timeout};
-    use tokio_retry::{Retry, strategy::FixedInterval};
 
     use crate::cli::GatherCommands;
 
@@ -113,7 +113,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_versions() {
-        let test_env = envtest::Environment::default().create().await.expect("cluster");
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
         let kubeconfig = test_env.kubeconfig().expect("kubeconfig");
 
         let kubeconfig = serde_yaml::to_string(&kubeconfig).unwrap();
@@ -137,7 +140,7 @@ mod tests {
         let pod_api: Api<Pod> = Api::default_namespaced(test_env.client().expect("client"));
         timeout(
             Duration::new(10, 0),
-            Retry::spawn(FixedInterval::new(Duration::from_secs(1)), || async {
+            (|| async {
                 pod_api
                     .create(
                         &PostParams::default(),
@@ -157,7 +160,8 @@ mod tests {
                         .expect("Serialize"),
                     )
                     .await
-            }),
+            })
+            .retry(ConstantBuilder::default().with_delay(Duration::from_secs(1))),
         )
         .await
         .expect("Timeout")

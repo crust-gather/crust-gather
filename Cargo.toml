@@ -18,7 +18,6 @@ zip = { version = "8.5.1"}
 build_html = "2.7.0"
 regex = "1.12.3"
 futures = "0.3.32"
-tokio-retry = "0.3.0"
 duration-string = { version = "0.5.3", features = ["serde"] }
 tokio-util = "0.7.18"
 trait-set = "0.3.0"
@@ -43,6 +42,9 @@ cached = { version = "0.59.0", features = ["async"] }
 rmcp = { version = "1.4.0", features = ["server", "macros", "transport-io"] }
 serde_json = "1.0.149"
 tempfile = "3.27.0"
+backon = "1.6.0"
+indicatif = "0.18.4"
+pin-project = "1.1.11"
 
 [dev-dependencies]
 xid = "1.1.1"

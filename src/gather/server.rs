@@ -178,7 +178,7 @@ impl Api {
         let mut readers = HashMap::new();
         for archive in archives {
             readers.insert(
-                archive.name().to_string_lossy().to_string(),
+                Api::convert_name(archive.name().to_string_lossy().to_string()),
                 ArchiveReader::new(archive, &Storage::FS).await,
             );
         }
@@ -250,7 +250,7 @@ impl Api {
         let search = ArchiveSearch::default();
         let mut archives = HashMap::new();
         archives.insert(
-            reference.repository().to_string(),
+            Api::convert_name(reference.repository().to_string()),
             ArchiveReader::new(Archive::new(search.path()), &storage).await,
         );
 
@@ -266,7 +266,12 @@ impl Api {
         })
     }
 
+    fn convert_name(name: String) -> String {
+        name.replace('/', "-")
+    }
+
     fn prepare_kubeconfig(name: String, socket: SocketAddr) -> Kubeconfig {
+        let name = Api::convert_name(name);
         Kubeconfig {
             current_context: Some(name.clone()),
             auth_infos: vec![NamedAuthInfo {

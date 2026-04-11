@@ -1,5 +1,6 @@
 use anyhow;
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt as _};
@@ -12,14 +13,13 @@ use kube::core::{DynamicObject, ResourceExt, Status};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+use std::future::Future;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_retry::Retry;
-use tokio_retry::strategy::ExponentialBackoff;
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
@@ -66,10 +66,22 @@ pub const DELETED_ANNOTATION: &str = "crust-gather.io/deleted";
 #[async_trait]
 /// Collect defines a trait for collecting Kubernetes object representations.
 pub trait Collect<R: ResourceThreadSafe>: Send {
-    /// Default delay iterator - exponential backoff.
+    /// Default retry policy - exponential backoff.
     /// Starts at 10ms, doubles each iteration, up to max of 60s.
-    fn delay() -> impl Iterator<Item = Duration> + Send {
-        ExponentialBackoff::from_millis(10).max_delay(Duration::from_secs(60))
+    fn retry_policy() -> ExponentialBuilder {
+        ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(10))
+            .with_max_delay(Duration::from_secs(60))
+            .without_max_times()
+    }
+
+    async fn retry<T, Fut, F>(&self, action: F) -> anyhow::Result<T>
+    where
+        T: Send,
+        Fut: Future<Output = anyhow::Result<T>> + Send,
+        F: FnMut() -> Fut + Send,
+    {
+        action.retry(Self::retry_policy()).await
     }
 
     /// Returns the Secrets instance to filter any secrets in the representation
@@ -161,7 +173,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     async fn collect_retry(&self) {
-        Retry::spawn(Self::delay(), || async { self.collect().await })
+        (|| async { self.collect().await })
+            .retry(Self::retry_policy())
             .await
             .unwrap();
     }
@@ -169,7 +182,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Retries watching representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     async fn watch_retry(&self) {
-        Retry::spawn(Self::delay(), || async { self.watch_collect().await })
+        (|| async { self.watch_collect().await })
+            .retry(Self::retry_policy())
             .await
             .unwrap();
     }
@@ -177,10 +191,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     async fn write_with_retry(&self, object: &R) -> anyhow::Result<()> {
-        let representations = Retry::spawn(Self::delay(), || async {
-            self.representations(object).await
-        })
-        .await?;
+        let representations = self
+            .retry(|| async { self.representations(object).await })
+            .await?;
 
         let writer = self.get_writer();
         for repr in representations {
@@ -238,8 +251,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// This helps handle transient errors and spreading load.
     #[instrument(skip_all, err, fields(name = obj.name_any(), namespace = obj.namespace(), gvk))]
     async fn sync_with_retry(&self, obj: &R) -> anyhow::Result<()> {
-        let representations =
-            Retry::spawn(Self::delay(), || async { self.representations(obj).await }).await?;
+        let representations = self
+            .retry(|| async { self.representations(obj).await })
+            .await?;
 
         let writer = self.get_writer();
         for repr in representations {
