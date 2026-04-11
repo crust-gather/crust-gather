@@ -1,4 +1,5 @@
 pub mod config;
+pub mod printers;
 pub mod reader;
 pub mod representation;
 pub mod selector;
