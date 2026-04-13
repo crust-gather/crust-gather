@@ -45,6 +45,8 @@ tempfile = "3.27.0"
 backon = "1.6.0"
 indicatif = "0.18.4"
 pin-project = "1.1.11"
+cel = "0.13.0"
+kube-cel = { version = "0.5.3", features = ["strings", "lists", "format"] }
 
 [dev-dependencies]
 xid = "1.1.1"

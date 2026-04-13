@@ -1,10 +1,10 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     hash::Hash,
     io::{self, BufRead as _},
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -37,6 +37,7 @@ use crate::{
 };
 
 use super::{
+    printers::{AGE_CEL, ColumnDefinition, TablePath, has_predefined_table, predefined_table},
     representation::{
         ArchivePath, Container, LogGroup, NamespaceName, NamespacedName, TypeMetaGetter,
     },
@@ -47,46 +48,6 @@ use super::{
 const ADDED_PATH: [&str; 3] = ["metadata", "annotations", ADDED_ANNOTATION];
 const UPDATED_PATH: [&str; 3] = ["metadata", "annotations", UPDATED_ANNOTATION];
 const DELETED_PATH: [&str; 3] = ["metadata", "annotations", DELETED_ANNOTATION];
-
-static PREDEFINED_TABLES: OnceLock<BTreeMap<String, Vec<CustomResourceColumnDefinition>>> =
-    OnceLock::new();
-
-fn predefined_tables() -> &'static BTreeMap<String, Vec<CustomResourceColumnDefinition>> {
-    PREDEFINED_TABLES.get_or_init(|| {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "events".into(),
-            vec![
-                CustomResourceColumnDefinition {
-                    name: "lastTimestamp".into(),
-                    json_path: ".lastTimestamp".into(),
-                    ..Default::default()
-                },
-                CustomResourceColumnDefinition {
-                    name: "type".into(),
-                    json_path: ".type".into(),
-                    ..Default::default()
-                },
-                CustomResourceColumnDefinition {
-                    name: "reason".into(),
-                    json_path: ".reason".into(),
-                    ..Default::default()
-                },
-                CustomResourceColumnDefinition {
-                    name: "object".into(),
-                    json_path: ".metadata.name".into(),
-                    ..Default::default()
-                },
-                CustomResourceColumnDefinition {
-                    name: "message".into(),
-                    json_path: ".message".into(),
-                    ..Default::default()
-                },
-            ],
-        );
-        map
-    })
-}
 
 #[derive(Deserialize, Clone)]
 pub struct Destination {
@@ -171,39 +132,6 @@ pub struct Table {
     pub items: Vec<serde_json::Value>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct TablePath {
-    pub column: CustomResourceColumnDefinition,
-    pub json_path: Option<JsonPath>,
-}
-
-impl TablePath {
-    fn new(column: &CustomResourceColumnDefinition) -> Self {
-        let json_path = format!("${}", column.json_path.replace(r"\.", r"."));
-        let json_path = match JsonPath::parse(&json_path) {
-            Ok(json_path) => Some(json_path),
-            Err(e) => {
-                tracing::debug!("unable to parse json path for {json_path}: {e:?}");
-                None
-            }
-        };
-        Self {
-            column: column.clone(),
-            json_path,
-        }
-    }
-
-    fn to_definition(&self) -> serde_json::Value {
-        json!({
-            "name": self.column.name,
-            "type": self.column.type_,
-            "format": self.column.format.clone().unwrap_or_default(),
-            "description": self.column.description.clone().unwrap_or_default(),
-            "priority": self.column.priority.unwrap_or_default(),
-        })
-    }
-}
-
 impl Table {
     async fn new(
         crd_path: PathBuf,
@@ -235,12 +163,17 @@ impl Table {
                 storage.read(crd_path, &mut file).await?;
                 serde_yaml::from_slice(&file)?
             }
-            false => match predefined_tables().get(&list.named_resource.resource) {
+            false => match predefined_table(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
                     spec: CustomResourceDefinitionSpec {
                         versions: vec![CustomResourceDefinitionVersion {
                             name: list.named_resource.version.clone(),
-                            additional_printer_columns: Some(columns.clone()),
+                            additional_printer_columns: Some(
+                                columns
+                                    .iter()
+                                    .map(|entry| entry.column.source.clone())
+                                    .collect(),
+                            ),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -257,43 +190,60 @@ impl Table {
             .iter()
             .find(|crd| crd.name == list.named_resource.version);
 
-        let table_entries = crd_version
+        let table_entries: Vec<TablePath> = crd_version
             .map(|version| version.additional_printer_columns.clone())
             .unwrap_or_default()
-            .map(|columns| columns.iter().map(TablePath::new).collect())
+            .map(|columns| {
+                columns
+                    .iter()
+                    .map(|column| {
+                        TablePath::new(&ColumnDefinition {
+                            source: column.clone(),
+                            ..Default::default()
+                        })
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
-        Ok(
-            match predefined_tables().get(&list.named_resource.resource) {
-                Some(_) => table_entries,
-                None => {
-                    let mut data = vec![TablePath {
-                        column: CustomResourceColumnDefinition {
-                            name: "Name".to_string(),
-                            type_: "string".to_string(),
+        Ok(match has_predefined_table(&list.named_resource.resource) {
+            true => predefined_table(&list.named_resource.resource).unwrap_or_default(),
+            false => {
+                let mut data = vec![
+                    TablePath {
+                        column: ColumnDefinition {
+                            source: CustomResourceColumnDefinition {
+                                name: "Name".to_string(),
+                                type_: "string".to_string(),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                         json_path: JsonPath::parse("$.metadata.name").ok(),
-                    }];
-                    data.extend(table_entries);
-                    data
-                }
-            },
-        )
+                    },
+                ];
+                data.extend(
+                    table_entries
+                        .into_iter()
+                        .filter(|entry| !entry.column.source.name.eq_ignore_ascii_case("age")),
+                );
+                data.push(TablePath::new(&ColumnDefinition {
+                    source: CustomResourceColumnDefinition {
+                        name: "Age".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    cel: Some(AGE_CEL.to_string()),
+                }));
+                data
+            }
+        })
     }
 
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
         let Table { data: rows, .. } = self;
         let obj = serde_json::to_value(obj)?;
-        let cells: Vec<&serde_json::Value> = rows
-            .iter()
-            .filter_map(|r| {
-                r.json_path
-                    .as_ref()
-                    .map(|json_path| json_path.query(&obj).first())
-                    .unwrap_or_default()
-            })
-            .collect();
+        let cells: Vec<serde_json::Value> = rows.iter().filter_map(|r| r.render(&obj)).collect();
 
         Ok(json!({
             "cells": cells,
@@ -1017,6 +967,8 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
+    use serde_json::json;
 
     #[tokio::test]
     async fn table_columns() {
@@ -1040,14 +992,32 @@ mod tests {
         )
         .await;
 
-        let expected_paths = vec![TablePath {
-            column: CustomResourceColumnDefinition {
-                name: "Name".to_string(),
-                type_: "string".to_string(),
-                ..Default::default()
+        let expected_paths = vec![
+            TablePath {
+                column: ColumnDefinition {
+                    source: CustomResourceColumnDefinition {
+                        name: "Name".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                json_path: JsonPath::parse("$.metadata.name").ok(),
             },
-            json_path: JsonPath::parse("$.metadata.name").ok(),
-        }];
+            TablePath {
+                column: ColumnDefinition {
+                    source: CustomResourceColumnDefinition {
+                        name: "Age".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    cel: Some(
+                        "(now - timestamp(self.metadata.creationTimestamp)).age()".to_string(),
+                    ),
+                },
+                json_path: None,
+            },
+        ];
 
         assert_eq!(expected_paths, tbl.unwrap().data);
     }
@@ -1074,15 +1044,436 @@ mod tests {
         )
         .await;
 
-        let expected_paths = vec![TablePath {
-            column: CustomResourceColumnDefinition {
-                name: "Name".to_string(),
-                type_: "string".to_string(),
-                ..Default::default()
+        let expected_paths = vec![
+            TablePath {
+                column: ColumnDefinition {
+                    source: CustomResourceColumnDefinition {
+                        name: "Name".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                json_path: JsonPath::parse("$.metadata.name").ok(),
             },
-            json_path: JsonPath::parse("$.metadata.name").ok(),
-        }];
+            TablePath {
+                column: ColumnDefinition {
+                    source: CustomResourceColumnDefinition {
+                        name: "Age".to_string(),
+                        type_: "string".to_string(),
+                        ..Default::default()
+                    },
+                    cel: Some(
+                        "(now - timestamp(self.metadata.creationTimestamp)).age()".to_string(),
+                    ),
+                },
+                json_path: None,
+            },
+        ];
 
         assert_eq!(expected_paths, tbl.unwrap().data);
+    }
+
+    #[tokio::test]
+    async fn table_columns_pods() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: None,
+                version: "v1".to_string(),
+                resource: "pods".to_string(),
+                singular: "pod".to_string(),
+                list_kind: "PodList".to_string(),
+            },
+            namespace: Some("my-namespace".to_string()),
+            name: None,
+        };
+        let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "pod-a",
+                "namespace": "my-namespace",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "containers": [
+                    {"name": "c1"},
+                    {"name": "c2"}
+                ]
+            },
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [
+                    {"ready": true, "restartCount": 1},
+                    {"ready": false, "restartCount": 2}
+                ],
+                "initContainerStatuses": [
+                    {"restartCount": 3}
+                ]
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(columns, vec!["Name", "Ready", "Status", "Restarts", "Age"]);
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("pod-a"));
+        assert_eq!(cells[1], json!("1/2"));
+        assert_eq!(cells[2], json!("Running"));
+        assert_eq!(cells[3], json!(6));
+        assert_eq!(cells[4], json!("5m"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_pods_without_status() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: None,
+                version: "v1".to_string(),
+                resource: "pods".to_string(),
+                singular: "pod".to_string(),
+                list_kind: "PodList".to_string(),
+            },
+            namespace: Some("my-namespace".to_string()),
+            name: None,
+        };
+        let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "pod-b",
+                "namespace": "my-namespace",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "containers": [
+                    {"name": "c1"}
+                ]
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("pod-b"));
+        assert_eq!(cells[1], json!("0/1"));
+        assert_eq!(cells[2], json!(""));
+        assert_eq!(cells[3], json!(0));
+        assert_eq!(cells[4], json!("5m"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_namespaces() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: None,
+                version: "v1".to_string(),
+                resource: "namespaces".to_string(),
+                singular: "namespace".to_string(),
+                list_kind: "NamespaceList".to_string(),
+            },
+            namespace: None,
+            name: None,
+        };
+        let created = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "ns-a",
+                "creationTimestamp": created,
+                "deletionTimestamp": Utc::now().to_rfc3339(),
+            },
+            "status": {
+                "phase": "Active"
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(columns, vec!["Name", "Status", "Age"]);
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("ns-a"));
+        assert_eq!(cells[1], json!("Terminating"));
+        assert_eq!(cells[2], json!("2h"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_deployments() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: Some("apps".to_string()),
+                version: "v1".to_string(),
+                resource: "deployments".to_string(),
+                singular: "deployment".to_string(),
+                list_kind: "DeploymentList".to_string(),
+            },
+            namespace: Some("my-namespace".to_string()),
+            name: None,
+        };
+        let created = (Utc::now() - Duration::days(3)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "deploy-a",
+                "namespace": "my-namespace",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "replicas": 3
+            },
+            "status": {
+                "readyReplicas": 2,
+                "updatedReplicas": 3,
+                "availableReplicas": 2
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(
+            columns,
+            vec!["Name", "Ready", "Up-to-date", "Available", "Age"]
+        );
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("deploy-a"));
+        assert_eq!(cells[1], json!("2/3"));
+        assert_eq!(cells[2], json!(3));
+        assert_eq!(cells[3], json!(2));
+        assert_eq!(cells[4], json!("3d"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_services() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: None,
+                version: "v1".to_string(),
+                resource: "services".to_string(),
+                singular: "service".to_string(),
+                list_kind: "ServiceList".to_string(),
+            },
+            namespace: Some("default".to_string()),
+            name: None,
+        };
+        let created = (Utc::now() - Duration::days(5) - Duration::hours(9)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "kubernetes",
+                "namespace": "default",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "type": "ClusterIP",
+                "clusterIP": "10.96.0.1",
+                "ports": [
+                    {"port": 443, "protocol": "TCP"}
+                ]
+            },
+            "status": {}
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                "NAME",
+                "TYPE",
+                "CLUSTER-IP",
+                "EXTERNAL-IP",
+                "PORT(S)",
+                "AGE"
+            ]
+        );
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("kubernetes"));
+        assert_eq!(cells[1], json!("ClusterIP"));
+        assert_eq!(cells[2], json!("10.96.0.1"));
+        assert_eq!(cells[3], json!("<none>"));
+        assert_eq!(cells[4], json!("443/TCP"));
+        assert_eq!(cells[5], json!("5d9h"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_daemonsets() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: Some("apps".to_string()),
+                version: "v1".to_string(),
+                resource: "daemonsets".to_string(),
+                singular: "daemonset".to_string(),
+                list_kind: "DaemonSetList".to_string(),
+            },
+            namespace: Some("kube-system".to_string()),
+            name: None,
+        };
+        let created = (Utc::now() - Duration::days(10)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "node-local-dns",
+                "namespace": "kube-system",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "template": {
+                    "spec": {
+                        "nodeSelector": {
+                            "kubernetes.io/os": "linux"
+                        }
+                    }
+                }
+            },
+            "status": {
+                "desiredNumberScheduled": 3,
+                "currentNumberScheduled": 3,
+                "numberReady": 3,
+                "updatedNumberScheduled": 3,
+                "numberAvailable": 3
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                "NAME",
+                "DESIRED",
+                "CURRENT",
+                "READY",
+                "UP-TO-DATE",
+                "AVAILABLE",
+                "NODE SELECTOR",
+                "AGE"
+            ]
+        );
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("node-local-dns"));
+        assert_eq!(cells[1], json!(3));
+        assert_eq!(cells[2], json!(3));
+        assert_eq!(cells[3], json!(3));
+        assert_eq!(cells[4], json!(3));
+        assert_eq!(cells[5], json!(3));
+        assert_eq!(cells[6], json!("kubernetes.io/os=linux"));
+        assert_eq!(cells[7], json!("10d"));
+    }
+
+    #[tokio::test]
+    async fn table_columns_validating_admission_policy_bindings() {
+        let list = NamedObject {
+            named_resource: NamedResource {
+                group: Some("admissionregistration.k8s.io".to_string()),
+                version: "v1".to_string(),
+                resource: "validatingadmissionpolicybindings".to_string(),
+                singular: "validatingadmissionpolicybinding".to_string(),
+                list_kind: "ValidatingAdmissionPolicyBindingList".to_string(),
+            },
+            namespace: None,
+            name: None,
+        };
+        let created = (Utc::now() - Duration::minutes(15)).to_rfc3339();
+        let items = vec![json!({
+            "metadata": {
+                "name": "binding-a",
+                "creationTimestamp": created,
+            },
+            "spec": {
+                "policyName": "require-team-label",
+                "paramRef": {
+                    "namespace": "default",
+                    "name": "team-label-params"
+                }
+            }
+        })];
+        let tbl = Table::new(
+            PathBuf::from("hello".to_string()),
+            list,
+            items,
+            &Storage::FS,
+        )
+        .await
+        .unwrap();
+
+        let columns: Vec<&str> = tbl
+            .data
+            .iter()
+            .map(|entry| entry.column.source.name.as_str())
+            .collect();
+        assert_eq!(columns, vec!["Name", "PolicyName", "ParamRef", "Age"]);
+
+        let row = tbl.to_row(&tbl.items[0]).unwrap();
+        let cells = row["cells"].as_array().unwrap();
+        assert_eq!(cells[0], json!("binding-a"));
+        assert_eq!(cells[1], json!("require-team-label"));
+        assert_eq!(cells[2], json!("default/team-label-params"));
+        assert_eq!(cells[3], json!("15m"));
     }
 }
