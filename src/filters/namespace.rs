@@ -1,88 +1,75 @@
+use std::marker::PhantomData;
+
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::scanners::interface::ResourceThreadSafe;
+use crate::{
+    filters::filter::{Exclude, Include, Match},
+    scanners::interface::ResourceThreadSafe,
+};
 
 use super::filter::{Filter, FilterRegex, FilterType};
-
-#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
-#[serde(try_from = "String")]
-pub struct NamespaceInclude {
-    namespace: FilterRegex,
-}
 
 /// Filters kubernetes namespaced resources based on whether their namespace is in the allowed
 /// list. Returns true if the object's namespace is in the allowed namespaces,
 /// or the namespace list is empty or the resource is cluster-scoped.
-impl<R: ResourceThreadSafe> Filter<R> for NamespaceInclude {
-    #[instrument(skip_all, fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
-    fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
-        let empty = obj.namespace().unwrap_or_default().is_empty();
-        let included = self.namespace.matches(&obj.namespace().unwrap_or_default());
-        match (empty, included) {
-            (true, _) => None,
-            (false, true) => Some(true),
-            (false, false) => {
-                tracing::debug!(
-                    "NamespaceExclude filter excluded object as it is not present in the namespace list"
-                );
-                Some(false)
-            }
-        }
-    }
+#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
+#[serde(try_from = "String")]
+pub struct Namespace<M: Match> {
+    namespace: FilterRegex,
+
+    #[serde(skip)]
+    #[schemars(skip)]
+    matcher: PhantomData<M>,
 }
 
-impl TryFrom<String> for NamespaceInclude {
+impl<M: Match> TryFrom<&str> for Namespace<M> {
     type Error = anyhow::Error;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
             namespace: value.try_into()?,
+            matcher: PhantomData,
         })
     }
 }
 
-impl From<Vec<NamespaceInclude>> for FilterType {
-    fn from(val: Vec<NamespaceInclude>) -> Self {
+impl<M: Match> TryFrom<String> for Namespace<M> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl From<Vec<Namespace<Include>>> for FilterType {
+    fn from(val: Vec<Namespace<Include>>) -> Self {
         Self::NamespaceInclude(val)
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]
-#[serde(try_from = "String")]
-pub struct NamespaceExclude {
-    namespace: FilterRegex,
-}
-
-impl TryFrom<String> for NamespaceExclude {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(Self {
-            namespace: value.try_into()?,
-        })
-    }
-}
-
-impl From<Vec<NamespaceExclude>> for FilterType {
-    fn from(val: Vec<NamespaceExclude>) -> Self {
+impl From<Vec<Namespace<Exclude>>> for FilterType {
+    fn from(val: Vec<Namespace<Exclude>>) -> Self {
         Self::NamespaceExclude(val)
     }
 }
 
-impl<R: ResourceThreadSafe> Filter<R> for NamespaceExclude {
+impl<R: ResourceThreadSafe, M> Filter<R> for Namespace<M>
+where
+    M: Match + Send + Sync,
+{
     #[instrument(fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
         let empty = obj.namespace().unwrap_or_default().is_empty();
-        let excluded = !self.namespace.matches(&obj.namespace().unwrap_or_default());
-        match (empty, excluded) {
+        let matches = M::matches(self.namespace.matches(&obj.namespace().unwrap_or_default()));
+        match (empty, matches) {
             (true, _) => None,
             (false, true) => Some(true),
             (false, false) => {
                 tracing::debug!(
-                    "NamespaceExclude filter excluded object as it is not present in the namespace list"
+                    "Namespace filter excluded object as it is not present in the expected namespace list"
                 );
                 Some(false)
             }
@@ -106,7 +93,7 @@ mod tests {
     fn test_include_namespace_filter() {
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
 
-        let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
+        let filter = Namespace::<Include>::try_from("default").unwrap();
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
         assert_eq!(
@@ -117,7 +104,7 @@ mod tests {
             Some(true)
         );
 
-        let filter = NamespaceInclude::try_from("default".to_string()).unwrap();
+        let filter = Namespace::<Include>::try_from("default").unwrap();
 
         let obj = DynamicObject::new("other", &ApiResource::erase::<Pod>(&())).within("other");
         assert_eq!(
@@ -141,7 +128,7 @@ mod tests {
     #[test]
     fn test_exclude_namespace() {
         let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let filter = NamespaceExclude::try_from("default".to_string()).unwrap();
+        let filter = Namespace::<Exclude>::try_from("default").unwrap();
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
         assert_eq!(
@@ -152,7 +139,7 @@ mod tests {
             Some(false)
         );
 
-        let filter = NamespaceExclude::try_from("default".to_string()).unwrap();
+        let filter = Namespace::<Exclude>::try_from("default").unwrap();
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("other");
         assert_eq!(
@@ -175,13 +162,13 @@ mod tests {
 
     #[test]
     fn test_include_from_string() {
-        let namespaces = NamespaceInclude::try_from("default".to_string()).unwrap();
+        let namespaces = Namespace::<Include>::try_from("default").unwrap();
         assert_eq!(namespaces.namespace.0.as_str(), "default");
     }
 
     #[test]
     fn test_exclude_from_string() {
-        let namespaces = NamespaceExclude::try_from("default".to_string()).unwrap();
+        let namespaces = Namespace::<Exclude>::try_from("default").unwrap();
         assert_eq!(namespaces.namespace.0.as_str(), "default");
     }
 }

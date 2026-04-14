@@ -6,7 +6,10 @@ use std::{
 use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::{Deserialize, Serialize};
-use kube::{Client, config::Kubeconfig};
+use kube::{
+    Client,
+    config::{Kubeconfig, KubeconfigError},
+};
 use oci_client::{
     Reference,
     client::{self, ClientConfig, ClientProtocol},
@@ -17,18 +20,19 @@ use tracing::level_filters::LevelFilter;
 
 use crate::{
     filters::{
-        filter::{FilterGroup, FilterList, FilterType},
-        group::{GroupExclude, GroupInclude},
-        kind::{KindExclude, KindInclude},
-        log::UserLog,
-        name::{NameExclude, NameInclude},
-        namespace::{NamespaceExclude, NamespaceInclude},
+        filter::{Exclude, FilterGroup, FilterList, FilterType, Include},
+        group::Group,
+        kind::Kind,
+        name::Name,
+        namespace::Namespace,
+        selector::{Annotations, Labels, Selector},
     },
     gather::{
         config::{
             Config, ConfigFromConfigMap, GatherMode, KubeconfigFile, KubeconfigSecretLabel,
             KubeconfigSecretNamespaceName, RunDuration, Secrets, SecretsFile,
         },
+        log::UserLog,
         server::Server,
         writer::{Archive, Encoding, Writer},
     },
@@ -186,7 +190,7 @@ pub struct ConfigSource {
     /// Example:
     ///     --config=config.yaml
     #[arg(short, long, verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg.to_string())?)},)]
+            value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg)?)},)]
     config: Option<GatherCommands>,
 
     /// Parse the gather configuration from an in-cluster config map specified by a name.
@@ -305,7 +309,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --kubeconfig=./kubeconfig
     #[arg(short, long, value_name = "PATH",
-        value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg.to_string())?)})]
+        value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg)?)})]
     pub kubeconfig: Option<KubeconfigFile>,
 
     /// Collect kubeconfig from a secret.
@@ -371,7 +375,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --secrets-file=secrets.txt
     #[arg(long = "secrets-file", value_name = "PATH", verbatim_doc_comment,
-        value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg.to_string())?)})]
+        value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg)?)})]
     #[serde(default)]
     pub secrets_file: Option<SecretsFile>,
 
@@ -381,7 +385,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --duration=2m
     #[arg(short, long, value_name = "DURATION",
-        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg.to_string())?)})]
+        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg)?)})]
     #[serde(default)]
     pub duration: Option<RunDuration>,
 
@@ -407,7 +411,7 @@ pub struct GatherSettings {
 #[serde(deny_unknown_fields)]
 pub struct OCISettings {
     /// Token to use for the registry authentication
-    #[arg(short, long)]
+    #[arg(short, long, env = "OCI_AUTH_TOKEN")]
     #[arg(conflicts_with = "regular")]
     #[serde(default)]
     pub token: Option<String>,
@@ -424,12 +428,12 @@ pub struct OCISettings {
     pub insecure: bool,
 
     /// CA file to use for registry communication
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Certificate> {Ok(arg.to_string().try_into()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Certificate> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub ca_file: Option<Certificate>,
 
     /// OCI Image reference
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<OCIReference> {Ok(arg.to_string().try_into()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<OCIReference> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub reference: Option<OCIReference>,
 }
@@ -480,10 +484,10 @@ impl From<Reference> for OCIReference {
     }
 }
 
-impl TryFrom<String> for OCIReference {
+impl TryFrom<&str> for OCIReference {
     type Error = anyhow::Error;
 
-    fn try_from(reference: String) -> Result<Self, Self::Error> {
+    fn try_from(reference: &str) -> Result<Self, Self::Error> {
         let reference: Reference = reference.parse()?;
         Ok(reference.into())
     }
@@ -495,11 +499,11 @@ impl TryFrom<String> for OCIReference {
 #[group(id = "regular", conflicts_with = "token")]
 pub struct UsernamePassword {
     /// Username to use for the registry authentication
-    #[arg(short, long, required = false)]
+    #[arg(short, long, env = "OCI_AUTH_USERNAME", required = false)]
     pub username: String,
 
     /// Password to use for the registry authentication
-    #[arg(short, long, required = false)]
+    #[arg(short, long, env = "OCI_AUTH_PASSWORD", required = false)]
     pub password: String,
 }
 
@@ -509,10 +513,10 @@ pub struct Certificate {
     pub data: Vec<u8>,
 }
 
-impl TryFrom<String> for Certificate {
+impl TryFrom<&str> for Certificate {
     type Error = anyhow::Error;
 
-    fn try_from(ca_file: String) -> Result<Self, Self::Error> {
+    fn try_from(ca_file: &str) -> Result<Self, Self::Error> {
         Ok(Self {
             data: fs::read_to_string(ca_file)?.as_bytes().to_vec(),
         })
@@ -587,14 +591,25 @@ impl GatherSettings {
     pub async fn origin_client(&self) -> anyhow::Result<Client> {
         tracing::info!("Initializing client...");
 
-        match &self.kubeconfig {
+        let client = match &self.kubeconfig {
             Some(kubeconfig) => {
                 kubeconfig
                     .client(self.insecure_skip_tls_verify.unwrap_or_default())
                     .await
             }
             None => KubeconfigFile::infer(self.insecure_skip_tls_verify.unwrap_or_default()).await,
+        };
+
+        // Follow the in-cluster scenario
+        if let Err(kube::Error::InferKubeconfig(e)) = &client
+            && matches!(e, KubeconfigError::ReadConfig(..))
+        {
+            return Client::try_default()
+                .await
+                .map_err(|_| anyhow::anyhow!("Failed to infer default client: {e}"));
         }
+
+        client.map_err(|e| anyhow::anyhow!("Failed to initialize client from kubeconfig: {e}"))
     }
 
     pub async fn to_writer(&self) -> anyhow::Result<Writer> {
@@ -700,7 +715,7 @@ pub struct AdditionalLogs {
     /// Example:
     ///     --additional-logs="my-binary.log:sh -c cat /host/var/log/my-binary.log"
     #[arg(long, alias("additional-logs"), value_name = "FILE:COMMAND",
-            value_parser = |arg: &str| -> anyhow::Result<UserLog> {Ok(UserLog::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<UserLog> {Ok(UserLog::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     logs: Vec<UserLog>,
@@ -735,10 +750,10 @@ pub struct Filters {
     /// Example:
     ///     --include-namespace=default --include-namespace=kube-.*
     #[arg(long, value_name = "NAMESPACE",
-            value_parser = |arg: &str| -> anyhow::Result<NamespaceInclude> {Ok(NamespaceInclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Namespace<Include>> {Ok(Namespace::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub include_namespace: Vec<NamespaceInclude>,
+    pub include_namespace: Vec<Namespace<Include>>,
 
     /// Namespace to exclude from the resource collection.
     ///
@@ -750,10 +765,10 @@ pub struct Filters {
     /// Example:
     ///     --exclude-namespace=default --exclude-namespace=kube-.*
     #[arg(long, value_name = "NAMESPACE",
-            value_parser = |arg: &str| -> anyhow::Result<NamespaceExclude> {Ok(NamespaceExclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Namespace<Exclude>> {Ok(Namespace::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub exclude_namespace: Vec<NamespaceExclude>,
+    pub exclude_namespace: Vec<Namespace<Exclude>>,
 
     /// Resource kind to include in the resource collection.
     ///
@@ -765,10 +780,10 @@ pub struct Filters {
     /// Example:
     ///     --include-kind=Pod --include-kind=Deployment|ReplicaSet
     #[arg(long, value_name = "KIND",
-            value_parser = |arg: &str| -> anyhow::Result<KindInclude> {Ok(KindInclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Kind<Include>> {Ok(Kind::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub include_kind: Vec<KindInclude>,
+    pub include_kind: Vec<Kind<Include>>,
 
     /// Resource kind to exclude from the resource collection.
     ///
@@ -780,10 +795,10 @@ pub struct Filters {
     /// Example:
     ///     --exclude-kind=Pod --exclude-kind=Deployment|ReplicaSet
     #[arg(long, value_name = "KIND",
-            value_parser = |arg: &str| -> anyhow::Result<KindExclude> {Ok(KindExclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Kind<Exclude>> {Ok(Kind::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub exclude_kind: Vec<KindExclude>,
+    pub exclude_kind: Vec<Kind<Exclude>>,
 
     /// API group/kind to include in the resource collection.
     ///
@@ -797,10 +812,10 @@ pub struct Filters {
     ///     --include-group=/Node
     ///     --include-group=apps/Deployment|ReplicaSet
     #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<GroupInclude> {Ok(GroupInclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Group<Include>> {Ok(Group::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub include_group: Vec<GroupInclude>,
+    pub include_group: Vec<Group<Include>>,
 
     /// API groups/kind to exclude from the resource collection.
     ///
@@ -814,10 +829,10 @@ pub struct Filters {
     ///     --exclude-group=/Node
     ///     --exclude-group=apps/Deployment|ReplicaSet
     #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<GroupExclude> {Ok(GroupExclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Group<Exclude>> {Ok(Group::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub exclude_group: Vec<GroupExclude>,
+    pub exclude_group: Vec<Group<Exclude>>,
 
     /// Resource name to include in the resource collection.
     ///
@@ -827,10 +842,10 @@ pub struct Filters {
     /// Example:
     ///     --include-name=my-pod --include-name=frontend-.*
     #[arg(long, value_name = "NAME",
-            value_parser = |arg: &str| -> anyhow::Result<NameInclude> {Ok(NameInclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Name<Include>> {Ok(Name::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub include_name: Vec<NameInclude>,
+    pub include_name: Vec<Name<Include>>,
 
     /// Resource name to exclude from the resource collection.
     ///
@@ -840,16 +855,76 @@ pub struct Filters {
     /// Example:
     ///     --exclude-name=my-secret --exclude-name=internal-.*
     #[arg(long, value_name = "NAME",
-            value_parser = |arg: &str| -> anyhow::Result<NameExclude> {Ok(NameExclude::try_from(arg.to_string())?)},
+            value_parser = |arg: &str| -> anyhow::Result<Name<Exclude>> {Ok(Name::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    pub exclude_name: Vec<NameExclude>,
+    pub exclude_name: Vec<Name<Exclude>>,
+
+    /// Label selector to include in the resource collection.
+    ///
+    /// By default resources with any labels are collected.
+    /// Label selector supports Kubernetes selector expressions.
+    ///
+    /// --include-labels specified multiple times allows to include multiple label selectors, which are combined with OR operator.
+    ///
+    /// Example:
+    ///     --include-labels=app=frontend --include-labels='environment notin (prod,staging),tier!=web'
+    #[arg(long, value_name = "LABEL_SELECTOR",
+            value_parser = |arg: &str| -> anyhow::Result<Selector<Include, Labels>> {Ok(Selector::<Include, Labels>::try_from(arg)?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub include_labels: Vec<Selector<Include, Labels>>,
+
+    /// Label selector to exclude from the resource collection.
+    ///
+    /// By default resources with any labels are collected.
+    /// Label selector supports Kubernetes selector expressions.
+    ///
+    /// --exclude-labels specified multiple times allows to exclude multiple label selectors, which are combined with OR operator.
+    ///
+    /// Example:
+    ///     --exclude-labels=app=internal --exclude-labels='environment in (prod,staging),tier==web'
+    #[arg(long, value_name = "LABEL_SELECTOR",
+            value_parser = |arg: &str| -> anyhow::Result<Selector<Exclude, Labels>> {Ok(Selector::<Exclude, Labels>::try_from(arg)?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub exclude_labels: Vec<Selector<Exclude, Labels>>,
+
+    /// Annotation selector to include in the resource collection.
+    ///
+    /// By default resources with any annotations are collected.
+    /// Annotation selector supports Kubernetes selector expressions.
+    ///
+    /// --include-annotations specified multiple times allows to include multiple annotation selectors, which are combined with OR operator.
+    ///
+    /// Example:
+    ///     --include-annotations=app=frontend --include-annotations='environment notin (prod,staging),tier!=web'
+    #[arg(long, value_name = "ANNOTATION_SELECTOR",
+            value_parser = |arg: &str| -> anyhow::Result<Selector<Include, Annotations>> {Ok(Selector::<Include, Annotations>::try_from(arg)?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub include_annotations: Vec<Selector<Include, Annotations>>,
+
+    /// Annotation selector to exclude from the resource collection.
+    ///
+    /// By default resources with any annotations are collected.
+    /// Annotation selector supports Kubernetes selector expressions.
+    ///
+    /// --exclude-annotations specified multiple times allows to exclude multiple annotation selectors, which are combined with OR operator.
+    ///
+    /// Example:
+    ///     --exclude-annotations=app=internal --exclude-annotations='environment in (prod,staging),tier==web'
+    #[arg(long, value_name = "ANNOTATION_SELECTOR",
+            value_parser = |arg: &str| -> anyhow::Result<Selector<Exclude, Annotations>> {Ok(Selector::<Exclude, Annotations>::try_from(arg)?)},
+            action = ArgAction::Append )]
+    #[serde(default)]
+    pub exclude_annotations: Vec<Selector<Exclude, Annotations>>,
 }
 
-impl TryFrom<String> for GatherCommands {
+impl TryFrom<&str> for GatherCommands {
     type Error = anyhow::Error;
 
-    fn try_from(file: String) -> Result<Self, Self::Error> {
+    fn try_from(file: &str) -> Result<Self, Self::Error> {
         Ok(serde_yaml::from_reader(File::open(file)?)?)
     }
 }
@@ -921,6 +996,10 @@ impl From<&Filters> for FilterList {
             filter.exclude_group.clone().into(),
             filter.include_name.clone().into(),
             filter.exclude_name.clone().into(),
+            filter.include_labels.clone().into(),
+            filter.exclude_labels.clone().into(),
+            filter.include_annotations.clone().into(),
+            filter.exclude_annotations.clone().into(),
         ];
 
         Self(data.iter().map(Clone::clone).collect())
@@ -933,9 +1012,9 @@ mod tests {
     use std::{collections::BTreeMap, env, io::Write};
 
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
-
     use kube::core::{ObjectMeta, params::ListParams};
     use kube::{Api, api::PostParams};
+    use serde_json::Value;
     use tempfile::TempDir;
     use tokio::fs;
 
@@ -945,6 +1024,17 @@ mod tests {
         let mut dir = env::temp_dir();
         dir.push(xid::new().to_string());
         dir
+    }
+
+    #[test]
+    fn test_filter_list_matches_filters_field_count() {
+        let filters = Filters::default();
+        let serialized = serde_json::to_value(&filters).unwrap();
+        let Value::Object(fields) = serialized else {
+            panic!("filters should serialize as an object");
+        };
+
+        assert_eq!(FilterList::from(&filters).0.len(), fields.len());
     }
 
     #[tokio::test]
@@ -963,8 +1053,7 @@ mod tests {
         .await
         .unwrap();
 
-        let kubeconfig =
-            KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap().to_string()).unwrap();
+        let kubeconfig = KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap()).unwrap();
 
         let commands = GatherCommands {
             settings: GatherSettings {
@@ -996,8 +1085,7 @@ mod tests {
         .await
         .unwrap();
 
-        let kubeconfig =
-            KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap().to_string()).unwrap();
+        let kubeconfig = KubeconfigFile::try_from(kubeconfig_path.to_str().unwrap()).unwrap();
 
         let commands = GatherCommands {
             settings: GatherSettings {
@@ -1129,7 +1217,7 @@ mod tests {
         let config_path = config_path.to_str();
         let commands = Commands::CollectFromConfig {
             source: ConfigSource {
-                config: Some(GatherCommands::try_from(String::from(config_path.unwrap())).unwrap()),
+                config: Some(GatherCommands::try_from(config_path.unwrap()).unwrap()),
                 config_map: None,
             },
             overrides: GatherSettings {
@@ -1473,6 +1561,28 @@ mod tests {
         - include_namespace:
             - default
             - kube-system
+          exclude_namespace:
+            - kube-public
+          include_kind:
+            - Pod
+          exclude_kind:
+            - Secret
+          include_group:
+            - apps/Deployment
+          exclude_group:
+            - /Node
+          include_name:
+            - frontend-.*
+          exclude_name:
+            - secret-.*
+          include_labels:
+            - app=frontend
+          exclude_labels:
+            - tier=internal
+          include_annotations:
+            - owner in (platform,infra)
+          exclude_annotations:
+            - debug=true
         settings:
           debug_pod:
             image: busybox:1.37.0
@@ -1489,27 +1599,25 @@ mod tests {
         ";
         invalid.write_all(invalid_config.as_bytes()).unwrap();
 
-        let result = GatherCommands::try_from(
-            tmp_dir
-                .path()
-                .join("valid.yaml")
-                .to_str()
-                .unwrap()
-                .to_string(),
-        );
+        let result = GatherCommands::try_from(tmp_dir.path().join("valid.yaml").to_str().unwrap());
         assert!(result.is_ok());
         let result = &result.unwrap();
         assert!(result.filters.len() == 1);
         assert!(result.filters[0].include_namespace.len() == 2);
+        assert!(result.filters[0].exclude_namespace.len() == 1);
+        assert!(result.filters[0].include_kind.len() == 1);
+        assert!(result.filters[0].exclude_kind.len() == 1);
+        assert!(result.filters[0].include_group.len() == 1);
+        assert!(result.filters[0].exclude_group.len() == 1);
+        assert!(result.filters[0].include_name.len() == 1);
+        assert!(result.filters[0].exclude_name.len() == 1);
+        assert!(result.filters[0].include_labels.len() == 1);
+        assert!(result.filters[0].exclude_labels.len() == 1);
+        assert!(result.filters[0].include_annotations.len() == 1);
+        assert!(result.filters[0].exclude_annotations.len() == 1);
 
-        let result = GatherCommands::try_from(
-            tmp_dir
-                .path()
-                .join("invalid.yaml")
-                .to_str()
-                .unwrap()
-                .to_string(),
-        );
+        let result =
+            GatherCommands::try_from(tmp_dir.path().join("invalid.yaml").to_str().unwrap());
         assert!(result.is_err());
     }
 }

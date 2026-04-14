@@ -1,14 +1,17 @@
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use cel::{
     Context, FunctionContext, Program, Value,
     extractors::This,
-    objects::{Key, KeyRef},
+    objects::{Key, KeyRef, TryIntoValue as _},
 };
 use chrono::Utc;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
-    apimachinery::pkg::apis::meta::v1::LabelSelector,
+    apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector},
     serde_json::{self, json},
 };
 use kube::core::Selector;
@@ -135,6 +138,57 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
             ],
         );
         map.insert(
+            "jobs".into(),
+            vec![
+                ColumnDefinition::json("Name", ".metadata.name"),
+                ColumnDefinition::cel(
+                    "Status",
+                    r#"self.get("status").get("conditions").or([]).condition('Complete', 'True') != null ? 'Complete'
+                        : self.get("status").get("conditions").or([]).condition('Failed', 'True') != null ? 'Failed'
+                        : has(self.metadata.deletionTimestamp) ? 'Terminating'
+                        : self.get("status").get("conditions").or([]).condition('Suspended', 'True') != null ? 'Suspended'
+                        : self.get("status").get("conditions").or([]).condition('FailureTarget', 'True') != null  ? 'FailureTarget'
+                        : self.get("status").get("conditions").or([]).condition('SuccessCriteriaMet', 'True') != null ? 'SuccessCriteriaMet'
+                        : 'Running'"#,
+                ),
+                ColumnDefinition::cel(
+                    "Completions",
+                    r#"has(self.spec.completions)
+                        ? string(self.get("status").get("succeeded").or(0)) + '/' + string(self.spec.completions)
+                        : (
+                            self.get("spec").get("parallelism").or(0) > 1
+                                ? string(self.get("status").get("succeeded").or(0)) + '/1 of ' + string(self.get("spec").get("parallelism").or(0))
+                                : string(self.get("status").get("succeeded").or(0)) + '/1'
+                        )"#,
+                ),
+                ColumnDefinition::cel(
+                    "Duration",
+                    r#"!has(self.status.startTime) ? '0s' : age((has(self.status.completionTime) ? timestamp(self.status.completionTime) : now) - timestamp(self.status.startTime))"#,
+                ),
+                ColumnDefinition::cel("Age", AGE_CEL),
+            ],
+        );
+        map.insert(
+            "cronjobs".into(),
+            vec![
+                ColumnDefinition::json("Name", ".metadata.name"),
+                ColumnDefinition::cel(
+                    "Timezone",
+                    r#"self.spec.get("timeZone").or('<none>')"#,
+                ),
+                ColumnDefinition::cel(
+                    "Suspend",
+                    r#"self.spec.get("suspend").or('<unset>')"#,
+                ),
+                ColumnDefinition::cel("Active", r#"self.get("status").get("active").or([]).size()"#),
+                ColumnDefinition::cel(
+                    "Last Schedule",
+                    r#"has(self.status.lastScheduleTime) ? age(now - timestamp(self.status.lastScheduleTime)) : '<none>'"#,
+                ),
+                ColumnDefinition::cel("Age", AGE_CEL),
+            ],
+        );
+        map.insert(
             "services".into(),
             vec![
                 ColumnDefinition::json("NAME", ".metadata.name"),
@@ -215,6 +269,16 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
             vec![
                 ColumnDefinition::json("Name", ".metadata.name"),
                 ColumnDefinition::cel("Pod-Selector", "self.spec.podSelector.labelSelector()"),
+                ColumnDefinition::cel("Age", AGE_CEL),
+            ],
+        );
+        map.insert(
+            "poddisruptionbudgets".into(),
+            vec![
+                ColumnDefinition::json("Name", ".metadata.name"),
+                ColumnDefinition::cel("Min Available", r#"self.spec.get("minAvailable").or('N/A')"#),
+                ColumnDefinition::cel("Max Unavailable", r#"self.spec.get("maxUnavailable").or('N/A')"#),
+                ColumnDefinition::cel("Allowed Disruptions", r#"self.get("status").get("disruptionsAllowed").or(0)"#),
                 ColumnDefinition::cel("Age", AGE_CEL),
             ],
         );
@@ -399,6 +463,7 @@ impl TablePath {
 
         context.add_function("selector", Self::cel_selector_string);
         context.add_function("labelSelector", Self::cel_label_selector_string);
+        context.add_function("condition", Self::cel_condition);
         context.add_function("get", Self::cel_get);
         context.add_function("or", Self::cel_or);
         context.add_function("age", Self::cel_age);
@@ -490,12 +555,6 @@ impl TablePath {
         ftx: &FunctionContext,
         This(this): This<Value>,
     ) -> Result<Value, cel::ExecutionError> {
-        let Value::Map(_) = &this else {
-            return Err(ftx.error(format!(
-                "cannot format label selector from non-map value: {this:?}"
-            )));
-        };
-
         let json = Self::cel_value_to_json(this).ok_or_else(|| {
             ftx.error("cannot convert label selector to json-compatible object".to_string())
         })?;
@@ -514,6 +573,33 @@ impl TablePath {
             .to_string()
             .into(),
         ))
+    }
+
+    fn cel_condition(
+        ftx: &FunctionContext,
+        This(this): This<Value>,
+        type_: Arc<String>,
+        status: Arc<String>,
+    ) -> Result<Value, cel::ExecutionError> {
+        let json = Self::cel_value_to_json(this).ok_or_else(|| {
+            ftx.error("cannot convert list of conditions to json-compatible object".to_string())
+        })?;
+        let conditions: Vec<Condition> = serde_json::from_value(json)
+            .map_err(|error| ftx.error(format!("cannot parse conditions: {error}")))?;
+
+        let Some(condition) = conditions
+            .iter()
+            .find(|c| c.type_ == *type_ && c.status == *status)
+        else {
+            return Ok(Value::Null);
+        };
+
+        let condition = serde_json::to_value(condition)
+            .map_err(|e| ftx.error(format!("unable to parse condition into value: {e}")))?;
+
+        condition
+            .try_into_value()
+            .map_err(|e| ftx.error(format!("unable to parse condition into CEL value: {e}")))
     }
 
     fn cel_age(
@@ -579,6 +665,8 @@ mod tests {
     use cel::{Context, Program, Value};
     use serde_json::json;
 
+    use crate::gather::printers::predefined_table;
+
     use super::TablePath;
 
     fn render_selector(
@@ -611,6 +699,19 @@ mod tests {
         context.add_variable("self", self_value).unwrap();
         context.add_variable("default", default).unwrap();
         program.execute(&context).unwrap()
+    }
+
+    fn render_condition(
+        value: serde_json::Value,
+        type_: &str,
+        status: &str,
+    ) -> Result<Value, cel::ExecutionError> {
+        let program =
+            Program::compile(&format!(r#"self.condition("{type_}", "{status}")"#)).unwrap();
+        let mut context = Context::default();
+        context.add_function("condition", TablePath::cel_condition);
+        context.add_variable("self", value).unwrap();
+        program.execute(&context)
     }
 
     #[test]
@@ -665,6 +766,38 @@ mod tests {
         assert_eq!(
             Some(json!("<none>")),
             render_label_selector(json!({})).unwrap()
+        );
+    }
+
+    #[test]
+    fn condition_returns_matching_condition() {
+        assert_eq!(
+            Some(json!({
+                "lastTransitionTime": "2026-04-14T12:00:00Z",
+                "message": "",
+                "reason": "",
+                "type": "Ready",
+                "status": "True",
+            })),
+            TablePath::cel_value_to_json(
+                render_condition(
+                    json!([
+                        {
+                            "lastTransitionTime": "2026-04-14T12:00:00Z",
+                            "type": "Ready",
+                            "status": "True",
+                        },
+                        {
+                            "lastTransitionTime": "2026-04-14T12:01:00Z",
+                            "type": "Succeeded",
+                            "status": "False",
+                        }
+                    ]),
+                    "Ready",
+                    "True",
+                )
+                .unwrap(),
+            )
         );
     }
 
@@ -726,5 +859,22 @@ mod tests {
                 json!(0),
             )
         );
+    }
+
+    #[test]
+    fn job_duration_renders_without_completion_time() {
+        let duration_column = predefined_table("jobs")
+            .unwrap()
+            .into_iter()
+            .find(|column| column.column.source.name == "Duration")
+            .unwrap();
+
+        let rendered = duration_column.render(&json!({
+            "status": {
+                "startTime": "2026-04-14T08:00:56Z"
+            }
+        }));
+
+        assert!(rendered.is_some());
     }
 }

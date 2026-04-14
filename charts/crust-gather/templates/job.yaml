@@ -1,0 +1,129 @@
+apiVersion: batch/v1
+kind: Job
+{{- include "crust-gather.validateOCIAuth" . }}
+metadata:
+  name: {{ include "crust-gather.fullname" . }}
+  labels:
+    {{- include "crust-gather.labels" . | nindent 4 }}
+  {{- if or .Values.job.hook.enabled .Values.annotations }}
+  annotations:
+    {{- if .Values.job.hook.enabled }}
+    helm.sh/hook: {{ .Values.job.hook.events | join "," | quote }}
+    helm.sh/hook-delete-policy: {{ .Values.job.hook.deletePolicy | join "," | quote }}
+    {{- end }}
+    {{- with .Values.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  {{- with .Values.job.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "crust-gather.labels" . | nindent 8 }}
+      {{- with .Values.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "crust-gather.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: {{ .Values.job.restartPolicy }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "crust-gather.name" . }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- $ociAuthSecretName := include "crust-gather.ociAuthSecretName" . }}
+          {{- if $ociAuthSecretName }}
+          env:
+            {{- if .Values.token }}
+            - name: OCI_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ociAuthSecretName }}
+                  key: OCI_AUTH_TOKEN
+            {{- end }}
+            {{- if .Values.username }}
+            - name: OCI_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ociAuthSecretName }}
+                  key: OCI_AUTH_USERNAME
+            - name: OCI_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ociAuthSecretName }}
+                  key: OCI_AUTH_PASSWORD
+            {{- end }}
+          {{- end }}
+          {{- with .Values.job.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.job.args }}
+          args:
+            {{- toYaml .Values.job.args | nindent 12 }}
+          {{- else if .Values.reference }}
+          args:
+            - "collect"
+            - "--reference={{ .Values.reference }}"
+            {{- if .Values.job.excludeCrustGatherResources }}
+            - "--exclude-labels={{ include "crust-gather.collectExcludeLabels" . }}"
+            - "--exclude-labels={{ include "crust-gather.collectExcludeHelmReleaseSecretLabels" . }}"
+            {{- end }}
+            {{- if .Values.ca_file }}
+            - "--ca-file=/etc/crust-gather/ca/ca.pem"
+            {{- end }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: archive-output
+              mountPath: /apps/crust-gather
+            {{- if .Values.ca_file }}
+            - name: registry-ca
+              mountPath: /etc/crust-gather/ca
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: archive-output
+          emptyDir: {}
+        {{- if .Values.ca_file }}
+        - name: registry-ca
+          secret:
+            secretName: {{ include "crust-gather.caSecretName" . }}
+        {{- end }}
+        {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

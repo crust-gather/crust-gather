@@ -10,7 +10,7 @@ use kube::{
 };
 use serde::Deserialize;
 
-use crate::{filters::log::UserLog, scanners::interface::ResourceThreadSafe};
+use crate::{gather::log::UserLog, scanners::interface::ResourceThreadSafe};
 
 pub trait NamespacedName {
     fn name(&self) -> Option<String>;
