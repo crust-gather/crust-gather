@@ -577,6 +577,11 @@ impl ArchiveReader {
         self.archive.join(path)
     }
 
+    /// Returns the archive's root path. Used to distinguish archives in hash/eq.
+    pub fn path(&self) -> PathBuf {
+        self.archive.path()
+    }
+
     pub fn named_object_from_list(&self, list: List) -> NamedObject {
         let gvr = GroupVersionResource::gvr(
             &list.group.clone().unwrap_or_default(),
@@ -626,12 +631,20 @@ pub struct Reader {
 }
 
 impl Hash for Reader {
-    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+    // Hash on the archive's path so that readers for different archives produce
+    // different cache keys in `#[cached]` functions. Previously this was a no-op,
+    // which made all Readers collide in the cache: the first archive's response
+    // for a given path/list/get would be returned for every other archive too.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.archive.path().hash(state);
+    }
 }
 
 impl PartialEq for Reader {
-    fn eq(&self, _: &Self) -> bool {
-        true
+    // Equal iff the underlying archive paths match. See `Hash` above for the
+    // rationale; both must agree for the cache to correctly distinguish archives.
+    fn eq(&self, other: &Self) -> bool {
+        self.archive.path() == other.archive.path()
     }
 }
 
