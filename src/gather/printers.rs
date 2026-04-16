@@ -71,7 +71,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
         map.insert(
             "events".into(),
             vec![
-                ColumnDefinition::cel("lastTimestamp", "(now - timestamp(self.lastTimestamp)).age()"),
+                ColumnDefinition::cel("lastTimestamp", "(now - timestamp(self.get(\"lastTimestamp\").or(self.get(\"eventTime\")))).age()"),
                 ColumnDefinition::json("type", ".type"),
                 ColumnDefinition::json("reason", ".reason"),
                 ColumnDefinition::json("object", ".metadata.name"),
@@ -859,6 +859,23 @@ mod tests {
                 json!(0),
             )
         );
+    }
+
+    #[test]
+    fn event_last_timestamp_falls_back_to_event_time_when_null() {
+        let last_timestamp_column = predefined_table("events")
+            .unwrap()
+            .into_iter()
+            .find(|column| column.column.source.name == "lastTimestamp")
+            .unwrap();
+
+        // lastTimestamp is null, eventTime is set
+        let rendered = last_timestamp_column.render(&json!({
+            "lastTimestamp": null,
+            "eventTime": "2026-04-15T09:12:53.577768Z",
+        }));
+
+        assert!(rendered.is_some());
     }
 
     #[test]
