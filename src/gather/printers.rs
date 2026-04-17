@@ -71,7 +71,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
         map.insert(
             "events".into(),
             vec![
-                ColumnDefinition::cel("lastTimestamp", "(now - timestamp(self.get(\"lastTimestamp\").or(self.get(\"eventTime\")))).age()"),
+                ColumnDefinition::cel("lastTimestamp", r#"self.get("lastTimestamp").or(self.get("eventTime")) == null ? "<unknown>" : (now - timestamp(self.get("lastTimestamp").or(self.get("eventTime")))).age()"#),
                 ColumnDefinition::json("type", ".type"),
                 ColumnDefinition::json("reason", ".reason"),
                 ColumnDefinition::json("object", ".metadata.name"),
@@ -876,6 +876,22 @@ mod tests {
         }));
 
         assert!(rendered.is_some());
+    }
+
+    #[test]
+    fn event_last_timestamp_returns_unknown_when_both_timestamps_absent() {
+        let last_timestamp_column = predefined_table("events")
+            .unwrap()
+            .into_iter()
+            .find(|column| column.column.source.name == "lastTimestamp")
+            .unwrap();
+
+        // neither lastTimestamp nor eventTime is set
+        let rendered = last_timestamp_column.render(&json!({
+            "metadata": {"name": "some-event"},
+        }));
+
+        assert_eq!(rendered, Some(json!("<unknown>")));
     }
 
     #[test]
