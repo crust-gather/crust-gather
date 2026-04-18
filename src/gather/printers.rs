@@ -71,7 +71,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
         map.insert(
             "events".into(),
             vec![
-                ColumnDefinition::cel("lastTimestamp", "(now - timestamp(self.get(\"lastTimestamp\").or(self.get(\"eventTime\")))).age()"),
+                ColumnDefinition::cel("lastTimestamp", r#"(now - timestamp(self.get("lastTimestamp").or(self.get("eventTime")).or(self.get("deprecatedLastTimestamp")))).age()"#),
                 ColumnDefinition::json("type", ".type"),
                 ColumnDefinition::json("reason", ".reason"),
                 ColumnDefinition::json("object", ".metadata.name"),
@@ -456,7 +456,14 @@ impl TablePath {
                 .and_then(|json_path| json_path.query(obj).first().cloned());
         };
 
-        let program = Program::compile(cel).unwrap();
+        let program = Program::compile(cel)
+            .map_err(|e| {
+                tracing::error!(
+                    "failed to parse CEL for column {}: {cel}: {e}",
+                    self.column.source.name
+                )
+            })
+            .ok()?;
         let mut context = Context::default();
 
         register_all(&mut context);
@@ -873,6 +880,15 @@ mod tests {
         let rendered = last_timestamp_column.render(&json!({
             "lastTimestamp": null,
             "eventTime": "2026-04-15T09:12:53.577768Z",
+        }));
+
+        assert!(rendered.is_some());
+
+        // lastTimestamp is null, eventTime is null, deprecatedLastTimestamp is set
+        let rendered = last_timestamp_column.render(&json!({
+            "lastTimestamp": null,
+            "eventTime": null,
+            "deprecatedLastTimestamp": "2026-04-15T09:12:53.577768Z",
         }));
 
         assert!(rendered.is_some());

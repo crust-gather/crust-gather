@@ -39,6 +39,8 @@ use crate::{
     mcp_server,
 };
 
+pub const DEFAULT_OCI_BUFFER_SIZE: usize = 32;
+
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
@@ -436,6 +438,15 @@ pub struct OCISettings {
     #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<OCIReference> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub reference: Option<OCIReference>,
+
+    /// Maximum number of OCI layers processed concurrently
+    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<usize> {
+        let value = arg.parse::<u64>()?;
+        anyhow::ensure!(value >= 1, "buffer size must be at least 1");
+        Ok(value.try_into()?)
+    }, default_value_t = DEFAULT_OCI_BUFFER_SIZE)]
+    #[serde(default = "default_oci_buffer_size")]
+    pub buffer_size: usize,
 }
 
 #[derive(
@@ -531,6 +542,11 @@ impl OCISettings {
             insecure: self.insecure || other.insecure,
             ca_file: self.ca_file.clone().or(other.ca_file),
             reference: self.reference.clone().or(other.reference),
+            buffer_size: if self.buffer_size == DEFAULT_OCI_BUFFER_SIZE {
+                other.buffer_size
+            } else {
+                self.buffer_size
+            },
         }
     }
 
@@ -547,7 +563,7 @@ impl OCISettings {
             });
         }
 
-        config.max_concurrent_upload = 32;
+        config.max_concurrent_upload = self.buffer_size;
 
         config
     }
@@ -638,9 +654,14 @@ impl GatherSettings {
             encoding,
             client_config,
             auth,
+            self.oci.buffer_size,
         )
         .await
     }
+}
+
+const fn default_oci_buffer_size() -> usize {
+    DEFAULT_OCI_BUFFER_SIZE
 }
 
 #[derive(Parser, Clone, Default, Deserialize)]

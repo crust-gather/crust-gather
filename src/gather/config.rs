@@ -512,6 +512,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
+        cli::DEFAULT_OCI_BUFFER_SIZE,
         filters::filter::{FilterList, Include},
         gather::writer::{Archive, Encoding},
     };
@@ -593,10 +594,16 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Zip, None, None)
-                .await
-                .expect("failed to create builder")
-                .into(),
+            writer: Writer::new(
+                &Archive::new(file_path),
+                &Encoding::Zip,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
             secrets: Default::default(),
             mode: GatherMode::Collect,
             duration: "10s".try_into().unwrap(),
@@ -624,10 +631,16 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Gzip, None, None)
-                .await
-                .expect("failed to create builder")
-                .into(),
+            writer: Writer::new(
+                &Archive::new(file_path),
+                &Encoding::Gzip,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
             duration: "1m".try_into().unwrap(),
             mode: GatherMode::Collect,
             secrets: Default::default(),
@@ -653,10 +666,16 @@ mod tests {
         let config = Config {
             client,
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
-            writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
-                .await
-                .expect("failed to create builder")
-                .into(),
+            writer: Writer::new(
+                &Archive::new(file_path),
+                &Encoding::Path,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
             duration: "1m".try_into().unwrap(),
             mode: GatherMode::Collect,
             secrets: Default::default(),

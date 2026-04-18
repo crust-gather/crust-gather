@@ -32,6 +32,7 @@ use tracing::{debug, info, instrument};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
+use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
 use crate::gather::{
     reader::{ArchiveReader, Reader},
     storage::Storage,
@@ -181,11 +182,12 @@ impl From<&str> for Encoding {
 /// The Writer enum represents the different archive writer implementations.
 /// Gzip uses the gzip compression format.
 /// Zip uses the zip compression format.
+/// Oci uses the remote image reference as a destination.
 pub enum Writer {
     Path(Archive),
     Gzip(Archive, Box<Builder<GzEncoder<File>>>),
     Zip(Archive, Box<ZipWriter<File>>),
-    Oci(Archive, Client, Box<Reference>, RegistryAuth),
+    Oci(Archive, Client, Box<Reference>, RegistryAuth, usize),
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -216,7 +218,7 @@ impl Writer {
 
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub async fn finish_oci(&self) -> anyhow::Result<()> {
-        let Self::Oci(archive, client, image_ref, auth) = self else {
+        let Self::Oci(archive, client, image_ref, auth, buffer_size) = self else {
             return Ok(());
         };
 
@@ -291,7 +293,7 @@ impl Writer {
                 }
             })
             .boxed() // Workaround to rustc issue https://github.com/rust-lang/rust/issues/104382
-            .buffer_unordered(32)
+            .buffer_unordered(*buffer_size)
             .try_for_each(future::ok::<(), anyhow::Error>)
             .await?;
 
@@ -394,7 +396,8 @@ impl Writer {
 
                 // generate diff and write
                 let original = Reader::new(
-                    ArchiveReader::new(archive.clone(), &Storage::FS).await,
+                    ArchiveReader::new(archive.clone(), &Storage::FS, DEFAULT_OCI_BUFFER_SIZE)
+                        .await,
                     Utc::now(),
                     Storage::FS,
                 )
@@ -432,7 +435,9 @@ impl Writer {
         encoding: &Encoding,
         client_config: Option<ClientConfig>,
         auth: Option<RegistryAuth>,
+        buffer_size: usize,
     ) -> anyhow::Result<Self> {
+        let buffer_size = buffer_size.max(1);
         match archive.0.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => {
                 DirBuilder::new().recursive(true).create(parent)?;
@@ -460,6 +465,7 @@ impl Writer {
                 Client::new(client_config.unwrap_or_default()),
                 image_ref.clone().into(),
                 auth.unwrap_or(RegistryAuth::Anonymous),
+                buffer_size,
             ),
         })
     }
@@ -474,7 +480,10 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::gather::{config::Secrets, representation::ArchivePath, writer::Representation};
+    use crate::{
+        cli::DEFAULT_OCI_BUFFER_SIZE,
+        gather::{config::Secrets, representation::ArchivePath, writer::Representation},
+    };
 
     use super::{Archive, Encoding, Writer};
 
@@ -483,7 +492,13 @@ mod tests {
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.tar.gz");
         let archive = Archive::new(archive);
-        let result = Writer::new(&archive, &Encoding::Gzip, None, None);
+        let result = Writer::new(
+            &archive,
+            &Encoding::Gzip,
+            None,
+            None,
+            DEFAULT_OCI_BUFFER_SIZE,
+        );
 
         assert!(result.await.is_ok());
     }
@@ -493,7 +508,13 @@ mod tests {
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
         let archive = Archive::new(archive);
-        let result = Writer::new(&archive, &Encoding::Zip, None, None);
+        let result = Writer::new(
+            &archive,
+            &Encoding::Zip,
+            None,
+            None,
+            DEFAULT_OCI_BUFFER_SIZE,
+        );
 
         assert!(result.await.is_ok());
     }
@@ -504,9 +525,15 @@ mod tests {
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test");
-        let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Gzip, None, None)
-            .await
-            .unwrap();
+        let mut writer = Writer::new(
+            &Archive::new(archive.clone()),
+            &Encoding::Gzip,
+            None,
+            None,
+            DEFAULT_OCI_BUFFER_SIZE,
+        )
+        .await
+        .unwrap();
 
         let repr = Representation::new()
             .with_data("content")
@@ -532,9 +559,15 @@ mod tests {
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("test.zip");
-        let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Zip, None, None)
-            .await
-            .unwrap();
+        let mut writer = Writer::new(
+            &Archive::new(archive.clone()),
+            &Encoding::Zip,
+            None,
+            None,
+            DEFAULT_OCI_BUFFER_SIZE,
+        )
+        .await
+        .unwrap();
 
         let repr = Representation::new()
             .with_path(ArchivePath::Custom("test.txt".into()))
@@ -563,9 +596,15 @@ mod tests {
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("cluster1/collected");
-        let mut writer = Writer::new(&Archive::new(archive.clone()), &Encoding::Path, None, None)
-            .await
-            .unwrap();
+        let mut writer = Writer::new(
+            &Archive::new(archive.clone()),
+            &Encoding::Path,
+            None,
+            None,
+            DEFAULT_OCI_BUFFER_SIZE,
+        )
+        .await
+        .unwrap();
 
         let repr = Representation::new()
             .with_data("content with secret")
@@ -588,6 +627,7 @@ mod tests {
             &Encoding::Zip,
             None,
             None,
+            DEFAULT_OCI_BUFFER_SIZE,
         )
         .await
         .unwrap();
@@ -598,9 +638,15 @@ mod tests {
     #[tokio::test]
     async fn test_try_into_writer_empty_path() {
         assert!(
-            Writer::new(&Archive::new("".into()), &Encoding::Zip, None, None)
-                .await
-                .is_err()
+            Writer::new(
+                &Archive::new("".into()),
+                &Encoding::Zip,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .is_err()
         );
     }
 }

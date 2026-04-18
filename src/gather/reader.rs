@@ -538,10 +538,11 @@ impl NamespacedName for &NamedObject {
 pub struct ArchiveReader {
     archive: Archive,
     named_resources: Arc<NamedResources>,
+    buffer_size: usize,
 }
 
 impl ArchiveReader {
-    pub async fn new(archive: Archive, storage: &Storage) -> Self {
+    pub async fn new(archive: Archive, storage: &Storage, buffer_size: usize) -> Self {
         let mut named_resources = match NamedResources::from_discovery_file(
             archive.join(ArchivePath::Custom("apis.json".into())),
             storage,
@@ -570,6 +571,7 @@ impl ArchiveReader {
         Self {
             archive,
             named_resources: Arc::new(named_resources),
+            buffer_size: buffer_size.max(1),
         }
     }
 
@@ -837,7 +839,7 @@ impl Reader {
                 }
             })
             .boxed()
-            .buffered(1024)
+            .buffered(self.archive.buffer_size)
             .try_for_each(future::ok::<(), anyhow::Error>)
             .await?;
 

@@ -32,7 +32,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep};
 
 use crate::{
-    cli::OCISettings,
+    cli::{DEFAULT_OCI_BUFFER_SIZE, OCISettings},
     gather::{
         reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
         representation::TypeMetaGetter,
@@ -179,7 +179,7 @@ impl Api {
         for archive in archives {
             readers.insert(
                 Api::convert_name(archive.name().to_string_lossy().to_string()),
-                ArchiveReader::new(archive, &Storage::FS).await,
+                ArchiveReader::new(archive, &Storage::FS, DEFAULT_OCI_BUFFER_SIZE).await,
             );
         }
 
@@ -251,7 +251,7 @@ impl Api {
         let mut archives = HashMap::new();
         archives.insert(
             Api::convert_name(reference.repository().to_string()),
-            ArchiveReader::new(Archive::new(search.path()), &storage).await,
+            ArchiveReader::new(Archive::new(search.path()), &storage, oci.buffer_size).await,
         );
 
         Ok(Self {
