@@ -88,6 +88,7 @@ mod test {
     use tempfile::TempDir;
     use tokio::time::timeout;
 
+    use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
     use crate::filters::filter::Include;
     use crate::gather::config::GatherMode;
     use crate::{
@@ -160,10 +161,16 @@ mod test {
                 Config {
                     client: test_env.client().expect("client"),
                     filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
-                    writer: Writer::new(&Archive::new(file_path), &Encoding::Path, None, None)
-                        .await
-                        .expect("failed to create builder")
-                        .into(),
+                    writer: Writer::new(
+                        &Archive::new(file_path),
+                        &Encoding::Path,
+                        None,
+                        None,
+                        DEFAULT_OCI_BUFFER_SIZE,
+                    )
+                    .await
+                    .expect("failed to create builder")
+                    .into(),
                     secrets: Default::default(),
                     mode: GatherMode::Collect,
                     additional_logs: Default::default(),

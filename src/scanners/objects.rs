@@ -112,6 +112,7 @@ mod test {
     use kube::core::{ApiResource, DynamicObject, params::PostParams};
 
     use crate::{
+        cli::DEFAULT_OCI_BUFFER_SIZE,
         filters::{
             filter::{FilterGroup, FilterList, Include},
             namespace::Namespace,
@@ -179,6 +180,7 @@ mod test {
                     &Encoding::Path,
                     None,
                     None,
+                    DEFAULT_OCI_BUFFER_SIZE,
                 )
                 .await
                 .expect("failed to create builder")
@@ -221,6 +223,7 @@ mod test {
                     &Encoding::Path,
                     None,
                     None,
+                    DEFAULT_OCI_BUFFER_SIZE,
                 )
                 .await
                 .expect("failed to create builder")
@@ -260,6 +263,7 @@ mod test {
                     &Encoding::Path,
                     None,
                     None,
+                    DEFAULT_OCI_BUFFER_SIZE,
                 )
                 .await
                 .expect("failed to create builder")
