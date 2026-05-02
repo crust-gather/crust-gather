@@ -117,11 +117,9 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
         tracing::debug!("Collecting representation");
 
-        let data = DynamicObject {
-            types: Some(self.resource().to_type_meta()),
-            metadata: Default::default(),
-            data: serde_json::to_value(object)?,
-        };
+        let obj = serde_json::to_value(object)?;
+        let mut data: DynamicObject = serde_json::from_value(obj)?;
+        data.types = Some(data.types.unwrap_or(self.resource().to_type_meta()));
 
         Ok(vec![
             Representation::new()
