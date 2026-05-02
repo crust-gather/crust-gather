@@ -586,7 +586,7 @@ impl GatherSettings {
         match &self.kubeconfig_secret {
             Some(secret) => {
                 let kubeconfigs = secret.get_config(origin).await?;
-                for kubeconfig in kubeconfigs {
+                if let Some(kubeconfig) = kubeconfigs.into_iter().next() {
                     match KubeconfigFile(kubeconfig)
                         .client(self.insecure_skip_tls_verify.unwrap_or_default())
                         .await
