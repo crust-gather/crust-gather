@@ -142,9 +142,9 @@ mod tests {
     fn test_group_include_filter() {
         let filter = Group::<Include>::try_from("apps/(Deployment|ReplicaSet)").unwrap();
 
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
-        let replicaset_tm: TypeMeta = serde_yaml::from_str(RS).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
+        let deploy_tm: TypeMeta = serde_saphyr::from_str(DEPLOY).unwrap();
+        let replicaset_tm: TypeMeta = serde_saphyr::from_str(RS).unwrap();
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
@@ -189,9 +189,9 @@ mod tests {
         apiVersion: test/v1
         kind: OtherType";
 
-        let other_tm: TypeMeta = serde_yaml::from_str(other).unwrap();
+        let other_tm: TypeMeta = serde_saphyr::from_str(other).unwrap();
 
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 

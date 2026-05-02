@@ -160,7 +160,7 @@ impl Api {
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
-            Ok(file) => serde_yaml::from_reader(file)?,
+            Ok(file) => serde_saphyr::from_reader(file)?,
             _ => Kubeconfig::default(),
         };
 
@@ -173,7 +173,7 @@ impl Api {
             .map(|a| Api::prepare_kubeconfig(a.name().to_string_lossy().to_string(), socket))
             .try_fold(config, Kubeconfig::merge)?;
 
-        serde_yaml::to_writer(File::create(&kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
 
         let mut readers = HashMap::new();
         for archive in archives {
@@ -214,7 +214,7 @@ impl Api {
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
-            Result::Ok(file) => serde_yaml::from_reader(file)?,
+            Result::Ok(file) => serde_saphyr::from_reader(file)?,
             _ => Kubeconfig::default(),
         };
 
@@ -223,7 +223,7 @@ impl Api {
 
         let config = Api::prepare_kubeconfig(reference.repository().to_string(), socket);
 
-        serde_yaml::to_writer(File::create(&kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
 
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
@@ -315,7 +315,7 @@ impl Api {
             None => config.contexts.first().map(|c| c.name.clone()),
         };
 
-        serde_yaml::to_writer(File::create(state.kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(&mut File::create(state.kubeconfig_path)?, &config)?;
 
         Ok(())
     }
@@ -380,8 +380,8 @@ async fn version(
     let path = load_raw(reader, ArchivePath::Custom("version.yaml".into()))
         .await
         .map_err(error::ErrorNotFound)?;
-    let version: serde_yaml::Value =
-        serde_yaml::from_str(&path).map_err(error::ErrorUnprocessableEntity)?;
+    let version: serde_json::Value =
+        serde_saphyr::from_str(&path).map_err(error::ErrorUnprocessableEntity)?;
 
     Ok(web::Json(version))
 }

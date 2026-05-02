@@ -200,7 +200,7 @@ mod test {
 
         let repr = &repr[0];
 
-        let existing_pod: Pod = serde_yaml::from_str(repr.data()).unwrap();
+        let existing_pod: Pod = serde_saphyr::from_str(repr.data()).unwrap();
         assert_eq!(existing_pod.spec.unwrap().containers[0].name, "test");
     }
 

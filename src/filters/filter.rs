@@ -228,7 +228,7 @@ mod tests {
     fn filter_all_filters_allow() {
         let obj = DynamicObject::new("", &ApiResource::erase::<Pod>(&())).within("test");
 
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         assert_eq!(
             FilterList(vec![FilterType::NamespaceInclude(vec![
                 Namespace::<Include>::try_from("test").unwrap(),
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn repeated_excludes_are_combined_with_or() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
 
         let mut app_obj =
             DynamicObject::new("app", &ApiResource::erase::<Pod>(&())).within("default");

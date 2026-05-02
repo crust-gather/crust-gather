@@ -7,7 +7,6 @@ edition = "2024"
 kube = { version = "3.1.0", features = ["socks5", "ws", "aws-lc-rs", "http-proxy"] }
 k8s-openapi = { version = "0.27.1", features = ["latest"] }
 tokio = { version = "1.52.1", features = ["rt-multi-thread"], default-features = false}
-serde_yaml = "0.9.28"
 serde = { version = "1.0.228", features = ["derive"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 anyhow = "1.0.102"
@@ -49,6 +48,7 @@ cel = "0.13.0"
 kube-cel = { version = "0.5.3", features = ["strings", "lists", "format"] }
 unselector = "0.2.0"
 derive_more = { version = "2.1.1", features = ["deref"] }
+serde-saphyr = "0.0.25"
 
 [dev-dependencies]
 xid = "1.1.1"

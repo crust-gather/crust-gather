@@ -51,7 +51,7 @@ impl Collect<Node> for Info {
     async fn collect(&self) -> anyhow::Result<()> {
         let c = self.get_api().into_client();
 
-        let version = serde_yaml::to_string(&c.apiserver_version().await?)?;
+        let version = serde_saphyr::to_string(&c.apiserver_version().await?)?;
         let api_versions = c
             .request_text(
                 Request::builder()

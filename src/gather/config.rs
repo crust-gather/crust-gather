@@ -118,7 +118,7 @@ impl ConfigFromConfigMap {
         cm.data
             .clone()?
             .values()
-            .find_map(|v| serde_yaml::from_str(v).ok())
+            .find_map(|v| serde_saphyr::from_str(v).ok())
     }
 }
 
@@ -156,7 +156,7 @@ impl KubeconfigFile {
     }
 
     pub fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
-        serde_yaml::to_writer(File::create(path)?, &self.0)?;
+        serde_saphyr::to_io_writer(&mut File::create(path)?, &self.0)?;
         Ok(())
     }
 
@@ -216,7 +216,7 @@ impl TryFrom<&str> for KubeconfigFile {
     type Error = anyhow::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(serde_yaml::from_reader(File::open(s)?)?))
+        Ok(Self(serde_saphyr::from_reader(File::open(s)?)?))
     }
 }
 
@@ -308,10 +308,10 @@ impl SecretSearch {
         s.data
             .clone()?
             .values()
-            .filter_map(|v| serde_yaml::to_string(v).ok())
+            .filter_map(|v| serde_saphyr::to_string(v).ok())
             .filter_map(|v| BASE64_STANDARD.decode(v.trim_end()).ok())
             .filter_map(|v| String::from_utf8(v).ok())
-            .find_map(|v| serde_yaml::from_str(&v).ok())
+            .find_map(|v| serde_saphyr::from_str(&v).ok())
     }
 }
 

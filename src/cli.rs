@@ -946,7 +946,7 @@ impl TryFrom<&str> for GatherCommands {
     type Error = anyhow::Error;
 
     fn try_from(file: &str) -> Result<Self, Self::Error> {
-        Ok(serde_yaml::from_reader(File::open(file)?)?)
+        Ok(serde_saphyr::from_reader(File::open(file)?)?)
     }
 }
 
@@ -1069,7 +1069,7 @@ mod tests {
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
-            serde_yaml::to_string(&config).unwrap(),
+            serde_saphyr::to_string(&config).unwrap(),
         )
         .await
         .unwrap();
@@ -1101,7 +1101,7 @@ mod tests {
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
-            serde_yaml::to_string(&config).unwrap(),
+            serde_saphyr::to_string(&config).unwrap(),
         )
         .await
         .unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
         let kubeconfig_path = temp_kubeconfig();
         fs::write(
             kubeconfig_path.clone(),
-            serde_yaml::to_string(&config).unwrap(),
+            serde_saphyr::to_string(&config).unwrap(),
         )
         .await
         .unwrap();
@@ -1351,7 +1351,7 @@ mod tests {
             .expect("cluster two");
 
         let other_kubeconfig = other_env.kubeconfig().unwrap();
-        let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
+        let other_kubeconfig = serde_saphyr::to_string(&other_kubeconfig).unwrap();
         fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await
             .unwrap();
@@ -1510,7 +1510,7 @@ mod tests {
             .expect("cluster two");
 
         let other_kubeconfig = other_env.kubeconfig().unwrap();
-        let other_kubeconfig = serde_yaml::to_string(&other_kubeconfig).unwrap();
+        let other_kubeconfig = serde_saphyr::to_string(&other_kubeconfig).unwrap();
         fs::write(temp_kubeconfig(), other_kubeconfig.clone())
             .await
             .unwrap();

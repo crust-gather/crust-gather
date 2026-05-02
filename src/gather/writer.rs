@@ -404,7 +404,7 @@ impl Writer {
                 .await?
                 .read(file_path.clone())
                 .await?;
-                let updated = serde_yaml::from_str(repr.data())?;
+                let updated = serde_saphyr::from_str(repr.data())?;
                 let patch = &diff(&original, &updated);
                 if !patch.deref().is_empty() {
                     let mut patches = File::options()
