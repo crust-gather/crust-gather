@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn test_name_include_filter() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         let filter = Name::<Include>::try_from("test.*").unwrap();
         let obj = DynamicObject::new("test-pod", &ApiResource::erase::<Pod>(&())).within("default");
         assert_eq!(
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_name_exclude_filter() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         let filter = Name::<Exclude>::try_from("secret.*").unwrap();
         let obj =
             DynamicObject::new("public-pod", &ApiResource::erase::<Pod>(&())).within("default");

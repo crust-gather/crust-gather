@@ -132,7 +132,7 @@ mod tests {
     kind: Pod";
 
     fn pod_gvk() -> GroupVersionKind {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         GroupVersionKind::try_from(&pod_tm).expect("parse GVK")
     }
 

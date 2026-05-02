@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn test_kind_include_filter() {
         let filter = Kind::<Include>::try_from(Pod::KIND).expect("Parse KindInclude");
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
+        let deploy_tm: TypeMeta = serde_saphyr::from_str(DEPLOY).unwrap();
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 
@@ -120,8 +120,8 @@ mod tests {
 
     #[test]
     fn test_kind_exclude_filter() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
-        let deploy_tm: TypeMeta = serde_yaml::from_str(DEPLOY).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
+        let deploy_tm: TypeMeta = serde_saphyr::from_str(DEPLOY).unwrap();
         let obj: DynamicObject =
             DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");
 

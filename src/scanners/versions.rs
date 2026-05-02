@@ -77,7 +77,7 @@ impl Collect<Pod> for Versions {
             .store(
                 &Representation::new()
                     .with_path(ArchivePath::Custom("app-versions.yaml".into()))
-                    .with_data(serde_yaml::to_string(&data)?.as_str()),
+                    .with_data(serde_saphyr::to_string(&data)?.as_str()),
             )
             .await
     }
@@ -119,7 +119,7 @@ mod tests {
             .expect("cluster");
         let kubeconfig = test_env.kubeconfig().expect("kubeconfig");
 
-        let kubeconfig = serde_yaml::to_string(&kubeconfig).unwrap();
+        let kubeconfig = serde_saphyr::to_string(&kubeconfig).unwrap();
         let path = temp_kubeconfig();
         fs::write(path.clone(), kubeconfig).await.unwrap();
 

@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_include_namespace_filter() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
 
         let filter = Namespace::<Include>::try_from("default").unwrap();
 
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_exclude_namespace() {
-        let pod_tm: TypeMeta = serde_yaml::from_str(POD).unwrap();
+        let pod_tm: TypeMeta = serde_saphyr::from_str(POD).unwrap();
         let filter = Namespace::<Exclude>::try_from("default").unwrap();
 
         let obj = DynamicObject::new("test", &ApiResource::erase::<Pod>(&())).within("default");

@@ -161,7 +161,7 @@ impl Table {
             true => {
                 let mut file = vec![];
                 storage.read(crd_path, &mut file).await?;
-                serde_yaml::from_slice(&file)?
+                serde_saphyr::from_slice(&file)?
             }
             false => match predefined_table(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
@@ -387,7 +387,7 @@ impl NamedResources {
         let mut object = vec![];
         storage.read(path.clone(), &mut object).await?;
 
-        let discovery = serde_yaml::from_slice(&object)?;
+        let discovery = serde_saphyr::from_slice(&object)?;
         Ok(Self::from_discovery_groups(discovery))
     }
 
@@ -898,9 +898,9 @@ impl Reader {
         let mut object = vec![];
         self.storage.read(path.clone(), &mut object).await?;
         match self.storage.exist(&path.with_extension("patch")) {
-            false => Ok(vec![serde_yaml::from_slice(&object)?]),
+            false => Ok(vec![serde_saphyr::from_slice(&object)?]),
             true => {
-                let original: serde_json::Value = serde_yaml::from_slice(&object)?;
+                let original: serde_json::Value = serde_saphyr::from_slice(&object)?;
                 Some(original.clone())
                     .into_iter()
                     .chain(
