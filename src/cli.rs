@@ -592,7 +592,11 @@ impl GatherSettings {
                         .await
                     {
                         Ok(client) => return Ok(client),
-                        Err(_) => continue,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Failed to open client using {secret:?}: {e}",
+                            ));
+                        }
                     };
                 }
 
@@ -1551,7 +1555,7 @@ mod tests {
             },
         };
 
-        assert!(commands.run().await.is_ok());
+        commands.run().await.unwrap();
         assert!(tmp_dir.path().join("collect").join("cluster").is_dir());
         assert!(tmp_dir.path().join("collect").join("namespaces").is_dir());
         assert!(
