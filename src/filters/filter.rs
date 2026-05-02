@@ -117,7 +117,7 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterList {
     }
 }
 
-fn eval_exclude<R, F>(filters: &Vec<F>, obj: &R, gvk: &GroupVersionKind) -> bool
+fn eval_exclude<R, F>(filters: &[F], obj: &R, gvk: &GroupVersionKind) -> bool
 where
     F: Filter<R>,
     R: ResourceThreadSafe,
