@@ -52,7 +52,7 @@ serde-saphyr = "0.0.26"
 
 [dev-dependencies]
 xid = "1.1.1"
-serde_with = "3.18.0"
+serde_with = "3.19.0"
 envtest = "0.2.0"
 
 [profile.release]
