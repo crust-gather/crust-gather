@@ -48,7 +48,7 @@ cel = "0.13.0"
 kube-cel = { version = "0.5.3", features = ["strings", "lists", "format"] }
 unselector = "0.2.0"
 derive_more = { version = "2.1.1", features = ["deref"] }
-serde-saphyr = "0.0.25"
+serde-saphyr = "0.0.26"
 
 [dev-dependencies]
 xid = "1.1.1"
