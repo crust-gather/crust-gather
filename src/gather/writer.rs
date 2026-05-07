@@ -1,9 +1,14 @@
 use anyhow::Context;
 use backon::{ExponentialBuilder, Retryable};
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 use flate2::{Compression, write::GzEncoder};
 
 use chrono::Utc;
-use futures::{StreamExt as _, TryStreamExt as _, future, stream};
+use futures::{
+    StreamExt as _, TryStreamExt as _,
+    future::{self},
+    stream, try_join,
+};
 use json_patch::diff;
 use k8s_openapi::serde_json;
 use oci_client::{
@@ -13,15 +18,17 @@ use oci_client::{
     manifest::{IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest},
     secrets::RegistryAuth,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     ffi::OsStr,
     fmt::Display,
     fs::{DirBuilder, File},
     io::{Read as _, Write as _},
     ops::Deref,
+    os::unix::fs::MetadataExt,
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -187,7 +194,25 @@ pub enum Writer {
     Path(Archive),
     Gzip(Archive, Box<Builder<GzEncoder<File>>>),
     Zip(Archive, Box<ZipWriter<File>>),
-    Oci(Archive, Client, Box<Reference>, RegistryAuth, usize),
+    Oci(OCIState),
+}
+
+// OCIState holds current OCI writer destination state
+pub struct OCIState {
+    archive: Archive,
+    client: Client,
+    image_ref: Box<Reference>,
+    auth: RegistryAuth,
+    buffer_size: usize,
+}
+
+// YamlPath contains a full path in the yaml file in archive
+// and a range of bytes to extract yaml from a list
+#[derive(Serialize, Deserialize)]
+pub struct YamlPath {
+    pub path: PathBuf,
+    pub from: usize,
+    pub to: usize,
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -218,113 +243,9 @@ impl Writer {
 
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub async fn finish_oci(&self) -> anyhow::Result<()> {
-        let Self::Oci(archive, client, image_ref, auth, buffer_size) = self else {
-            return Ok(());
-        };
-
-        info!("Pushing image: {:?}", image_ref);
-        client
-            .store_auth_if_needed(image_ref.resolve_registry(), auth)
-            .await;
-
-        let config = Config::new(b"{}".to_vec(), OCI_IMAGE_MEDIA_TYPE.to_string(), None);
-        let paths = glob::glob(&format!(
-            "{}/**/*",
-            archive
-                .path()
-                .to_str()
-                .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
-        ))?;
-
-        let layers = Arc::new(Mutex::new(vec![]));
-        // Upload layers
-        stream::iter(paths.into_iter())
-            .map(|path| {
-                let layers = layers.clone();
-                async move {
-                    let path = path?;
-                    if path.is_dir() {
-                        return anyhow::Result::Ok(());
-                    }
-                    let archive_path = path.clone();
-                    let archive_path = archive_path
-                        .to_str()
-                        .ok_or(anyhow::anyhow!("file path is not convertable to string"))?;
-                    let mut file =
-                        File::open(path).context(format!("failed to open file {archive_path}"))?;
-                    let mut data = String::new();
-                    File::read_to_string(&mut file, &mut data)
-                        .context(format!("failed to read file {archive_path}"))?;
-                    if data.is_empty() {
-                        // That could only happen for empty logs, so we publish an empty json instead
-                        // as ghcr doesn't allow empty layers
-                        data = "{}".to_string();
-                    };
-                    let size = data.len() as i64;
-                    let digest = format!(
-                        "sha256:{}",
-                        hex::encode(sha2::Sha256::digest(data.as_bytes()))
-                    );
-                    {
-                        layers.lock().await.push(OciDescriptor {
-                            urls: None,
-                            media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
-                            digest: digest.clone(),
-                            size,
-                            annotations: Some(
-                                [(
-                                    "org.opencontainers.image.title".to_string(),
-                                    archive_path.to_string(),
-                                )]
-                                .into(),
-                            ),
-                        });
-                    }
-
-                    info!("Pushing layer: {:?}", archive_path);
-                    let push = || client.push_blob(image_ref, data.clone(), &digest);
-                    push.retry(ExponentialBuilder::default().with_max_times(20).with_max_delay(Duration::from_secs(10)).with_jitter())
-                        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-                        .notify(|e, dur| debug!("Pushing layer: {archive_path:?} - retry after {dur:?} due to {e:?}"))
-                        .await
-                        .context(format!("failed to push layer for file {archive_path}"))?;
-
-                    anyhow::Result::Ok(())
-                }
-            })
-            .boxed() // Workaround to rustc issue https://github.com/rust-lang/rust/issues/104382
-            .buffer_unordered(*buffer_size)
-            .try_for_each(future::ok::<(), anyhow::Error>)
-            .await?;
-
-        let mut manifest = OciImageManifest::default();
-        manifest.config.media_type = config.media_type.to_string();
-        manifest.config.size = config.data.len() as i64;
-        manifest.config.digest =
-            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&config.data)));
-        manifest.layers = layers.lock().await.clone();
-        manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
-
-        let push = || client.push_blob(image_ref, config.data.clone(), &manifest.config.digest);
-        push.retry(
-            ExponentialBuilder::default()
-                .with_max_times(20)
-                .with_max_delay(Duration::from_secs(10))
-                .with_jitter(),
-        )
-        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .await?;
-
-        let manifest = &manifest.into();
-        let push = || client.push_manifest(image_ref, manifest);
-        push.retry(
-            ExponentialBuilder::default()
-                .with_max_times(20)
-                .with_max_delay(Duration::from_secs(10))
-                .with_jitter(),
-        )
-        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .await?;
+        if let Writer::Oci(ocistate) = self {
+            return ocistate.publish_image().await;
+        }
 
         Ok(())
     }
@@ -338,7 +259,11 @@ impl Writer {
         let data = repr.data();
 
         match self {
-            Self::Path(Archive(archive)) | Self::Oci(Archive(archive), ..) => {
+            Self::Path(Archive(archive))
+            | Self::Oci(OCIState {
+                archive: Archive(archive),
+                ..
+            }) => {
                 let file = archive.join(archive_path);
                 if !file.exists() {
                     DirBuilder::new()
@@ -460,14 +385,261 @@ impl Writer {
                     archive.0.with_extension("zip"),
                 )?)),
             ),
-            Encoding::Oci(image_ref) => Self::Oci(
-                archive.clone(),
-                Client::new(client_config.unwrap_or_default()),
-                image_ref.clone().into(),
-                auth.unwrap_or(RegistryAuth::Anonymous),
+            Encoding::Oci(image_ref) => Self::Oci(OCIState {
+                archive: archive.clone(),
+                client: Client::new(client_config.unwrap_or_default()),
+                image_ref: image_ref.clone().into(),
+                auth: auth.unwrap_or(RegistryAuth::Anonymous),
                 buffer_size,
-            ),
+            }),
         })
+    }
+}
+
+impl OCIState {
+    #[instrument(skip_all, err)]
+    async fn publish_image(&self) -> anyhow::Result<()> {
+        info!("Pushing image: {:?}", self.image_ref);
+        self.client
+            .store_auth_if_needed(self.image_ref.resolve_registry(), &self.auth)
+            .await;
+
+        let config = Config::new(b"{}".to_vec(), OCI_IMAGE_MEDIA_TYPE.to_string(), None);
+        let paths = glob::glob(&format!(
+            "{}/**/*",
+            self.archive
+                .path()
+                .to_str()
+                .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
+        ))?;
+
+        let resource_paths = Arc::new(Mutex::new(Default::default()));
+        let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())
+            .filter_map(|path| Self::prepare_resource_layer(path, resource_paths.clone()))
+            .collect()
+            .await;
+
+        // Upload layers
+        let layers = Arc::new(Mutex::new(vec![]));
+        let raw_layers = stream::iter(non_resource_paths.into_iter())
+            .map(|path| self.push_oci_archive_layer(path, layers.clone()))
+            .buffer_unordered(self.buffer_size)
+            .try_for_each(future::ok::<(), anyhow::Error>);
+
+        let resource_layer_entries = { resource_paths.lock().await.clone() };
+        let resources = stream::iter(resource_layer_entries)
+            .filter_map(|(p, yamls)| {
+                future::ready(
+                    Self::combined_oci_archive_layer(&yamls)
+                        .ok()
+                        .map(|data| (p + ".yaml", data)),
+                )
+            })
+            .map(|(p, data)| self.push_oci_layer(p, data, layers.clone()))
+            .buffer_unordered(self.buffer_size)
+            .try_for_each(future::ok::<(), anyhow::Error>);
+
+        let yamls = Self::prepare_index(resource_paths.lock().await.values().cloned().collect())?;
+        let yamls =
+            serde_saphyr::to_string(&yamls).context("unable to collect yamls index file")?;
+
+        let index_layer = self.push_oci_layer("index.yaml".to_string(), yamls, layers.clone());
+
+        try_join!(resources, raw_layers, index_layer).context("failed to upload OCI layers")?;
+
+        let mut manifest = OciImageManifest::default();
+        manifest.config.media_type = config.media_type.to_string();
+        manifest.config.size = config.data.len() as i64;
+        manifest.config.digest =
+            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&config.data)));
+        manifest.layers = layers.lock().await.clone();
+        manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
+
+        info!("Pushing config: {}", self.image_ref);
+        let push = || {
+            self.client.push_blob(
+                &self.image_ref,
+                config.data.clone(),
+                &manifest.config.digest,
+            )
+        };
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
+
+        info!("Pushing manifest: {}", self.image_ref);
+        let manifest = &manifest.into();
+        let push = || self.client.push_manifest(&self.image_ref, manifest);
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
+
+        Ok(())
+    }
+
+    fn prepare_index(yamls: Vec<Vec<PathBuf>>) -> anyhow::Result<Vec<YamlPath>> {
+        let mut list = vec![];
+        for yaml_list in yamls {
+            let mut index = 0;
+            for yaml in yaml_list {
+                let path = yaml.to_string_lossy();
+                let file = File::open(&yaml).context(format!("failed to open file {path}"))?;
+                let value: serde_json::Value = serde_saphyr::from_reader(file)
+                    .context(format!("failed to read file {path}"))?;
+                let data = serde_saphyr::to_string(&value)
+                    .context(format!("failed to serialize file {path}"))?;
+
+                list.push(YamlPath {
+                    path: yaml,
+                    from: index,
+                    to: {
+                        index += data.len();
+                        index
+                    },
+                });
+                index += 4
+            }
+        }
+
+        Ok(list)
+    }
+
+    async fn prepare_resource_layer(
+        path: glob::GlobResult,
+        resource_layers: Arc<Mutex<BTreeMap<String, Vec<PathBuf>>>>,
+    ) -> Option<PathBuf> {
+        let path = path.ok()?;
+
+        if path.is_dir() {
+            return Some(path);
+        }
+
+        let Some(parent) = path.parent() else {
+            return Some(path);
+        };
+
+        let Some(ext) = path.extension() else {
+            return Some(path);
+        };
+
+        if ext != "yaml" || path.to_string_lossy().ends_with("version.yaml") {
+            return Some(path);
+        }
+
+        let parent = parent.to_str()?;
+
+        debug!("Inserting path {:?} with parent {:?}", path, parent);
+        resource_layers
+            .lock()
+            .await
+            .entry(parent.to_string())
+            .or_default()
+            .push(path);
+
+        None
+    }
+
+    async fn push_oci_layer(
+        &self,
+        archive_path: String,
+        mut data: String,
+        layers: Arc<Mutex<Vec<OciDescriptor>>>,
+    ) -> anyhow::Result<()> {
+        if data.is_empty() {
+            // That could only happen for empty logs, so we publish an empty json instead
+            // as ghcr doesn't allow empty layers
+            data = "{}".to_string();
+        };
+        let size = data.len() as i64;
+        let digest = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(data.as_bytes()))
+        );
+        {
+            layers.lock().await.push(OciDescriptor {
+                urls: None,
+                media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
+                digest: digest.clone(),
+                size,
+                annotations: Some(
+                    [(
+                        "org.opencontainers.image.title".to_string(),
+                        archive_path.to_string(),
+                    )]
+                    .into(),
+                ),
+            });
+        }
+
+        info!("Pushing layer: {:?}", archive_path);
+        let push = || {
+            self.client
+                .push_blob(&self.image_ref, data.clone(), &digest)
+        };
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .notify(|e, dur| {
+            debug!("Pushing layer: {archive_path:?} - retry after {dur:?} due to {e:?}")
+        })
+        .await
+        .context(format!("failed to push layer for file {archive_path}"))?;
+
+        anyhow::Result::Ok(())
+    }
+
+    #[instrument(skip_all, err)]
+    fn combined_oci_archive_layer(yamls: &Vec<PathBuf>) -> anyhow::Result<String> {
+        let mut files: Vec<serde_json::Value> = vec![];
+        for yaml in yamls {
+            let path = yaml.to_string_lossy();
+            let file = File::open(yaml).context(format!("failed to open file {path}"))?;
+            files.push(
+                serde_saphyr::from_reader(file).context(format!("failed to read file {path}"))?,
+            );
+        }
+
+        let mut enc = GzEncoder::new(vec![], Compression::best());
+        let data = serde_saphyr::to_string_multiple(&files)
+            .context("failed to serialize a list of yamls")?;
+        enc.write_all(data.as_bytes())?;
+
+        Ok(BASE64_STANDARD.encode(enc.finish()?))
+    }
+
+    async fn push_oci_archive_layer(
+        &self,
+        path: PathBuf,
+        layers: Arc<Mutex<Vec<OciDescriptor>>>,
+    ) -> anyhow::Result<()> {
+        if path.is_dir() {
+            return anyhow::Result::Ok(());
+        }
+        let archive_path = path.clone();
+        let archive_path = archive_path
+            .to_str()
+            .ok_or(anyhow::anyhow!("file path is not convertable to string"))?;
+        let mut file = File::open(path).context(format!("failed to open file {archive_path}"))?;
+        let mut data = String::new();
+        File::read_to_string(&mut file, &mut data)
+            .context(format!("failed to read file {archive_path}"))?;
+
+        self.push_oci_layer(archive_path.to_string(), data, layers)
+            .await
     }
 }
 

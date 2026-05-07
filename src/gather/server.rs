@@ -14,7 +14,6 @@ use actix_web::{
 };
 use anyhow::Context as _;
 use async_stream::stream;
-use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use k8s_openapi::serde_json::{self, json};
@@ -26,7 +25,7 @@ use kube::{
         watch::{Bookmark, BookmarkMeta},
     },
 };
-use oci_client::{Client, Reference};
+use oci_client::{Client, Reference, manifest::OciImageManifest};
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep};
@@ -36,8 +35,8 @@ use crate::{
     gather::{
         reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
         representation::TypeMetaGetter,
-        storage::{OCIState, Storage},
-        writer::Archive,
+        storage::{Descriptor, OCIState, Storage},
+        writer::{Archive, YamlPath},
     },
 };
 
@@ -221,24 +220,17 @@ impl Api {
         let previous_context = config.current_context;
         config.current_context = None;
 
-        let config = Api::prepare_kubeconfig(reference.repository().to_string(), socket);
+        let config = config.merge(Api::prepare_kubeconfig(
+            reference.repository().to_string(),
+            socket,
+        ))?;
 
         serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
 
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
         let (manifest, _) = client.pull_image_manifest(&reference, &auth).await?;
-        let mut index = HashMap::new();
-
-        for layer in manifest.layers {
-            let Some(annotations) = layer.annotations.clone() else {
-                anyhow::bail!("manifest layer contains no org.opencontainers.image.title annoation")
-            };
-            let path = &annotations["org.opencontainers.image.title"];
-            index.insert(PathBuf::from(path), layer);
-        }
-
-        let index = Arc::new(index);
+        let index = Arc::new(Self::collect_index(&client, &reference, manifest).await?);
 
         let storage = Storage::new(Some(OCIState {
             reference: reference.clone(),
@@ -264,6 +256,53 @@ impl Api {
             },
             socket,
         })
+    }
+
+    async fn collect_index(
+        client: &Client,
+        reference: &Reference,
+        manifest: OciImageManifest,
+    ) -> anyhow::Result<HashMap<PathBuf, Descriptor>> {
+        let mut index = HashMap::new();
+
+        for layer in manifest.layers {
+            let Some(annotations) = layer.annotations.clone() else {
+                anyhow::bail!("manifest layer contains no org.opencontainers.image.title annoation")
+            };
+            let path = &annotations["org.opencontainers.image.title"];
+            index.insert(PathBuf::from(path), Descriptor::OciDescriptor(layer));
+        }
+
+        let Some(index_layer) = index.get(&PathBuf::from("index.yaml")) else {
+            return Ok(index);
+        };
+
+        let mut data = vec![];
+        client
+            .pull_blob(reference, index_layer.deref(), &mut data)
+            .await?;
+        let resource_paths: Vec<YamlPath> = serde_saphyr::from_slice(&data)?;
+        for yaml_path in resource_paths {
+            let resource_path = yaml_path.path;
+            let Some(parent_path) = resource_path.parent() else {
+                anyhow::bail!(format!(
+                    "index layer must reference a parent list object: {resource_path:?}"
+                ))
+            };
+
+            let Some(parent) = index.get(&parent_path.with_extension("yaml")) else {
+                anyhow::bail!(format!(
+                    "index layer must reference a yaml list object: {resource_path:?}"
+                ))
+            };
+
+            index.insert(
+                resource_path,
+                Descriptor::ListOciDescriptor(parent.deref().clone(), yaml_path.from, yaml_path.to),
+            );
+        }
+
+        Ok(index)
     }
 
     fn convert_name(name: String) -> String {
@@ -377,7 +416,8 @@ async fn version(
         .to_reader(archive.clone())
         .await
         .map_err(error::ErrorServiceUnavailable)?;
-    let path = load_raw(reader, ArchivePath::Custom("version.yaml".into()))
+    let path = reader
+        .load_raw(ArchivePath::Custom("version.yaml".into()))
         .await
         .map_err(error::ErrorNotFound)?;
     let version: serde_json::Value =
@@ -424,7 +464,8 @@ async fn api(
         .await
         .map_err(error::ErrorServiceUnavailable)?;
 
-    Ok(load_raw(reader, ArchivePath::Custom("api.json".into()))
+    Ok(reader
+        .load_raw(ArchivePath::Custom("api.json".into()))
         .await
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -453,7 +494,8 @@ async fn apis(
         .await
         .map_err(error::ErrorServiceUnavailable)?;
 
-    Ok(load_raw(reader, ArchivePath::Custom("apis.json".into()))
+    Ok(reader
+        .load_raw(ArchivePath::Custom("apis.json".into()))
         .await
         .map_err(error::ErrorNotFound)?
         .customize()
@@ -462,7 +504,6 @@ async fn apis(
         .insert_header(("X-Varied-Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)))
 }
 
-// TODO: I want to log all query parameters passed in stdout, as a qick debug. Even those which are not defined here
 #[get("{server}/api/{version}/{kind}")]
 async fn api_list(
     accept: Header<Accept>,
@@ -538,9 +579,9 @@ async fn list_items(
     let selector = query.0;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            load_table(reader, list, selector).await?
+            reader.load_table(list, selector).await?
         }
-        _ => load_list(reader, list, selector).await?,
+        _ => reader.list(list, selector).await?,
     })
 }
 
@@ -553,9 +594,9 @@ async fn watch_events(
     let selector = query.0;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            watch_table_events(reader.clone(), list, selector).await?
+            reader.watch_table_events(list, selector).await?
         }
-        _ => watch_events_cached(reader.clone(), list, selector).await?,
+        _ => reader.watch_events(list, selector).await?,
     })
 }
 
@@ -689,7 +730,8 @@ async fn logs_get(
         .await
         .map_err(error::ErrorServiceUnavailable)?;
     let get = archive.named_object_from_get(get.clone());
-    load_raw(reader, get.get_logs_path(query.deref()))
+    reader
+        .load_raw(get.get_logs_path(query.deref()))
         .await
         .map_err(error::ErrorNotFound)
 }
@@ -701,51 +743,5 @@ async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<
         .ok_or(anyhow::anyhow!("Server not found"))?;
     let reader = state.to_reader(archive.clone()).await?;
     let get = archive.named_object_from_get(get.clone());
-    load(reader, get).await
-}
-
-#[cached(result)]
-async fn load_raw(reader: Reader, path: ArchivePath) -> anyhow::Result<String> {
-    reader.load_raw(path).await
-}
-
-#[cached(result)]
-async fn load(reader: Reader, get: NamedObject) -> anyhow::Result<serde_json::Value> {
     reader.load(get).await
-}
-
-#[cached(result)]
-async fn load_list(
-    reader: Reader,
-    list: NamedObject,
-    selector: Selector,
-) -> anyhow::Result<serde_json::Value> {
-    reader.list(list, selector).await
-}
-
-#[cached(result)]
-async fn load_table(
-    reader: Reader,
-    list: NamedObject,
-    selector: Selector,
-) -> anyhow::Result<serde_json::Value> {
-    reader.load_table(list, selector).await
-}
-
-#[cached(result)]
-async fn watch_table_events(
-    reader: Reader,
-    list: NamedObject,
-    selector: Selector,
-) -> anyhow::Result<Vec<serde_json::Value>> {
-    reader.watch_table_events(list, selector).await
-}
-
-#[cached(result)]
-async fn watch_events_cached(
-    reader: Reader,
-    list: NamedObject,
-    selector: Selector,
-) -> anyhow::Result<Vec<serde_json::Value>> {
-    reader.watch_events(list, selector).await
 }
