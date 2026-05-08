@@ -96,7 +96,7 @@ jobs:
       - name: Build ${{ matrix.platform.name }} binary
         run: |
           cargo install cargo-cross
-          cargo cross build $BUILD_ARGS --target ${{ matrix.platform.target }}
+          cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
 
       - name: Store artifact
         uses: actions/upload-artifact@v7
@@ -105,6 +105,7 @@ jobs:
           # Finally, we store the binary as GitHub artifact for later usage
           name: ${{ matrix.platform.target }}-${{ env.BIN_NAME }}
           path: target/${{ matrix.platform.target }}/release/${{ env.BIN_NAME }}${{ contains(matrix.platform.target, 'windows') && '.exe' || '' }}
+          if-no-files-found: error
           retention-days: 1
 
       - name: Output artifact URL
