@@ -15,7 +15,9 @@ use oci_client::{
     Client, Reference,
     client::{ClientConfig, Config},
     errors::OciDistributionError,
-    manifest::{IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest},
+    manifest::{
+        IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest, OciManifest,
+    },
     secrets::RegistryAuth,
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,7 @@ use std::{
 };
 use tar::{Builder, Header};
 use tokio::sync::Mutex;
+use tokio_util::bytes;
 use tracing::{debug, info, instrument};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
@@ -455,13 +458,15 @@ impl OCIState {
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
 
         info!("Pushing config: {}", self.image_ref);
-        let push = || {
-            self.client.push_blob(
-                &self.image_ref,
-                config.data.clone(),
-                &manifest.config.digest,
-            )
-        };
+        let manifest = manifest.into();
+        self.push_blob(config.data).await?;
+
+        info!("Pushing manifest: {}", self.image_ref);
+        self.push_manifest(&manifest).await
+    }
+
+    async fn push_manifest(&self, manifest: &OciManifest) -> anyhow::Result<()> {
+        let push = || self.client.push_manifest(&self.image_ref, manifest);
         push.retry(
             ExponentialBuilder::default()
                 .with_max_times(20)
@@ -471,9 +476,18 @@ impl OCIState {
         .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
         .await?;
 
-        info!("Pushing manifest: {}", self.image_ref);
-        let manifest = &manifest.into();
-        let push = || self.client.push_manifest(&self.image_ref, manifest);
+        Ok(())
+    }
+
+    async fn push_blob(&self, data: impl Into<bytes::Bytes> + Clone) -> anyhow::Result<()> {
+        let digest = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(data.clone().into()))
+        );
+        let push = || {
+            let data = data.clone();
+            self.client.push_blob(&self.image_ref, data, &digest)
+        };
         push.retry(
             ExponentialBuilder::default()
                 .with_max_times(20)
@@ -492,16 +506,13 @@ impl OCIState {
             let mut index = 0;
             for yaml in yaml_list {
                 let path = yaml.to_string_lossy();
-                let file = File::open(&yaml).context(format!("failed to open file {path}"))?;
-                let value: serde_json::Value = serde_saphyr::from_reader(file)
-                    .context(format!("failed to read file {path}"))?;
-                let data = serde_saphyr::to_string(&value)
-                    .context(format!("failed to serialize file {path}"))?;
-
+                let mut file = File::open(&yaml).context(format!("failed to open file {path}"))?;
                 list.push(YamlPath {
                     path: yaml,
                     from: index,
                     to: {
+                        let mut data = vec![];
+                        file.read_to_end(&mut data)?;
                         index += data.len();
                         index
                     },
@@ -568,7 +579,7 @@ impl OCIState {
             layers.lock().await.push(OciDescriptor {
                 urls: None,
                 media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
-                digest: digest.clone(),
+                digest,
                 size,
                 annotations: Some(
                     [(
@@ -581,24 +592,7 @@ impl OCIState {
         }
 
         info!("Pushing layer: {:?}", archive_path);
-        let push = || {
-            self.client
-                .push_blob(&self.image_ref, data.clone(), &digest)
-        };
-        push.retry(
-            ExponentialBuilder::default()
-                .with_max_times(20)
-                .with_max_delay(Duration::from_secs(10))
-                .with_jitter(),
-        )
-        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .notify(|e, dur| {
-            debug!("Pushing layer: {archive_path:?} - retry after {dur:?} due to {e:?}")
-        })
-        .await
-        .context(format!("failed to push layer for file {archive_path}"))?;
-
-        anyhow::Result::Ok(())
+        self.push_blob(data).await
     }
 
     #[instrument(skip_all, err)]

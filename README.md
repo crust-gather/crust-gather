@@ -52,9 +52,6 @@ docker run --rm -i -p 9095:9095 \
   ghcr.io/crust-gather/crust-gather serve -r ttl.sh/my-cluster-snapshot:1h &
 ```
 
-> [!WARNING]
-> Stopping the container can overwrite your `KUBECONFIG`, unlike in local serving with `crust-gather` binary. If that config is not otherwise recoverable, back it up first.
-
 After which any `kubectl` command will access the OCI archive directly, until serving is stopped
 
 ```bash
