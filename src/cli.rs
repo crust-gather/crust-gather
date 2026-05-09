@@ -32,7 +32,7 @@ use crate::{
             Config, ConfigFromConfigMap, GatherMode, KubeconfigFile, KubeconfigSecretLabel,
             KubeconfigSecretNamespaceName, RunDuration, Secrets, SecretsFile,
         },
-        log::UserLog,
+        log::HostLog,
         server::Server,
         writer::{Archive, Encoding, Writer},
     },
@@ -679,12 +679,18 @@ pub struct DebugPod {
     #[arg(long("debug-pod-image"), value_name = "IMAGE")]
     #[serde(default)]
     pub image: Option<String>,
+
+    /// The namespace to use to collect logs on nodes.
+    #[arg(long("debug-pod-namespace"), value_name = "NAMESPACE")]
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 impl DebugPod {
     fn merge(&self, other: Self) -> Self {
         Self {
             image: other.image.or(self.image.clone()),
+            namespace: other.namespace.or(self.namespace.clone()),
         }
     }
 }
@@ -740,10 +746,10 @@ pub struct AdditionalLogs {
     /// Example:
     ///     --additional-logs="my-binary.log:sh -c cat /host/var/log/my-binary.log"
     #[arg(long, alias("additional-logs"), value_name = "FILE:COMMAND",
-            value_parser = |arg: &str| -> anyhow::Result<UserLog> {Ok(UserLog::try_from(arg)?)},
+            value_parser = |arg: &str| -> anyhow::Result<HostLog> {Ok(HostLog::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
-    logs: Vec<UserLog>,
+    logs: Vec<HostLog>,
 
     /// Additional logs to include into collection.
     ///
@@ -759,7 +765,7 @@ pub struct AdditionalLogs {
     ///   command: echo "hi"
     #[clap(skip)]
     #[serde(default)]
-    additional_logs: Vec<UserLog>,
+    additional_logs: Vec<HostLog>,
 }
 
 #[derive(Parser, Clone, Default, Serialize, Deserialize, Debug, schemars::JsonSchema)]

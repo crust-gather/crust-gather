@@ -26,11 +26,10 @@ use crate::cli::DebugPod;
 use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
 use crate::scanners::events::Events;
+use crate::scanners::host_logs::HostLogs;
 use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogSelection, Logs};
-use crate::scanners::nodes::Nodes;
-use crate::scanners::user_logs::UserLogs;
 use crate::scanners::versions::Versions;
 
 use super::representation::{CustomLog, NamespaceName, Representation};
@@ -454,8 +453,7 @@ enum Collectable {
     Dynamic(Dynamic),
     Pods(Logs),
     Events(Events),
-    Nodes(Nodes),
-    UserLogs(UserLogs),
+    HostLogs(HostLogs),
     Info(Info),
     Versions(Versions),
 }
@@ -467,8 +465,7 @@ impl Collectable {
             Self::Dynamic(o) => o.collect_retry(),
             Self::Pods(l) => l.collect_retry(),
             Self::Events(e) => e.collect_retry(),
-            Self::Nodes(n) => n.collect_retry(),
-            Self::UserLogs(u) => u.collect_retry(),
+            Self::HostLogs(u) => u.collect_retry(),
             Self::Info(i) => i.collect_retry(),
             Self::Versions(v) => v.collect_retry(),
         }
@@ -481,10 +478,9 @@ impl Group {
         match gather.mode {
             GatherMode::Collect => match self {
                 Self::Nodes(resource) => vec![
-                    Collectable::Nodes(Nodes::from(gather.clone())),
                     Collectable::Info(Info::new(gather.clone())),
                     Collectable::Dynamic(Dynamic::new(gather.clone(), resource)),
-                    Collectable::UserLogs(UserLogs::from(gather)),
+                    Collectable::HostLogs(HostLogs::from(gather)),
                 ],
                 Self::Pods(resource) => vec![
                     Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
