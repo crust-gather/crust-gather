@@ -90,6 +90,7 @@ impl NamespacedName for &Get {
 pub struct Log {
     container: Container,
     previous: Option<bool>,
+    pub timestamps: Option<bool>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

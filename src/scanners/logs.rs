@@ -109,6 +109,7 @@ impl Collect<Pod> for Logs {
                 &LogParams {
                     container: Some(container.name.clone()),
                     since_time: Some(Default::default()),
+                    timestamps: true,
                     ..self.group.clone().into()
                 },
             )

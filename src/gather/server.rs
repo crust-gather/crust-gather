@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
-    sync::Arc, time::Duration,
+    str::FromStr, sync::Arc, time::Duration,
 };
 
 use actix_web::{
@@ -14,7 +14,7 @@ use actix_web::{
 };
 use anyhow::Context as _;
 use async_stream::stream;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use k8s_openapi::serde_json::{self, json};
 use kube::{
@@ -730,10 +730,45 @@ async fn logs_get(
         .await
         .map_err(error::ErrorServiceUnavailable)?;
     let get = archive.named_object_from_get(get.clone());
-    reader
+    let mut body = reader
         .load_raw(get.get_logs_path(query.deref()))
         .await
-        .map_err(error::ErrorNotFound)
+        .map_err(error::ErrorBadRequest)?;
+
+    body = prefix_log_timestamps(
+        &body,
+        state.serve_time,
+        matches!(query.deref().timestamps, Some(true)),
+    );
+
+    Ok(HttpResponse::Ok().content_type("text/plain").body(body))
+}
+
+fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: bool) -> String {
+    let Some(line) = logs.split_inclusive('\n').next() else {
+        return logs.to_string();
+    };
+
+    let Some((timestamp, _)) = line.split_once(" ") else {
+        return logs.to_string();
+    };
+
+    if DateTime::<Utc>::from_str(timestamp).is_ok() && timestamped {
+        return logs.to_string();
+    }
+
+    let timestamp = serve_time.to_rfc3339_opts(SecondsFormat::Nanos, true);
+    let convert_timestamp: Box<dyn Fn(&str) -> String> = if timestamped {
+        Box::new(|line| format!("{timestamp} {line}"))
+    } else {
+        Box::new(|line| {
+            let Some((_, line)) = line.split_once(" ") else {
+                return line.to_string();
+            };
+            line.to_string()
+        })
+    };
+    logs.split_inclusive('\n').map(convert_timestamp).collect()
 }
 
 async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<serde_json::Value> {
