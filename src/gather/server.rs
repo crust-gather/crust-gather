@@ -35,7 +35,7 @@ use crate::{
     gather::{
         reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
         representation::TypeMetaGetter,
-        storage::{Descriptor, OCIState, Storage},
+        storage::{Descriptor, OCIState, Storage, pull_blob_cached},
         writer::{Archive, YamlPath},
     },
 };
@@ -230,11 +230,14 @@ impl Api {
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
         let (manifest, _) = client.pull_image_manifest(&reference, &auth).await?;
-        let index = Arc::new(Self::collect_index(&client, &reference, manifest).await?);
+        let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true).await?;
+        let config = serde_json::from_slice(&config)?;
+        let index = Arc::new(Self::collect_index(&client, &reference, &auth, manifest).await?);
 
         let storage = Storage::new(Some(OCIState {
             reference: reference.clone(),
             client,
+            config,
             index,
             auth,
         }));
@@ -261,6 +264,7 @@ impl Api {
     async fn collect_index(
         client: &Client,
         reference: &Reference,
+        auth: &oci_client::secrets::RegistryAuth,
         manifest: OciImageManifest,
     ) -> anyhow::Result<HashMap<PathBuf, Descriptor>> {
         let mut index = HashMap::new();
@@ -277,10 +281,7 @@ impl Api {
             return Ok(index);
         };
 
-        let mut data = vec![];
-        client
-            .pull_blob(reference, index_layer.deref(), &mut data)
-            .await?;
+        let data = pull_blob_cached(client, reference, auth, index_layer.deref(), true).await?;
         let resource_paths: Vec<YamlPath> = serde_saphyr::from_slice(&data)?;
         for yaml_path in resource_paths {
             let resource_path = yaml_path.path;
