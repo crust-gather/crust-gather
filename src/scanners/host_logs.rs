@@ -57,6 +57,7 @@ pub enum DebugPodError {
 
 #[derive(Clone)]
 pub struct HostLogs {
+    pub disabled: bool,
     pub collectable: Objects<Node>,
     pub logs: Vec<CustomLog>,
     pub debug_pod: DebugPod,
@@ -117,6 +118,7 @@ impl From<Config> for HostLogs {
         Self {
             logs,
             debug_pod: value.debug_pod.clone(),
+            disabled: value.disable_additional_logs,
             collectable: Objects::new_typed(value),
         }
     }
@@ -139,7 +141,12 @@ impl Collect<Node> for HostLogs {
     /// Collects container logs representations.
     #[instrument(skip_all, fields(node = node.name_any()), err)]
     async fn representations(&self, node: &Node) -> anyhow::Result<Vec<Representation>> {
-        tracing::info!("Collecting user logs");
+        if self.disabled {
+            tracing::warn!("Host logs collection disabled, skipping...");
+            return Ok(vec![]);
+        }
+
+        tracing::info!("Collecting host logs");
 
         let node_name = node.name_any();
 

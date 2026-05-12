@@ -367,6 +367,8 @@ pub struct Config {
     pub duration: RunDuration,
     pub systemd_units: Vec<String>,
     pub debug_pod: DebugPod,
+
+    pub disable_additional_logs: bool,
 }
 
 impl Config {
@@ -615,6 +617,7 @@ mod tests {
             additional_logs: Default::default(),
             systemd_units: Default::default(),
             debug_pod: Default::default(),
+            disable_additional_logs: false,
         };
 
         // Gzip archive is failing due to timeout.
@@ -652,6 +655,7 @@ mod tests {
             additional_logs: Default::default(),
             systemd_units: Default::default(),
             debug_pod: Default::default(),
+            disable_additional_logs: false,
         };
 
         let result = config.collect().await;
@@ -687,6 +691,7 @@ mod tests {
             additional_logs: Default::default(),
             systemd_units: Default::default(),
             debug_pod: Default::default(),
+            disable_additional_logs: false,
         };
 
         let result = config.collect().await;

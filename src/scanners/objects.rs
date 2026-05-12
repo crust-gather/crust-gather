@@ -191,6 +191,7 @@ mod test {
                 duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
+                disable_additional_logs: false,
             },
             ApiResource::erase::<Pod>(&()),
         )
@@ -234,6 +235,7 @@ mod test {
                 duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
+                disable_additional_logs: false,
             },
             ApiResource::erase::<v1::Namespace>(&()),
         );
@@ -274,6 +276,7 @@ mod test {
                 duration: "1m".try_into().unwrap(),
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
+                disable_additional_logs: false,
             },
             ApiResource::erase::<Pod>(&()),
         );

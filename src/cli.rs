@@ -735,6 +735,11 @@ impl KubeconfigFromSecret {
 #[derive(Parser, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdditionalLogs {
+    /// Disable collection of additional logs.
+    #[arg(long = "disable-additional-logs")]
+    #[serde(default)]
+    disable: bool,
+
     /// Additional logs to include into collection.
     ///
     /// This follows similar pattern to kubelet logs collection. Provided command is executed in a privileged pod
@@ -999,6 +1004,7 @@ impl GatherCommands {
             duration: self.settings.duration.unwrap_or_default(),
             systemd_units: self.settings.systemd_units.clone(),
             debug_pod: self.settings.debug_pod.clone(),
+            disable_additional_logs: self.additional_logs.disable,
         })
     }
 
