@@ -1,9 +1,8 @@
 pub mod dynamic;
 pub mod events;
+pub mod host_logs;
 pub mod info;
 pub mod interface;
 pub mod logs;
-pub mod nodes;
 pub mod objects;
-pub mod user_logs;
 pub mod versions;

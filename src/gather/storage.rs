@@ -11,6 +11,8 @@ use flate2::read::GzDecoder;
 use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
+use crate::gather::writer::ManifestConfig;
+
 #[derive(Clone)]
 pub enum Storage {
     FS,
@@ -22,6 +24,7 @@ pub struct OCIState {
     pub reference: Reference,
     pub auth: RegistryAuth,
     pub client: Client,
+    pub config: ManifestConfig,
     pub index: Arc<HashMap<PathBuf, Descriptor>>,
 }
 
@@ -131,7 +134,7 @@ impl OCIState {
             &self.reference,
             &self.auth,
             descriptor.deref(),
-            matches!(descriptor, Descriptor::ListOciDescriptor(..)),
+            self.config.compressed || matches!(descriptor, Descriptor::ListOciDescriptor(..)),
         )
         .await?;
         let mut out = pin!(out);
@@ -151,7 +154,7 @@ impl OCIState {
     key = "String",
     convert = r#"{ format!("{}@{}", reference, descriptor.digest) }"#
 )]
-async fn pull_blob_cached(
+pub(crate) async fn pull_blob_cached(
     client: &Client,
     reference: &Reference,
     auth: &RegistryAuth,

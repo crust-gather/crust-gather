@@ -54,6 +54,12 @@ impl ColumnDefinition {
             cel: Some(cel.into()),
         }
     }
+
+    pub fn cel_priority(name: &str, cel: impl Into<String>, priority: i32) -> Self {
+        let mut cel = Self::cel(name, cel);
+        cel.source.priority = Some(priority);
+        cel
+    }
 }
 
 pub fn predefined_table(resource: &str) -> Option<Vec<TablePath>> {
@@ -119,6 +125,78 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
                             : self.get("status").get("phase").or("")"#
                 ),
                 ColumnDefinition::cel("Age", AGE_CEL),
+            ],
+        );
+        map.insert(
+            "nodes".into(),
+            vec![
+                ColumnDefinition::json("Name", ".metadata.name"),
+                ColumnDefinition::cel(
+                    "Status",
+                    r#"
+                    (self.get("status").get("conditions").or([]).condition("Ready", "True") != null ? "Ready"
+                    : self.get("status").get("conditions").or([]).condition("Ready", "False") != null ? "NotReady"
+                    : "Unknown")
+                    + 
+                    (self.get("spec").get("unschedulable").or(false) ? ",SchedulingDisabled"
+                    : "")"#,
+                ),
+                ColumnDefinition::cel(
+                    "Roles",
+                    r#"(self.get("metadata").get("labels").or({})
+                        .filter(key, key.startsWith("node-role.kubernetes.io/"))
+                        .map(key, key.substring(24))
+                        + (
+                            self.get("metadata").get("labels").get("kubernetes.io/role").or("") != ""
+                                ? [self.get("metadata").get("labels").get("kubernetes.io/role")]
+                                : []
+                        ))
+                        .distinct()
+                        .sort()
+                        .join(",")"#,
+                ),
+                ColumnDefinition::cel("Age", AGE_CEL),
+                ColumnDefinition::cel("Version", r#"self.get("status").get("nodeInfo").get("kubeletVersion").or("")"#),
+                ColumnDefinition::cel_priority(
+                    "Internal-IP",
+                    r#"self.get("status").get("addresses").or([])
+                        .filter(address, address.get("type").or("") == "InternalIP").size() > 0
+                            ? self.get("status").get("addresses").or([])
+                                .filter(address, address.get("type").or("") == "InternalIP")
+                                [0].get("address").or("")
+                            : "<none>""#,
+                    1,
+                ),
+                ColumnDefinition::cel_priority(
+                    "External-IP",
+                    r#"self.get("status").get("addresses").or([])
+                        .filter(address, address.get("type").or("") == "ExternalIP").size() > 0
+                            ? self.get("status").get("addresses").or([])
+                                .filter(address, address.get("type").or("") == "ExternalIP")
+                                [0].get("address").or("")
+                            : "<none>""#,
+                    1,
+                ),
+                ColumnDefinition::cel_priority(
+                    "OS-Image",
+                    r#"self.get("status").get("nodeInfo").get("osImage").or("")"#,
+                    1,
+                ),
+                ColumnDefinition::cel_priority(
+                    "Kernel-Version",
+                    r#"self.get("status").get("nodeInfo").get("kernelVersion").or("")
+                        + (
+                            self.get("status").get("nodeInfo").get("architecture").or("") != ""
+                                ? " (" + self.get("status").get("nodeInfo").get("architecture") + ")"
+                                : ""
+                        )"#,
+                    1,
+                ),
+                ColumnDefinition::cel_priority(
+                    "Container-Runtime",
+                    r#"self.get("status").get("nodeInfo").get("containerRuntimeVersion").or("")"#,
+                    1,
+                ),
             ],
         );
         map.insert(
@@ -909,5 +987,57 @@ mod tests {
         }));
 
         assert!(rendered.is_some());
+    }
+
+    #[test]
+    fn node_columns_match_upstream_printer_logic() {
+        let columns = predefined_table("nodes").unwrap();
+        let obj = json!({
+            "metadata": {
+                "name": "node-1",
+                "creationTimestamp": "2026-04-14T08:00:56Z",
+                "labels": {
+                    "node-role.kubernetes.io/control-plane": "",
+                    "node-role.kubernetes.io/gpu": "",
+                    "kubernetes.io/role": "worker"
+                }
+            },
+            "spec": {
+                "unschedulable": true
+            },
+            "status": {
+                "addresses": [
+                    {"type": "InternalIP", "address": "10.0.0.1"},
+                    {"type": "InternalIP", "address": "10.0.0.2"},
+                    {"type": "ExternalIP", "address": "192.0.2.1"}
+                ],
+                "conditions": [
+                    {"lastTransitionTime": "2026-04-14T12:00:00Z", "type": "Ready", "status": "False"}
+                ],
+                "nodeInfo": {
+                    "architecture": "amd64",
+                    "containerRuntimeVersion": "containerd://2.2.0",
+                    "kernelVersion": "6.12.54-linuxkit",
+                    "kubeletVersion": "v1.35.0",
+                    "osImage": "Debian GNU/Linux 12 (bookworm)"
+                }
+            }
+        });
+        let render = |name: &str| {
+            columns
+                .iter()
+                .find(|column| column.column.source.name == name)
+                .unwrap()
+                .render(&obj)
+        };
+
+        assert_eq!(Some(json!("NotReady,SchedulingDisabled")), render("Status"));
+        assert_eq!(Some(json!("control-plane,gpu,worker")), render("Roles"));
+        assert_eq!(Some(json!("10.0.0.1")), render("Internal-IP"));
+        assert_eq!(Some(json!("192.0.2.1")), render("External-IP"));
+        assert_eq!(
+            Some(json!("6.12.54-linuxkit (amd64)")),
+            render("Kernel-Version")
+        );
     }
 }

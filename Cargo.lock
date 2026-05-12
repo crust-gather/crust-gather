@@ -1093,6 +1093,7 @@ dependencies = [
  "pin-project",
  "regex",
  "rmcp",
+ "scopeguard",
  "serde",
  "serde-saphyr",
  "serde_json",

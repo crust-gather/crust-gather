@@ -10,7 +10,7 @@ use kube::{
 };
 use serde::Deserialize;
 
-use crate::{gather::log::UserLog, scanners::interface::ResourceThreadSafe};
+use crate::{gather::log::HostLog, scanners::interface::ResourceThreadSafe};
 
 pub trait NamespacedName {
     fn name(&self) -> Option<String>;
@@ -94,8 +94,8 @@ pub struct CustomLog {
     pub command: String,
 }
 
-impl From<UserLog> for CustomLog {
-    fn from(value: UserLog) -> Self {
+impl From<HostLog> for CustomLog {
+    fn from(value: HostLog) -> Self {
         Self {
             path: value.name,
             command: value.command,
@@ -107,9 +107,6 @@ impl From<UserLog> for CustomLog {
 pub enum LogGroup {
     Current(Container),
     Previous(Container),
-    Kubelet(String),
-    KubeletLegacy,
-    Custom(CustomLog),
 }
 
 impl fmt::Display for LogGroup {
@@ -117,9 +114,6 @@ impl fmt::Display for LogGroup {
         match self {
             Self::Current(container) => write!(formatter, "{container:?}/current.log"),
             Self::Previous(container) => write!(formatter, "{container:?}/previous.log"),
-            Self::Kubelet(systemd_unit) => write!(formatter, "{systemd_unit}.log"),
-            Self::KubeletLegacy => write!(formatter, "kubelet-log-path.log"),
-            Self::Custom(CustomLog { path, .. }) => write!(formatter, "{path}"),
         }
     }
 }
@@ -182,15 +176,6 @@ impl ArchivePath {
                 }
                 LogGroup::Previous(Container(container)) => {
                     ArchivePath::Logs(path.with_extension("").join(container).join("previous.log"))
-                }
-                LogGroup::Kubelet(systemd_unit) => {
-                    ArchivePath::Logs(path.with_extension("").join(format!("{systemd_unit}.log")))
-                }
-                LogGroup::KubeletLegacy => {
-                    ArchivePath::Logs(path.with_extension("").join("kubelet-log-path.log"))
-                }
-                LogGroup::Custom(CustomLog { path: log_file, .. }) => {
-                    ArchivePath::Logs(path.with_extension("").join(log_file))
                 }
             },
             other => other,
@@ -304,7 +289,7 @@ impl Representation {
 #[cfg(test)]
 mod tests {
 
-    use k8s_openapi::api::core::v1::{Node, Pod};
+    use k8s_openapi::api::core::v1::Pod;
     use kube::core::{ObjectMeta, Resource};
 
     use super::*;
@@ -351,48 +336,50 @@ mod tests {
 
     #[test]
     fn test_node_logs() {
-        let resource = Node {
+        let resource = Pod {
             metadata: ObjectMeta {
                 name: Some("name".into()),
+                namespace: Some("default".into()),
                 ..Default::default()
             },
             ..Default::default()
         };
-        let log_group = LogGroup::Kubelet(String::from("kubelet"));
+        let log_group = LogGroup::Current(Container("kubelet".into()));
 
-        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Pod>(), log_group);
 
         assert_eq!(
             result,
-            ArchivePath::Logs("cluster/v1/node/name/kubelet.log".into())
+            ArchivePath::Logs("namespaces/default/v1/pod/name/kubelet/current.log".into())
         );
     }
 
     #[test]
     fn test_node_path_logs() {
-        let resource = Node {
+        let resource = Pod {
             metadata: ObjectMeta {
                 name: Some("name".into()),
+                namespace: Some("default".into()),
                 ..Default::default()
             },
             ..Default::default()
         };
-        let log_group = LogGroup::KubeletLegacy;
+        let log_group = LogGroup::Current(Container("kubelet-log-path".into()));
 
-        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Node>(), log_group);
+        let result = ArchivePath::logs_path(&resource, TypeMeta::resource::<Pod>(), log_group);
 
         assert_eq!(
             result,
-            ArchivePath::Logs("cluster/v1/node/name/kubelet-log-path.log".into())
+            ArchivePath::Logs("namespaces/default/v1/pod/name/kubelet-log-path/current.log".into())
         );
     }
 
     #[test]
     fn test_cluster_list_path() {
-        let resource = Node::default();
-        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Node>());
+        let resource = Pod::default();
+        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>());
 
-        assert_eq!(result, ArchivePath::ClusterList("**/v1/node/*.yaml".into()));
+        assert_eq!(result, ArchivePath::ClusterList("**/v1/pod/*.yaml".into()));
     }
 
     #[test]

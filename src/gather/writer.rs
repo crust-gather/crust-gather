@@ -15,7 +15,9 @@ use oci_client::{
     Client, Reference,
     client::{ClientConfig, Config},
     errors::OciDistributionError,
-    manifest::{IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest},
+    manifest::{
+        IMAGE_LAYER_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE, OciDescriptor, OciImageManifest, OciManifest,
+    },
     secrets::RegistryAuth,
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,7 @@ use std::{
 };
 use tar::{Builder, Header};
 use tokio::sync::Mutex;
+use tokio_util::bytes;
 use tracing::{debug, info, instrument};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
@@ -200,6 +203,7 @@ pub enum Writer {
 pub struct OCIState {
     archive: Archive,
     client: Client,
+    config: ManifestConfig,
     image_ref: Box<Reference>,
     auth: RegistryAuth,
     buffer_size: usize,
@@ -212,6 +216,12 @@ pub struct YamlPath {
     pub path: PathBuf,
     pub from: usize,
     pub to: usize,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct ManifestConfig {
+    #[serde(default)]
+    pub compressed: bool,
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -386,6 +396,7 @@ impl Writer {
             ),
             Encoding::Oci(image_ref) => Self::Oci(OCIState {
                 archive: archive.clone(),
+                config: ManifestConfig { compressed: true },
                 client: Client::new(client_config.unwrap_or_default()),
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),
@@ -403,7 +414,11 @@ impl OCIState {
             .store_auth_if_needed(self.image_ref.resolve_registry(), &self.auth)
             .await;
 
-        let config = Config::new(b"{}".to_vec(), OCI_IMAGE_MEDIA_TYPE.to_string(), None);
+        let config = Config::new(
+            serde_json::to_vec(&self.config)?,
+            OCI_IMAGE_MEDIA_TYPE.to_string(),
+            None,
+        );
         let paths = glob::glob(&format!(
             "{}/**/*",
             self.archive
@@ -446,33 +461,22 @@ impl OCIState {
 
         try_join!(resources, raw_layers, index_layer).context("failed to upload OCI layers")?;
 
+        info!("Pushing config: {}", self.image_ref);
+        let (digest, size) = self.push_blob(config.data).await?;
+
         let mut manifest = OciImageManifest::default();
         manifest.config.media_type = config.media_type.to_string();
-        manifest.config.size = config.data.len() as i64;
-        manifest.config.digest =
-            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&config.data)));
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
-
-        info!("Pushing config: {}", self.image_ref);
-        let push = || {
-            self.client.push_blob(
-                &self.image_ref,
-                config.data.clone(),
-                &manifest.config.digest,
-            )
-        };
-        push.retry(
-            ExponentialBuilder::default()
-                .with_max_times(20)
-                .with_max_delay(Duration::from_secs(10))
-                .with_jitter(),
-        )
-        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .await?;
+        manifest.config.digest = digest;
+        manifest.config.size = size as i64;
 
         info!("Pushing manifest: {}", self.image_ref);
-        let manifest = &manifest.into();
+        let manifest = manifest.into();
+        self.push_manifest(&manifest).await
+    }
+
+    async fn push_manifest(&self, manifest: &OciManifest) -> anyhow::Result<()> {
         let push = || self.client.push_manifest(&self.image_ref, manifest);
         push.retry(
             ExponentialBuilder::default()
@@ -486,22 +490,44 @@ impl OCIState {
         Ok(())
     }
 
+    async fn push_blob(
+        &self,
+        data: impl Into<bytes::Bytes> + Clone,
+    ) -> anyhow::Result<(String, usize)> {
+        let mut enc = GzEncoder::new(vec![], Compression::best());
+        enc.write_all(&data.into())?;
+        let data = BASE64_STANDARD.encode(enc.finish()?);
+
+        let digest = format!("sha256:{}", hex::encode(sha2::Sha256::digest(&data)));
+        let push = || {
+            let data = data.clone();
+            self.client.push_blob(&self.image_ref, data, &digest)
+        };
+        push.retry(
+            ExponentialBuilder::default()
+                .with_max_times(20)
+                .with_max_delay(Duration::from_secs(10))
+                .with_jitter(),
+        )
+        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
+        .await?;
+
+        Ok((digest, data.len()))
+    }
+
     fn prepare_index(yamls: Vec<Vec<PathBuf>>) -> anyhow::Result<Vec<YamlPath>> {
         let mut list = vec![];
         for yaml_list in yamls {
             let mut index = 0;
             for yaml in yaml_list {
                 let path = yaml.to_string_lossy();
-                let file = File::open(&yaml).context(format!("failed to open file {path}"))?;
-                let value: serde_json::Value = serde_saphyr::from_reader(file)
-                    .context(format!("failed to read file {path}"))?;
-                let data = serde_saphyr::to_string(&value)
-                    .context(format!("failed to serialize file {path}"))?;
-
+                let mut file = File::open(&yaml).context(format!("failed to open file {path}"))?;
                 list.push(YamlPath {
                     path: yaml,
                     from: index,
                     to: {
+                        let mut data = vec![];
+                        file.read_to_end(&mut data)?;
                         index += data.len();
                         index
                     },
@@ -559,17 +585,15 @@ impl OCIState {
             // as ghcr doesn't allow empty layers
             data = "{}".to_string();
         };
-        let size = data.len() as i64;
-        let digest = format!(
-            "sha256:{}",
-            hex::encode(sha2::Sha256::digest(data.as_bytes()))
-        );
+
+        info!("Pushing layer: {:?}", archive_path);
+        let (digest, size) = self.push_blob(data).await?;
         {
             layers.lock().await.push(OciDescriptor {
                 urls: None,
                 media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
-                digest: digest.clone(),
-                size,
+                digest,
+                size: size as i64,
                 annotations: Some(
                     [(
                         "org.opencontainers.image.title".to_string(),
@@ -580,25 +604,7 @@ impl OCIState {
             });
         }
 
-        info!("Pushing layer: {:?}", archive_path);
-        let push = || {
-            self.client
-                .push_blob(&self.image_ref, data.clone(), &digest)
-        };
-        push.retry(
-            ExponentialBuilder::default()
-                .with_max_times(20)
-                .with_max_delay(Duration::from_secs(10))
-                .with_jitter(),
-        )
-        .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .notify(|e, dur| {
-            debug!("Pushing layer: {archive_path:?} - retry after {dur:?} due to {e:?}")
-        })
-        .await
-        .context(format!("failed to push layer for file {archive_path}"))?;
-
-        anyhow::Result::Ok(())
+        Ok(())
     }
 
     #[instrument(skip_all, err)]
@@ -612,12 +618,9 @@ impl OCIState {
             );
         }
 
-        let mut enc = GzEncoder::new(vec![], Compression::best());
         let data = serde_saphyr::to_string_multiple(&files)
             .context("failed to serialize a list of yamls")?;
-        enc.write_all(data.as_bytes())?;
-
-        Ok(BASE64_STANDARD.encode(enc.finish()?))
+        Ok(data)
     }
 
     async fn push_oci_archive_layer(
