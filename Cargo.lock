@@ -2353,9 +2353,9 @@ dependencies = [
 
 [[package]]
 name = "kube-cel"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ac02b78d78e251630ddd6136a0c9fa190239a01b76f8944d5bf6b3ce35128a"
+checksum = "5f5d296a21aa8df01a350e0d4b3d33bda0507cd1e28b9017fcd427caf97b0849"
 dependencies = [
  "base64",
  "cel",
