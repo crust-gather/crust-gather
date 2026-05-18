@@ -1,19 +1,20 @@
 use std::{
-    collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
-    str::FromStr, sync::Arc, time::Duration,
+    collections::HashMap, fmt::Display, fs::File, future::pending, net::SocketAddr, ops::Deref,
+    path::PathBuf, str::FromStr, sync::Arc, time::Duration,
 };
 
 use actix_web::{
-    App, HttpResponse, HttpServer, Responder, error, get,
+    App, HttpRequest, HttpResponse, HttpServer, Responder, error, get,
     http::{
         KeepAlive,
-        header::{Accept, CONTENT_TYPE, QualityItem, VARY},
+        header::{Accept, CONTENT_TYPE, HeaderValue, QualityItem, SEC_WEBSOCKET_PROTOCOL, VARY},
     },
     post,
-    web::{self, Bytes, Header, Path, Query},
+    web::{self, Bytes, Header, Path, Payload, Query},
 };
 use anyhow::Context as _;
 use async_stream::stream;
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use k8s_openapi::serde_json::{self, json};
@@ -371,7 +372,9 @@ impl Api {
             App::new()
                 .app_data(web::Data::new(self.state.clone()))
                 .service(version)
-                .service(ssr_stub)
+                .service(healthz)
+                .service(ssar_stub)
+                .service(ssrr_stub)
                 .service(api)
                 .service(apis)
                 .service(api_list)
@@ -404,6 +407,11 @@ impl Api {
     }
 }
 
+#[get("{server}/healthz")]
+async fn healthz(_: Path<Destination>) -> actix_web::Result<HttpResponse> {
+    Ok(HttpResponse::Ok().content_type("text/plain").body("ok"))
+}
+
 #[get("{server}/version")]
 async fn version(
     server: Path<Destination>,
@@ -428,7 +436,7 @@ async fn version(
 }
 
 #[post("{server}/apis/authorization.k8s.io/v1/selfsubjectaccessreviews")]
-async fn ssr_stub() -> impl Responder {
+async fn ssar_stub() -> impl Responder {
     web::Json(json!({
         "kind": "SelfSubjectAccessReview",
         "apiVersion": "authorization.k8s.io/v1",
@@ -441,6 +449,37 @@ async fn ssr_stub() -> impl Responder {
         "status": {
             "allowed": true
         }
+    }))
+}
+
+#[post("{server}/apis/authorization.k8s.io/v1/selfsubjectrulesreviews")]
+async fn ssrr_stub() -> impl Responder {
+    web::Json(json!({
+      "kind": "SelfSubjectRulesReview",
+      "apiVersion": "authorization.k8s.io/v1",
+      "metadata": {
+        "creationTimestamp": null
+      },
+      "spec": {
+        "namespace": "default"
+      },
+      "status": {
+        "resourceRules": [
+          {
+            "verbs": ["*"],
+            "apiGroups": ["*"],
+            "resources": ["*"],
+            "resourceNames": []
+          }
+        ],
+        "nonResourceRules": [
+          {
+            "verbs": ["*"],
+            "nonResourceURLs": ["*"]
+          }
+        ],
+        "incomplete": false
+      }
     }))
 }
 
@@ -717,10 +756,12 @@ async fn namespaced_apis_get(
 
 #[get("{server}/api/{version}/namespaces/{namespace}/{kind}/{name}/log")]
 async fn logs_get(
+    req: HttpRequest,
     get: Path<Get>,
     query: Query<Log>,
     state: web::Data<ApiState>,
-) -> actix_web::Result<impl Responder> {
+    payload: Payload,
+) -> actix_web::Result<HttpResponse> {
     let archive = state
         .archives
         .get(get.get_server())
@@ -742,7 +783,45 @@ async fn logs_get(
         matches!(query.deref().timestamps, Some(true)),
     );
 
-    Ok(HttpResponse::Ok().content_type("text/plain").body(body))
+    if !req.head().upgrade() {
+        return Ok(HttpResponse::Ok().content_type("text/plain").body(body));
+    }
+
+    let (mut response, mut session, _) = actix_ws::handle(&req, payload)?;
+    if requested_websocket_protocol(&req, "base64.binary.k8s.io") {
+        response.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("base64.binary.k8s.io"),
+        );
+    }
+
+    actix_web::rt::spawn(async move {
+        if session
+            .text(BASE64_STANDARD.encode(body.as_bytes()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        pending::<()>().await;
+    });
+
+    Ok(response)
+}
+
+fn requested_websocket_protocol(req: &HttpRequest, protocol: &str) -> bool {
+    let Some(protocols) = req.headers().get(SEC_WEBSOCKET_PROTOCOL) else {
+        return false;
+    };
+
+    let Some(protocols) = protocols.to_str().ok() else {
+        return false;
+    };
+
+    protocols
+        .split(',')
+        .any(|requested| requested.trim() == protocol)
 }
 
 fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: bool) -> String {

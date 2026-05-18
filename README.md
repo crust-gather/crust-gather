@@ -21,6 +21,10 @@
 - Serve OCI snapshot directly as kubernetes-like API server, without downloading the archive locally.
 - Collect cluster snapshot or multiple cluster snapshots in github actions workflow artifact and serve it via `crust-gather serve` ([Demo](#demo-artifact-serving)).
 
+## Headlamp demo
+
+![Headlamp demo](./demos/headlamp-small.gif)
+
 ## MCP Demo
 
 [![asciicast](https://asciinema.org/a/857581.svg)](https://asciinema.org/a/857581)

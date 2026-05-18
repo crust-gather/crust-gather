@@ -22,7 +22,7 @@ use k8s_openapi::{
 };
 use kube::{
     ResourceExt,
-    api::{GroupVersionResource, PartialObjectMetaExt as _, WatchEvent},
+    api::{GroupVersionResource, ObjectMeta, PartialObjectMetaExt as _, WatchEvent},
     client::{APIGroupDiscovery, APIGroupDiscoveryList, APIResourceDiscovery, APIVersionDiscovery},
     core::{DynamicObject, Resource, TypeMeta},
 };
@@ -112,6 +112,7 @@ impl List {
 pub struct ObjectValueList {
     #[serde(flatten)]
     type_meta: TypeMeta,
+    metadata: ObjectMeta,
     items: Vec<DynamicObject>,
 }
 
@@ -122,6 +123,7 @@ impl ObjectValueList {
                 kind: list.named_resource.list_kind.clone(),
                 api_version: list.to_type_meta().api_version,
             },
+            metadata: Default::default(),
             items,
         }
     }
