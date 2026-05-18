@@ -197,6 +197,7 @@ impl HostLogs {
 
         if let Some(status) = archive_pod.status.as_mut() {
             status.phase = Some("Succeeded".to_string());
+            status.conditions = Some(vec![]);
             let mut container_statuses = vec![];
             for container in log_containers {
                 container_statuses.push(ContainerStatus {
