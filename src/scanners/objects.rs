@@ -192,6 +192,8 @@ mod test {
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
                 disable_additional_logs: false,
+                skip_logs_collection: false,
+                skip_events_collection: false,
             },
             ApiResource::erase::<Pod>(&()),
         )
@@ -236,6 +238,8 @@ mod test {
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
                 disable_additional_logs: false,
+                skip_logs_collection: false,
+                skip_events_collection: false,
             },
             ApiResource::erase::<v1::Namespace>(&()),
         );
@@ -277,6 +281,8 @@ mod test {
                 systemd_units: Default::default(),
                 debug_pod: Default::default(),
                 disable_additional_logs: false,
+                skip_logs_collection: false,
+                skip_events_collection: false,
             },
             ApiResource::erase::<Pod>(&()),
         );

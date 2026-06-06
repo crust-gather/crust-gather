@@ -369,6 +369,8 @@ pub struct Config {
     pub debug_pod: DebugPod,
 
     pub disable_additional_logs: bool,
+    pub skip_logs_collection: bool,
+    pub skip_events_collection: bool,
 }
 
 impl Config {
@@ -618,6 +620,8 @@ mod tests {
             systemd_units: Default::default(),
             debug_pod: Default::default(),
             disable_additional_logs: false,
+            skip_logs_collection: false,
+            skip_events_collection: false,
         };
 
         // Gzip archive is failing due to timeout.
@@ -656,6 +660,8 @@ mod tests {
             systemd_units: Default::default(),
             debug_pod: Default::default(),
             disable_additional_logs: false,
+            skip_logs_collection: false,
+            skip_events_collection: false,
         };
 
         let result = config.collect().await;
@@ -692,6 +698,8 @@ mod tests {
             systemd_units: Default::default(),
             debug_pod: Default::default(),
             disable_additional_logs: false,
+            skip_logs_collection: false,
+            skip_events_collection: false,
         };
 
         let result = config.collect().await;

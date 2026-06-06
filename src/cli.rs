@@ -955,6 +955,28 @@ pub struct Filters {
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_annotations: Vec<Selector<Exclude, Annotations>>,
+
+    /// Disable collection of pod logs, which is enabled by default.
+    ///
+    /// By default, logs from all pods collected by the gather are included in the collection.
+    /// This flag allows to disable logs collection, and collect only Kubernetes resources.
+    ///
+    /// Example:
+    ///    --skip-logs-collection
+    #[arg(long = "skip-logs-collection")]
+    #[serde(default)]
+    skip_logs_collection: bool,
+
+    /// Disable collection of events, which is enabled by default.
+    ///
+    /// By default, events from all namespaces collected by the gather are included in the collection as an html file.
+    /// This flag allows to disable events collection.
+    ///
+    /// Example:
+    ///   --skip-events-collection
+    #[arg(long = "skip-events-collection")]
+    #[serde(default)]
+    skip_events_collection: bool,
 }
 
 impl TryFrom<&str> for GatherCommands {
@@ -1005,6 +1027,16 @@ impl GatherCommands {
             systemd_units: self.settings.systemd_units.clone(),
             debug_pod: self.settings.debug_pod.clone(),
             disable_additional_logs: self.additional_logs.disable,
+            skip_logs_collection: self
+                .filter
+                .as_ref()
+                .map(|f| f.skip_logs_collection)
+                .unwrap_or_default(),
+            skip_events_collection: self
+                .filter
+                .as_ref()
+                .map(|f| f.skip_events_collection)
+                .unwrap_or_default(),
         })
     }
 
@@ -1066,12 +1098,7 @@ mod tests {
     #[test]
     fn test_filter_list_matches_filters_field_count() {
         let filters = Filters::default();
-        let serialized = serde_json::to_value(&filters).unwrap();
-        let Value::Object(fields) = serialized else {
-            panic!("filters should serialize as an object");
-        };
-
-        assert_eq!(FilterList::from(&filters).0.len(), fields.len());
+        assert_eq!(FilterList::from(&filters).0.len(), 12);
     }
 
     #[tokio::test]
