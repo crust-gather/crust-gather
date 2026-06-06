@@ -590,6 +590,7 @@ impl OCIState {
         let (digest, size) = self.push_blob(data).await?;
         {
             layers.lock().await.push(OciDescriptor {
+                artifact_type: None,
                 urls: None,
                 media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
                 digest,
