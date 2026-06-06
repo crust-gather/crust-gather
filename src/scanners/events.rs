@@ -25,6 +25,7 @@ use super::{
 #[derive(Clone)]
 pub struct Events {
     pub collectable: Objects<Event>,
+    pub skip_events_collection: bool,
 }
 
 impl Debug for Events {
@@ -36,6 +37,7 @@ impl Debug for Events {
 impl From<Config> for Events {
     fn from(value: Config) -> Self {
         Self {
+            skip_events_collection: value.skip_events_collection,
             collectable: Objects::new_typed(value),
         }
     }
@@ -56,6 +58,9 @@ impl Collect<Event> for Events {
     }
 
     fn filter(&self, obj: &Event) -> Result<bool, CollectError> {
+        if self.skip_events_collection {
+            return Ok(false);
+        }
         self.collectable.filter(obj)
     }
 

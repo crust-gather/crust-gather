@@ -61,6 +61,7 @@ impl From<LogSelection> for LogParams {
 pub struct Logs {
     pub collectable: Objects<Pod>,
     pub group: LogSelection,
+    pub skip_logs_collection: bool,
 }
 
 impl Debug for Logs {
@@ -72,6 +73,7 @@ impl Debug for Logs {
 impl Logs {
     pub fn new(config: Config, group: LogSelection) -> Self {
         Self {
+            skip_logs_collection: config.skip_logs_collection,
             collectable: Objects::new_typed(config),
             group,
         }
@@ -89,6 +91,9 @@ impl Collect<Pod> for Logs {
     }
 
     fn filter(&self, obj: &Pod) -> Result<bool, CollectError> {
+        if self.skip_logs_collection {
+            return Ok(false);
+        }
         self.collectable.filter(obj)
     }
 
@@ -223,7 +228,10 @@ mod test {
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let file_path = tmp_dir.path().join("crust-gather-test");
         let repr = Logs {
+            skip_logs_collection: false,
             collectable: Objects::new_typed(Config {
+                skip_logs_collection: false,
+                skip_events_collection: false,
                 client: test_env.client().expect("client"),
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
                 writer: Writer::new(
