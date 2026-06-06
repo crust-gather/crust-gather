@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::bail;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
-use cached::proc_macro::cached;
+use cached::cached;
 use derive_more::Deref;
 use flate2::read::GzDecoder;
 use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
