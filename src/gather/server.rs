@@ -326,6 +326,7 @@ impl Api {
                     user: name.clone().into(),
                     ..Default::default()
                 }),
+                ..Default::default()
             }],
             clusters: vec![NamedCluster {
                 name: name.clone(),
@@ -333,6 +334,7 @@ impl Api {
                     server: Some(format!("http://{socket}/{name}")),
                     ..Default::default()
                 }),
+                ..Default::default()
             }],
             ..Default::default()
         }

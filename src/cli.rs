@@ -1083,7 +1083,7 @@ mod tests {
     use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret};
     use kube::core::{ObjectMeta, params::ListParams};
     use kube::{Api, api::PostParams};
-    use serde_json::Value;
+
     use tempfile::TempDir;
     use tokio::fs;
 

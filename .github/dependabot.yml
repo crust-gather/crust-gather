@@ -24,6 +24,8 @@ updates:
           - "kube*"
           - "http*"
           - "k8s-openapi"
+          - "envtest"
+          - "cel"
       zip:
         patterns:
           - "flate2"
