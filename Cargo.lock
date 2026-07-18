@@ -803,6 +803,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cel"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ed39583e427bf41d93c28c7f27c943a93bcb8697220ff3575fd53a9e13f3814"
+dependencies = [
+ "antlr4rust",
+ "chrono",
+ "lazy_static",
+ "nom",
+ "pastey",
+ "regex",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1082,7 +1098,7 @@ dependencies = [
  "base64",
  "build_html",
  "cached",
- "cel",
+ "cel 0.14.0",
  "chrono",
  "clap",
  "derive_more",
@@ -2419,7 +2435,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c45323142a22d96c26cc345e646f8313b443171f76550b0d825f84316863fc20"
 dependencies = [
  "base64",
- "cel",
+ "cel 0.13.0",
  "ipnet",
  "regex",
  "semver",
