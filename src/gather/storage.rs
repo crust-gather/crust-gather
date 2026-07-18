@@ -16,7 +16,7 @@ use crate::gather::writer::ManifestConfig;
 #[derive(Clone)]
 pub enum Storage {
     FS,
-    OCI(OCIState),
+    OCI(Box<OCIState>),
 }
 
 #[derive(Clone)]
@@ -37,7 +37,7 @@ pub enum Descriptor {
 impl Storage {
     pub fn new(oci: Option<OCIState>) -> Self {
         match oci {
-            Some(oci) => Storage::OCI(oci),
+            Some(oci) => Storage::OCI(Box::new(oci)),
             None => Storage::FS,
         }
     }

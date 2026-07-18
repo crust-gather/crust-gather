@@ -15,7 +15,7 @@ use k8s_openapi::{
     serde_json::{self, json},
 };
 use kube::core::Selector;
-use kube_cel::register_all;
+use kube_cel::KubeCelExt as _;
 use serde_json_path::JsonPath;
 
 static PREDEFINED_TABLES: OnceLock<BTreeMap<String, Vec<ColumnDefinition>>> = OnceLock::new();
@@ -544,7 +544,7 @@ impl TablePath {
             .ok()?;
         let mut context = Context::default();
 
-        register_all(&mut context);
+        context.register_all();
 
         context.add_function("selector", Self::cel_selector_string);
         context.add_function("labelSelector", Self::cel_label_selector_string);
