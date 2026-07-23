@@ -809,6 +809,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cel"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ed39583e427bf41d93c28c7f27c943a93bcb8697220ff3575fd53a9e13f3814"
+dependencies = [
+ "antlr4rust",
+ "chrono",
+ "lazy_static",
+ "nom",
+ "pastey",
+ "regex",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1088,7 +1104,7 @@ dependencies = [
  "base64 0.23.0",
  "build_html",
  "cached",
- "cel",
+ "cel 0.14.0",
  "chrono",
  "clap",
  "derive_more",
@@ -1103,7 +1119,7 @@ dependencies = [
  "json-patch",
  "jsonptr",
  "k8s-openapi 0.28.0",
- "kube 4.0.0",
+ "kube 4.2.0",
  "kube-cel",
  "logos",
  "oci-client",
@@ -1112,7 +1128,7 @@ dependencies = [
  "rmcp",
  "scopeguard",
  "serde",
- "serde-saphyr 0.0.29",
+ "serde-saphyr",
  "serde_json",
  "serde_json_path",
  "serde_with",
@@ -1426,7 +1442,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6eff8c42cf1d19b115c8856389cc2faba7e8f019b2251e08b4a6a1c0b8ef9a3"
 dependencies = [
  "k8s-openapi 0.28.0",
- "kube 4.0.0",
+ "kube 4.2.0",
  "rust2go",
  "serde",
  "serde_json",
@@ -1721,16 +1737,6 @@ dependencies = [
  "futures-core",
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "granit-parser"
-version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f50ba32164f9e098d5da618776a32afbb32270adcbe3d3d006107dae11e37c91"
-dependencies = [
- "arraydeque",
- "smallvec",
 ]
 
 [[package]]
@@ -2409,13 +2415,13 @@ dependencies = [
 
 [[package]]
 name = "kube"
-version = "4.0.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb9108095346a7096d11feeaff419c75dddcac1b2f59acb38d7bf3d13c3e146"
+checksum = "208d7fe1380066abb194812a8a8e303cb896a33bb3d7b3177b71bd03ff39bf18"
 dependencies = [
  "k8s-openapi 0.28.0",
- "kube-client 4.0.0",
- "kube-core 4.0.0",
+ "kube-client 4.2.0",
+ "kube-core 4.2.0",
 ]
 
 [[package]]
@@ -2425,7 +2431,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c45323142a22d96c26cc345e646f8313b443171f76550b0d825f84316863fc20"
 dependencies = [
  "base64 0.22.1",
- "cel",
+ "cel 0.13.0",
  "ipnet",
  "regex",
  "semver",
@@ -2469,9 +2475,9 @@ dependencies = [
 
 [[package]]
 name = "kube-client"
-version = "4.0.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0f628e05bc2264c21fe10d3d675117dc9b43ea3bf4fb07262a222679757537b"
+checksum = "31e940a73033a7c5c7918b5ece7851d84571b58be25e937198da37fa13f116d3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2487,12 +2493,13 @@ dependencies = [
  "jiff",
  "jsonpath-rust",
  "k8s-openapi 0.28.0",
- "kube-core 4.0.0",
+ "kube-core 4.2.0",
  "pem",
  "rustls",
+ "rustls-platform-verifier",
  "secrecy",
  "serde",
- "serde-saphyr 0.0.27",
+ "serde-saphyr",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -2522,9 +2529,9 @@ dependencies = [
 
 [[package]]
 name = "kube-core"
-version = "4.0.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1b02f5933ba06140d58c7d6727f6c319f0962ec6a344aa5e21e475e891deaa8"
+checksum = "a9d2353c118cf3462c352ee0b5bd5b0cf17990af456dfd8662d136ff9812eeb4"
 dependencies = [
  "derive_more",
  "form_urlencoded",
@@ -3680,25 +3687,6 @@ dependencies = [
 
 [[package]]
 name = "serde-saphyr"
-version = "0.0.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5897b4c3faadadd35fdb6689f015641f3bc481d5adaaac56231ea15aeb243db3"
-dependencies = [
- "ahash",
- "annotate-snippets",
- "base64 0.22.1",
- "encoding_rs_io",
- "getrandom 0.3.4",
- "granit-parser 0.0.3",
- "nohash-hasher",
- "num-traits",
- "serde",
- "smallvec",
- "zmij",
-]
-
-[[package]]
-name = "serde-saphyr"
 version = "0.0.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bd22781911de0ca6debda95f073c8f18bec65d1a94f1fa9573f3102e514cea4"
@@ -3708,7 +3696,7 @@ dependencies = [
  "base64 0.22.1",
  "encoding_rs_io",
  "getrandom 0.3.4",
- "granit-parser 0.0.7",
+ "granit-parser",
  "nohash-hasher",
  "num-traits",
  "serde_core",
