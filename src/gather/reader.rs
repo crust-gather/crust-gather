@@ -405,7 +405,10 @@ impl NamedResources {
     }
 
     fn insert_group(&mut self, api_group: APIGroupDiscovery) -> Option<()> {
-        self.insert_discovery_versions(&api_group.metadata?.name?, api_group.versions);
+        self.insert_discovery_versions(
+            &api_group.metadata?.name.unwrap_or_default(),
+            api_group.versions,
+        );
         Some(())
     }
 
@@ -440,11 +443,21 @@ impl NamedResources {
         let kind = gvk.kind?;
 
         Some(NamedResource {
-            group: Some(gvk.group.unwrap_or_else(|| group.to_string())),
-            version: gvk.version.unwrap_or_else(|| version.to_string()),
+            group: gvk
+                .group
+                .filter(|g| !g.is_empty())
+                .or_else(|| Some(group.to_string()))
+                .filter(|g| !g.is_empty()),
+            version: gvk
+                .version
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| version.to_string()),
             list_kind: format!("{kind}List"),
             resource: resource.resource?,
-            singular: resource.singular_resource.unwrap_or_default(),
+            singular: resource
+                .singular_resource
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| kind.to_string().to_lowercase()),
         })
     }
 
