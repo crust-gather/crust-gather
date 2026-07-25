@@ -26,6 +26,12 @@ updates:
           - "k8s-openapi"
           - "envtest"
           - "cel"
+      dependencies-no-cel:
+        patterns:
+          - "kube*"
+          - "http*"
+          - "k8s-openapi"
+          - "envtest"
       zip:
         patterns:
           - "flate2"
