@@ -617,7 +617,7 @@ async fn list_items(
         .get(list.get_server())
         .ok_or(anyhow::anyhow!("Server not found"))?;
     let reader = state.to_reader(archive.clone()).await?;
-    let list = archive.named_object_from_list(list.clone());
+    let list = archive.named_object_from_list(list.clone())?;
     let selector = query.0;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
@@ -685,7 +685,9 @@ async fn watch_response(
         .to_reader(archive.clone())
         .await
         .map_err(error::ErrorServiceUnavailable)?;
-    let list = archive.named_object_from_list(list.clone());
+    let list = archive
+        .named_object_from_list(list.clone())
+        .map_err(error::ErrorNotFound)?;
     let mut refresh = Instant::now();
     let mut bookmark_published = false;
     let s = stream! {
@@ -773,7 +775,9 @@ async fn logs_get(
         .to_reader(archive.clone())
         .await
         .map_err(error::ErrorServiceUnavailable)?;
-    let get = archive.named_object_from_get(get.clone());
+    let get = archive
+        .named_object_from_get(get.clone())
+        .map_err(error::ErrorNotFound)?;
     let mut body = reader
         .load_raw(get.get_logs_path(query.deref()))
         .await
@@ -859,6 +863,6 @@ async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<
         .get(get.get_server())
         .ok_or(anyhow::anyhow!("Server not found"))?;
     let reader = state.to_reader(archive.clone()).await?;
-    let get = archive.named_object_from_get(get.clone());
+    let get = archive.named_object_from_get(get.clone())?;
     reader.load(get).await
 }

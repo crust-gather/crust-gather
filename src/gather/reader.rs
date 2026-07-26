@@ -123,7 +123,10 @@ impl ObjectValueList {
                 kind: list.named_resource.list_kind.clone(),
                 api_version: list.to_type_meta().api_version,
             },
-            metadata: Default::default(),
+            metadata: ObjectMeta {
+                resource_version: Some("1".into()),
+                ..Default::default()
+            },
             items,
         }
     }
@@ -160,7 +163,7 @@ impl Table {
         crd_path: PathBuf,
         list: NamedObject,
     ) -> anyhow::Result<Vec<TablePath>> {
-        let crd: CustomResourceDefinition = match crd_path.is_file() {
+        let crd: CustomResourceDefinition = match storage.exist(&crd_path) {
             true => {
                 let mut file = vec![];
                 storage.read(crd_path, &mut file).await?;
@@ -244,7 +247,10 @@ impl Table {
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
         let Table { data: rows, .. } = self;
         let obj = serde_json::to_value(obj)?;
-        let cells: Vec<serde_json::Value> = rows.iter().filter_map(|r| r.render(&obj)).collect();
+        let cells: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| r.render(&obj).unwrap_or(serde_json::Value::Null))
+            .collect();
 
         Ok(json!({
             "cells": cells,
@@ -348,38 +354,6 @@ struct NamedResource {
     resource: String,
     singular: String,
     list_kind: String,
-}
-
-impl From<GroupVersionResource> for NamedResource {
-    fn from(val: GroupVersionResource) -> Self {
-        // Doing best effort to convert arbitrary object plural to singular.
-        let singular = if let Some(stripped) = val.resource.strip_suffix("uses") {
-            format!("{stripped}us")
-        } else if let Some(stripped) = val.resource.strip_suffix("sses") {
-            format!("{stripped}ss")
-        } else if let Some(stripped) = val.resource.strip_suffix("ies") {
-            format!("{stripped}y")
-        } else {
-            val.resource.trim_end_matches('s').to_string()
-        };
-
-        // Doing best effort to convert arbitrary object list to a typed list.
-        // Works best for core types, generating SecretList instead of just List.
-        let mut kind = singular.clone();
-        let list_kind = format!("{}{kind}List", kind.remove(0).to_uppercase(),);
-
-        NamedResource {
-            group: if val.group.is_empty() {
-                None
-            } else {
-                Some(val.group)
-            },
-            version: val.version,
-            resource: val.resource,
-            singular,
-            list_kind,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -600,42 +574,40 @@ impl ArchiveReader {
         self.archive.path()
     }
 
-    pub fn named_object_from_list(&self, list: List) -> NamedObject {
+    pub fn named_object_from_list(&self, list: List) -> anyhow::Result<NamedObject> {
         let gvr = GroupVersionResource::gvr(
             &list.group.clone().unwrap_or_default(),
             &list.version,
             &list.kind,
         );
-        let named_resource = self
-            .named_resources
-            .get(&gvr)
-            .cloned()
-            .unwrap_or(gvr.into());
 
-        NamedObject {
-            named_resource,
+        Ok(NamedObject {
+            named_resource: self
+                .named_resources
+                .get(&gvr)
+                .cloned()
+                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
             namespace: list.namespace,
             name: None,
-        }
+        })
     }
 
-    pub fn named_object_from_get(&self, get: Get) -> NamedObject {
+    pub fn named_object_from_get(&self, get: Get) -> anyhow::Result<NamedObject> {
         let gvr = GroupVersionResource::gvr(
             &get.group.clone().unwrap_or_default(),
             &get.version,
             &get.kind,
         );
-        let named_resource = self
-            .named_resources
-            .get(&gvr)
-            .cloned()
-            .unwrap_or(gvr.into());
 
-        NamedObject {
-            named_resource,
+        Ok(NamedObject {
+            named_resource: self
+                .named_resources
+                .get(&gvr)
+                .cloned()
+                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
             namespace: get.namespace,
             name: Some(get.name),
-        }
+        })
     }
 }
 
