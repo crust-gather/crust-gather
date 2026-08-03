@@ -1112,7 +1112,7 @@ dependencies = [
  "rmcp",
  "scopeguard",
  "serde",
- "serde-saphyr",
+ "serde-saphyr 1.0.0",
  "serde_json",
  "serde_json_path",
  "serde_with",
@@ -1728,6 +1728,16 @@ name = "granit-parser"
 version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d03f81ad4732830d85cfd417a9f62cde6dadda4354d37d078a6084a19560aa2d"
+dependencies = [
+ "arraydeque",
+ "smallvec",
+]
+
+[[package]]
+name = "granit-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c60388b03522b86e24b6b45952255279936b08a871775156fc89c94e792d21d8"
 dependencies = [
  "arraydeque",
  "smallvec",
@@ -2494,7 +2504,7 @@ dependencies = [
  "rustls-platform-verifier",
  "secrecy",
  "serde",
- "serde-saphyr",
+ "serde-saphyr 0.0.29",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -3692,7 +3702,24 @@ dependencies = [
  "base64 0.22.1",
  "encoding_rs_io",
  "getrandom 0.3.4",
- "granit-parser",
+ "granit-parser 0.0.7",
+ "nohash-hasher",
+ "num-traits",
+ "serde_core",
+ "smallvec",
+ "zmij",
+]
+
+[[package]]
+name = "serde-saphyr"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bb49c0aa8a5bb88c00b833c11bae50d1611fb89e01336f53b05f7c643b1c883"
+dependencies = [
+ "annotate-snippets",
+ "base64 0.23.0",
+ "encoding_rs_io",
+ "granit-parser 1.0.0",
  "nohash-hasher",
  "num-traits",
  "serde_core",
