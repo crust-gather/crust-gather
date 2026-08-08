@@ -20,6 +20,7 @@ pub struct GroupRegex {
 }
 
 impl GroupRegex {
+    #[must_use]
     pub fn matches(&self, gvk: &GroupVersionKind) -> bool {
         self.group.matches(&gvk.group) && self.kind.matches(&gvk.kind)
     }

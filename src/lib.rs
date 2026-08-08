@@ -10,7 +10,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     cli.init();
 
-    cli.command.run().await?;
+    Box::pin(cli.command.run()).await?;
 
     tracing::info!("Done");
     Ok(())

@@ -34,6 +34,7 @@ pub struct ColumnDefinition {
 }
 
 impl ColumnDefinition {
+    #[must_use]
     pub fn json(name: &str, json_path: &str) -> Self {
         Self {
             source: CustomResourceColumnDefinition {
@@ -67,6 +68,7 @@ pub fn predefined_table(resource: &str) -> Option<Vec<TablePath>> {
     Some(columns.iter().map(TablePath::new).collect())
 }
 
+#[must_use]
 pub fn has_predefined_table(resource: &str) -> bool {
     predefined_tables().contains_key(resource)
 }
@@ -241,7 +243,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
                 ),
                 ColumnDefinition::cel(
                     "Duration",
-                    r#"!has(self.status.startTime) ? '0s' : age((has(self.status.completionTime) ? timestamp(self.status.completionTime) : now) - timestamp(self.status.startTime))"#,
+                    "!has(self.status.startTime) ? '0s' : age((has(self.status.completionTime) ? timestamp(self.status.completionTime) : now) - timestamp(self.status.startTime))",
                 ),
                 ColumnDefinition::cel("Age", AGE_CEL),
             ],
@@ -261,7 +263,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
                 ColumnDefinition::cel("Active", r#"self.get("status").get("active").or([]).size()"#),
                 ColumnDefinition::cel(
                     "Last Schedule",
-                    r#"has(self.status.lastScheduleTime) ? age(now - timestamp(self.status.lastScheduleTime)) : '<none>'"#,
+                    "has(self.status.lastScheduleTime) ? age(now - timestamp(self.status.lastScheduleTime)) : '<none>'",
                 ),
                 ColumnDefinition::cel("Age", AGE_CEL),
             ],
@@ -287,7 +289,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
                 ),
                 ColumnDefinition::cel(
                     "PORT(S)",
-                        r#"has(self.spec.ports)
+                        "has(self.spec.ports)
                             ? self.spec.ports
                                 .map(
                                     port,
@@ -297,7 +299,7 @@ fn predefined_tables() -> &'static BTreeMap<String, Vec<ColumnDefinition>> {
                                     + (has(port.protocol) ? port.protocol : 'TCP')
                                 )
                                 .join(',')
-                            : ''"#
+                            : ''"
                 ),
                 ColumnDefinition::cel("AGE", AGE_CEL),
             ],
@@ -503,6 +505,7 @@ impl TablePath {
         }
     }
 
+    #[must_use]
     pub fn to_definition(&self) -> serde_json::Value {
         let mut definition = serde_json::Map::from_iter([
             ("name".into(), json!(self.column.source.name)),
@@ -539,7 +542,7 @@ impl TablePath {
                 tracing::error!(
                     "failed to parse CEL for column {}: {cel}: {e}",
                     self.column.source.name
-                )
+                );
             })
             .ok()?;
         let mut context = Context::default();

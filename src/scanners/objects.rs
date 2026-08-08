@@ -38,6 +38,7 @@ impl<R> Objects<R>
 where
     R: Resource<DynamicType = ApiResource> + ResourceReq,
 {
+    #[must_use]
     pub fn new(config: Config, resource: ApiResource) -> Self {
         Self {
             api: Api::all_with(config.client, &resource),
@@ -54,6 +55,7 @@ where
     R: ResourceThreadSafe,
     R::DynamicType: Default,
 {
+    #[must_use]
     pub fn new_typed(config: Config) -> Self {
         Self {
             api: Api::all(config.client),
@@ -112,13 +114,13 @@ mod test {
     use kube::core::{ApiResource, DynamicObject, params::PostParams};
 
     use crate::{
-        cli::DEFAULT_OCI_BUFFER_SIZE,
+        cli::{DEFAULT_OCI_BUFFER_SIZE, DebugPod},
         filters::{
             filter::{FilterGroup, FilterList, Include},
             namespace::Namespace,
         },
         gather::{
-            config::{Config, GatherMode},
+            config::{Config, GatherMode, Secrets},
             representation::ArchivePath,
             writer::{Archive, Encoding, Writer},
         },
@@ -185,12 +187,12 @@ mod test {
                 .await
                 .expect("failed to create builder")
                 .into(),
-                secrets: Default::default(),
+                secrets: Secrets::default(),
                 mode: GatherMode::Collect,
-                additional_logs: Default::default(),
+                additional_logs: Vec::default(),
                 duration: "1m".try_into().unwrap(),
-                systemd_units: Default::default(),
-                debug_pod: Default::default(),
+                systemd_units: Vec::default(),
+                debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
                 skip_events_collection: false,
@@ -231,12 +233,12 @@ mod test {
                 .await
                 .expect("failed to create builder")
                 .into(),
-                secrets: Default::default(),
+                secrets: Secrets::default(),
                 mode: GatherMode::Collect,
-                additional_logs: Default::default(),
+                additional_logs: Vec::default(),
                 duration: "1m".try_into().unwrap(),
-                systemd_units: Default::default(),
-                debug_pod: Default::default(),
+                systemd_units: Vec::default(),
+                debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
                 skip_events_collection: false,
@@ -274,12 +276,12 @@ mod test {
                 .await
                 .expect("failed to create builder")
                 .into(),
-                secrets: Default::default(),
+                secrets: Secrets::default(),
                 mode: GatherMode::Collect,
-                additional_logs: Default::default(),
+                additional_logs: Vec::default(),
                 duration: "1m".try_into().unwrap(),
-                systemd_units: Default::default(),
-                debug_pod: Default::default(),
+                systemd_units: Vec::default(),
+                debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
                 skip_events_collection: false,

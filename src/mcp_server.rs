@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use oci_client::{Reference, secrets::RegistryAuth};
 use rmcp::{
     ServerHandler, ServiceExt,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::*,
+    handler::server::wrapper::Parameters,
+    model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
@@ -165,7 +165,6 @@ struct ServeRuntime {
 }
 
 pub struct CrustGatherMcp {
-    tool_router: ToolRouter<CrustGatherMcp>,
     runtime: Arc<Mutex<ServeRuntime>>,
 }
 
@@ -240,7 +239,6 @@ impl CrustGatherMcp {
 impl Default for CrustGatherMcp {
     fn default() -> Self {
         Self {
-            tool_router: Self::tool_router(),
             runtime: Arc::new(Mutex::new(ServeRuntime::default())),
         }
     }
@@ -347,6 +345,7 @@ impl CrustGatherMcp {
             archives,
             Socket::try_from(socket.as_str())?,
             Some(temp_kubeconfig.path().to_path_buf()),
+            false,
         )
         .await?;
 
@@ -411,6 +410,7 @@ impl CrustGatherMcp {
             registry,
             Socket::try_from(socket.as_str())?,
             Some(temp_kubeconfig.path().to_path_buf()),
+            false,
         )
         .await?;
 
@@ -513,8 +513,7 @@ impl CrustGatherMcp {
             runtime
                 .current
                 .as_ref()
-                .map(|server| server.task.is_finished())
-                .unwrap_or(false)
+                .is_some_and(|server| server.task.is_finished())
         };
 
         if !finished {

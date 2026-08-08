@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap, fs::File, io::Read as _, ops::Deref as _, path::PathBuf, pin::pin,
-    sync::Arc,
-};
+use std::{collections::HashMap, fs::File, io::Read as _, path::PathBuf, pin::pin, sync::Arc};
 
 use anyhow::bail;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
@@ -35,42 +32,44 @@ pub enum Descriptor {
 }
 
 impl Storage {
+    #[must_use]
     pub fn new(oci: Option<OCIState>) -> Self {
         match oci {
-            Some(oci) => Storage::OCI(Box::new(oci)),
-            None => Storage::FS,
+            Some(oci) => Self::OCI(Box::new(oci)),
+            None => Self::FS,
         }
     }
 
     pub async fn read_raw(&self, path: PathBuf) -> anyhow::Result<String> {
         match self {
-            Storage::FS => {
+            Self::FS => {
                 let mut file = File::open(path)?;
                 let mut data = String::new();
                 File::read_to_string(&mut file, &mut data)?;
                 Ok(data)
             }
-            Storage::OCI(oci_state) => Ok(oci_state.read_raw(path).await?),
+            Self::OCI(oci_state) => Ok(oci_state.read_raw(path).await?),
         }
     }
 
     pub async fn read<W: AsyncWrite>(&self, path: PathBuf, out: W) -> anyhow::Result<usize> {
         match self {
-            Storage::FS => {
+            Self::FS => {
                 let mut file = File::open(path)?;
                 let mut data = String::new();
                 File::read_to_string(&mut file, &mut data)?;
                 let mut out = pin!(out);
                 Ok(out.write(data.as_bytes()).await?)
             }
-            Storage::OCI(oci_state) => Ok(oci_state.read(path, out).await?),
+            Self::OCI(oci_state) => Ok(oci_state.read(path, out).await?),
         }
     }
 
+    #[must_use]
     pub fn exist(&self, path: &PathBuf) -> bool {
         match self {
-            Storage::FS => path.exists(),
-            Storage::OCI(ocistate) => ocistate.index.contains_key(path),
+            Self::FS => path.exists(),
+            Self::OCI(ocistate) => ocistate.index.contains_key(path),
         }
     }
 
@@ -80,12 +79,12 @@ impl Storage {
             .to_str()
             .map_or_else(|| bail!("Unable to convert path to string: {path:?}"), Ok)?;
         match self {
-            Storage::FS => {
+            Self::FS => {
                 for path in glob::glob(path)? {
                     paths.push(path?);
                 }
             }
-            Storage::OCI(ocistate) => {
+            Self::OCI(ocistate) => {
                 let pattern = glob::Pattern::new(path)?;
                 for path in ocistate.index.keys() {
                     if pattern.matches(
@@ -98,7 +97,7 @@ impl Storage {
                     }
                 }
             }
-        };
+        }
         Ok(paths)
     }
 }
@@ -109,7 +108,7 @@ impl OCIState {
             .index
             .get(&path)
             .ok_or_else(|| anyhow::anyhow!("missing OCI layer entry for path: {path:?}"))?;
-        let mut data = Vec::with_capacity(layer.size as usize);
+        let mut data = Vec::with_capacity(layer.size.try_into()?);
         self.pull_blob(layer, &mut data).await?;
         Ok(String::from_utf8(data)?)
     }
@@ -133,7 +132,7 @@ impl OCIState {
             &self.client,
             &self.reference,
             &self.auth,
-            descriptor.deref(),
+            descriptor,
             self.config.compressed || matches!(descriptor, Descriptor::ListOciDescriptor(..)),
         )
         .await?;
@@ -164,7 +163,7 @@ pub(crate) async fn pull_blob_cached(
     client
         .store_auth_if_needed(reference.registry(), auth)
         .await;
-    let mut out = Vec::with_capacity(descriptor.size as usize);
+    let mut out = Vec::with_capacity(descriptor.size.try_into()?);
     client.pull_blob(reference, &descriptor, &mut out).await?;
 
     if !encoded {

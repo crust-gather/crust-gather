@@ -33,6 +33,7 @@ pub struct Versions {
 }
 
 impl Versions {
+    #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
             collectable: Objects::new_typed(config),
@@ -66,7 +67,7 @@ impl Collect<Pod> for Versions {
                     name: meta.name.clone().unwrap_or_default(),
                     namespace: meta.namespace.clone().unwrap_or_default(),
                     container: container.name.clone(),
-                    version: container.image.clone().unwrap_or_default(),
+                    version: container.image.unwrap_or_default(),
                 })
             })
             .collect::<Vec<_>>();
@@ -190,6 +191,6 @@ mod tests {
   version: test
 "
             .to_string()
-        )
+        );
     }
 }

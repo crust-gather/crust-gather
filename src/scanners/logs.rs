@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::{api::core::v1::Pod, jiff::Timestamp};
 use kube::Api;
 use kube::{
     api::TypeMeta,
@@ -30,7 +30,7 @@ use super::{
 #[error("Failed to collect logs: {0:?}")]
 pub struct LogsError(kube::Error);
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum LogSelection {
     Current,
     Previous,
@@ -39,8 +39,8 @@ pub enum LogSelection {
 impl Display for LogSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LogSelection::Current => write!(f, "current.log"),
-            LogSelection::Previous => write!(f, "previous.log"),
+            Self::Current => write!(f, "current.log"),
+            Self::Previous => write!(f, "previous.log"),
         }
     }
 }
@@ -71,6 +71,7 @@ impl Debug for Logs {
 }
 
 impl Logs {
+    #[must_use]
     pub fn new(config: Config, group: LogSelection) -> Self {
         Self {
             skip_logs_collection: config.skip_logs_collection,
@@ -113,7 +114,7 @@ impl Collect<Pod> for Logs {
                 pod.name_any().as_str(),
                 &LogParams {
                     container: Some(container.name.clone()),
-                    since_time: Some(Default::default()),
+                    since_time: Some(Timestamp::default()),
                     timestamps: true,
                     ..self.group.clone().into()
                 },
@@ -169,9 +170,9 @@ mod test {
     use tempfile::TempDir;
     use tokio::time::timeout;
 
-    use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
+    use crate::cli::{DEFAULT_OCI_BUFFER_SIZE, DebugPod};
     use crate::filters::filter::Include;
-    use crate::gather::config::GatherMode;
+    use crate::gather::config::{GatherMode, Secrets};
     use crate::{
         filters::{
             filter::{FilterGroup, FilterList},
@@ -244,12 +245,12 @@ mod test {
                 .await
                 .expect("failed to create builder")
                 .into(),
-                secrets: Default::default(),
+                secrets: Secrets::default(),
                 mode: GatherMode::Collect,
-                additional_logs: Default::default(),
+                additional_logs: Vec::default(),
                 duration: "1m".try_into().unwrap(),
-                systemd_units: Default::default(),
-                debug_pod: Default::default(),
+                systemd_units: Vec::default(),
+                debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
             }),
             group: LogSelection::Current,

@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap, fmt::Display, fs::File, future::pending, net::SocketAddr, ops::Deref,
-    path::PathBuf, str::FromStr, sync::Arc, time::Duration,
+    collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
+    str::FromStr, sync::Arc, time::Duration,
 };
 
 use actix_web::{
@@ -106,6 +106,12 @@ pub struct Server {
         value_parser = |arg: &str| -> anyhow::Result<Socket> {Socket::try_from(arg)})]
     #[serde(default)]
     socket: Socket,
+
+    /// Only serve custom resource versions marked as both served and storage
+    /// in the archived CRD.
+    #[arg(long)]
+    #[serde(default)]
+    served_crs_only: bool,
 }
 
 impl Server {
@@ -116,10 +122,17 @@ impl Server {
                 self.oci.clone(),
                 self.socket.clone(),
                 self.kubeconfig.clone(),
+                self.served_crs_only,
             )
             .await
         } else {
-            Api::new(archives, self.socket.clone(), self.kubeconfig.clone()).await
+            Api::new(
+                archives,
+                self.socket.clone(),
+                self.kubeconfig.clone(),
+                self.served_crs_only,
+            )
+            .await
         }
     }
 }
@@ -151,12 +164,13 @@ impl Api {
         archives: impl IntoIterator<Item = Archive> + Clone,
         socket: Socket,
         kubeconfig: Option<PathBuf>,
+        served_crs_only: bool,
     ) -> anyhow::Result<Self> {
         let Socket(socket) = socket;
 
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
             std::env::var("KUBECONFIG")
-                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?).to_string()),
+                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?)),
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
@@ -170,7 +184,7 @@ impl Api {
         let config = archives
             .clone()
             .into_iter()
-            .map(|a| Api::prepare_kubeconfig(a.name().to_string_lossy().to_string(), socket))
+            .map(|a| Self::prepare_kubeconfig(a.name().to_string_lossy().to_string(), socket))
             .try_fold(config, Kubeconfig::merge)?;
 
         serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
@@ -178,8 +192,14 @@ impl Api {
         let mut readers = HashMap::new();
         for archive in archives {
             readers.insert(
-                Api::convert_name(archive.name().to_string_lossy().to_string()),
-                ArchiveReader::new(archive, &Storage::FS, DEFAULT_OCI_BUFFER_SIZE).await,
+                Self::convert_name(archive.name().to_string_lossy().to_string()),
+                ArchiveReader::new(
+                    archive,
+                    &Storage::FS,
+                    DEFAULT_OCI_BUFFER_SIZE,
+                    served_crs_only,
+                )
+                .await,
             );
         }
 
@@ -199,6 +219,7 @@ impl Api {
         oci: OCISettings,
         socket: Socket,
         kubeconfig: Option<PathBuf>,
+        served_crs_only: bool,
     ) -> anyhow::Result<Self> {
         let Some(reference) = &oci.reference else {
             anyhow::bail!("missing reference");
@@ -210,7 +231,7 @@ impl Api {
 
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
             std::env::var("KUBECONFIG")
-                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?).to_string()),
+                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?)),
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
@@ -221,7 +242,7 @@ impl Api {
         let previous_context = config.current_context;
         config.current_context = None;
 
-        let config = config.merge(Api::prepare_kubeconfig(
+        let config = config.merge(Self::prepare_kubeconfig(
             reference.repository().to_string(),
             socket,
         ))?;
@@ -246,8 +267,14 @@ impl Api {
         let search = ArchiveSearch::default();
         let mut archives = HashMap::new();
         archives.insert(
-            Api::convert_name(reference.repository().to_string()),
-            ArchiveReader::new(Archive::new(search.path()), &storage, oci.buffer_size).await,
+            Self::convert_name(reference.repository().to_string()),
+            ArchiveReader::new(
+                Archive::new(search.path()),
+                &storage,
+                oci.buffer_size,
+                served_crs_only,
+            )
+            .await,
         );
 
         Ok(Self {
@@ -274,7 +301,9 @@ impl Api {
             let Some(annotations) = layer.annotations.clone() else {
                 anyhow::bail!("manifest layer contains no org.opencontainers.image.title annoation")
             };
-            let path = &annotations["org.opencontainers.image.title"];
+            let path = annotations
+                .get("org.opencontainers.image.title")
+                .ok_or(anyhow::anyhow!("missing org.opencontainers.image title"))?;
             index.insert(PathBuf::from(path), Descriptor::OciDescriptor(layer));
         }
 
@@ -282,7 +311,7 @@ impl Api {
             return Ok(index);
         };
 
-        let data = pull_blob_cached(client, reference, auth, index_layer.deref(), true).await?;
+        let data = pull_blob_cached(client, reference, auth, index_layer, true).await?;
         let resource_paths: Vec<YamlPath> = serde_saphyr::from_slice(&data)?;
         for yaml_path in resource_paths {
             let resource_path = yaml_path.path;
@@ -312,7 +341,7 @@ impl Api {
     }
 
     fn prepare_kubeconfig(name: String, socket: SocketAddr) -> Kubeconfig {
-        let name = Api::convert_name(name);
+        let name = Self::convert_name(name);
         Kubeconfig {
             current_context: Some(name.clone()),
             auth_infos: vec![NamedAuthInfo {
@@ -659,13 +688,11 @@ async fn list_response(
     query: Query<Selector>,
     state: web::Data<ApiState>,
 ) -> actix_web::Result<HttpResponse> {
-    Ok(HttpResponse::Ok()
-        .content_type("application/json")
-        .body(serde_json::to_string(
-            &list_items(accept, list, query, state)
-                .await
-                .map_err(error::ErrorNotFound)?,
-        )?))
+    Ok(HttpResponse::Ok().json(
+        &list_items(accept, list, query, state)
+            .await
+            .map_err(error::ErrorNotFound)?,
+    ))
 }
 
 // Streaming responder with watch events
@@ -697,7 +724,7 @@ async fn watch_response(
                 !bookmark_published {
                 let event = bookmark_event(list.to_type_meta());
                 yield publish(serde_json::to_value(event)?);
-                bookmark_published = true
+                bookmark_published = true;
             }
 
             for event in watch_events(accept.clone(), list.clone(), query.clone(), &reader).await? {
@@ -779,7 +806,7 @@ async fn logs_get(
         .named_object_from_get(get.clone())
         .map_err(error::ErrorNotFound)?;
     let mut body = reader
-        .load_raw(get.get_logs_path(query.deref()))
+        .load_raw(get.get_logs_path(&query))
         .await
         .map_err(error::ErrorBadRequest)?;
 
@@ -801,17 +828,10 @@ async fn logs_get(
         );
     }
 
-    actix_web::rt::spawn(async move {
-        if session
-            .text(BASE64_STANDARD.encode(body.as_bytes()))
-            .await
-            .is_err()
-        {
-            return;
-        }
-
-        pending::<()>().await;
-    });
+    session
+        .text(BASE64_STANDARD.encode(body.as_bytes()))
+        .await
+        .map_err(error::ErrorBadRequest)?;
 
     Ok(response)
 }
@@ -835,7 +855,7 @@ fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: boo
         return logs.to_string();
     };
 
-    let Some((timestamp, _)) = line.split_once(" ") else {
+    let Some((timestamp, _)) = line.split_once(' ') else {
         return logs.to_string();
     };
 
@@ -848,7 +868,7 @@ fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: boo
         Box::new(|line| format!("{timestamp} {line}"))
     } else {
         Box::new(|line| {
-            let Some((_, line)) = line.split_once(" ") else {
+            let Some((_, line)) = line.split_once(' ') else {
                 return line.to_string();
             };
             line.to_string()
@@ -865,4 +885,20 @@ async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<
     let reader = state.to_reader(archive.clone()).await?;
     let get = archive.named_object_from_get(get.clone())?;
     reader.load(get).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn served_crs_only_is_opt_in() {
+        assert!(!Server::default().served_crs_only);
+        assert!(!Server::try_parse_from(["serve"]).unwrap().served_crs_only);
+        assert!(
+            Server::try_parse_from(["serve", "--served-crs-only"])
+                .unwrap()
+                .served_crs_only
+        );
+    }
 }

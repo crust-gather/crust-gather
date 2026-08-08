@@ -35,16 +35,17 @@ impl NamespacedName for NamespaceName {
 
 impl NamespacedName for &ObjectMeta {
     fn name(&self) -> Option<String> {
-        self.name.to_owned()
+        self.name.clone()
     }
 
     fn namespace(&self) -> Option<String> {
-        self.namespace.to_owned()
+        self.namespace.clone()
     }
 }
 
 impl NamespaceName {
-    pub fn new(name: Option<String>, namespace: Option<String>) -> Self {
+    #[must_use]
+    pub const fn new(name: Option<String>, namespace: Option<String>) -> Self {
         Self { name, namespace }
     }
 }
@@ -52,10 +53,10 @@ impl NamespaceName {
 impl From<String> for NamespaceName {
     fn from(value: String) -> Self {
         match value.split_once('/') {
-            Some(("", name)) => NamespaceName::new(Some(name.into()), None),
-            Some((ns, "")) => NamespaceName::new(None, Some(ns.into())),
-            Some((ns, name)) => NamespaceName::new(Some(name.into()), Some(ns.into())),
-            None => NamespaceName::new(Some(value), None),
+            Some(("", name)) => Self::new(Some(name.into()), None),
+            Some((ns, "")) => Self::new(None, Some(ns.into())),
+            Some((ns, name)) => Self::new(Some(name.into()), Some(ns.into())),
+            None => Self::new(Some(value), None),
         }
     }
 }
@@ -139,7 +140,7 @@ impl ArchivePath {
     }
 
     pub fn to_path<R: ResourceThreadSafe>(resource: &R, type_meta: TypeMeta) -> Self {
-        ArchivePath::new_path(resource.meta(), type_meta)
+        Self::new_path(resource.meta(), type_meta)
     }
 
     pub fn new_path(namespace_name: impl NamespacedName, type_meta: TypeMeta) -> Self {
@@ -149,18 +150,16 @@ impl ArchivePath {
         );
 
         match (namespace_name.name(), namespace_name.namespace()) {
-            (Some(name), Some(namespace)) => ArchivePath::Namespaced(
+            (Some(name), Some(namespace)) => Self::Namespaced(
                 format!("namespaces/{namespace}/{api_version}/{kind}/{name}.yaml").into(),
             ),
             (Some(name), None) => {
-                ArchivePath::Cluster(format!("cluster/{api_version}/{kind}/{name}.yaml").into())
+                Self::Cluster(format!("cluster/{api_version}/{kind}/{name}.yaml").into())
             }
-            (None, Some(namespace)) => ArchivePath::NamespacedList(
+            (None, Some(namespace)) => Self::NamespacedList(
                 format!("namespaces/{namespace}/{api_version}/{kind}/*.yaml").into(),
             ),
-            (None, None) => {
-                ArchivePath::ClusterList(format!("**/{api_version}/{kind}/*.yaml").into())
-            }
+            (None, None) => Self::ClusterList(format!("**/{api_version}/{kind}/*.yaml").into()),
         }
     }
 
@@ -169,13 +168,13 @@ impl ArchivePath {
         type_meta: TypeMeta,
         logs: LogGroup,
     ) -> Self {
-        match ArchivePath::new_path(namespace_name, type_meta) {
-            ArchivePath::Namespaced(path) | ArchivePath::Cluster(path) => match logs {
+        match Self::new_path(namespace_name, type_meta) {
+            Self::Namespaced(path) | Self::Cluster(path) => match logs {
                 LogGroup::Current(Container(container)) => {
-                    ArchivePath::Logs(path.with_extension("").join(container).join("current.log"))
+                    Self::Logs(path.with_extension("").join(container).join("current.log"))
                 }
                 LogGroup::Previous(Container(container)) => {
-                    ArchivePath::Logs(path.with_extension("").join(container).join("previous.log"))
+                    Self::Logs(path.with_extension("").join(container).join("previous.log"))
                 }
             },
             other => other,
@@ -187,18 +186,19 @@ impl ArchivePath {
         type_meta: TypeMeta,
         logs: LogGroup,
     ) -> Self {
-        ArchivePath::new_logs(resource.meta(), type_meta, logs)
+        Self::new_logs(resource.meta(), type_meta, logs)
     }
 
+    #[must_use]
     pub fn parent(&self) -> Option<&Path> {
         match self {
-            ArchivePath::Empty => None,
-            ArchivePath::Cluster(path) => path.parent(),
-            ArchivePath::Namespaced(path) => path.parent(),
-            ArchivePath::Logs(path) => path.parent(),
-            ArchivePath::Custom(path) => path.parent(),
-            ArchivePath::NamespacedList(path) => Some(path.as_path()),
-            ArchivePath::ClusterList(path) => Some(path.as_path()),
+            Self::Empty => None,
+            Self::Cluster(path) => path.parent(),
+            Self::Namespaced(path) => path.parent(),
+            Self::Logs(path) => path.parent(),
+            Self::Custom(path) => path.parent(),
+            Self::NamespacedList(path) => Some(path.as_path()),
+            Self::ClusterList(path) => Some(path.as_path()),
         }
     }
 }
@@ -206,13 +206,13 @@ impl ArchivePath {
 impl Display for ArchivePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArchivePath::Empty => write!(f, "<empty>"),
-            ArchivePath::Cluster(path) => write!(f, "{}", path.display()),
-            ArchivePath::Namespaced(path) => write!(f, "{}", path.display()),
-            ArchivePath::Logs(path) => write!(f, "{}", path.display()),
-            ArchivePath::Custom(path) => write!(f, "{}", path.display()),
-            ArchivePath::NamespacedList(path) => write!(f, "{}", path.display()),
-            ArchivePath::ClusterList(path) => write!(f, "{}", path.display()),
+            Self::Empty => write!(f, "<empty>"),
+            Self::Cluster(path) => write!(f, "{}", path.display()),
+            Self::Namespaced(path) => write!(f, "{}", path.display()),
+            Self::Logs(path) => write!(f, "{}", path.display()),
+            Self::Custom(path) => write!(f, "{}", path.display()),
+            Self::NamespacedList(path) => write!(f, "{}", path.display()),
+            Self::ClusterList(path) => write!(f, "{}", path.display()),
         }
     }
 }
@@ -239,7 +239,7 @@ impl TryFrom<ArchivePath> for String {
 impl From<ArchivePath> for PathBuf {
     fn from(value: ArchivePath) -> Self {
         match value {
-            ArchivePath::Empty => PathBuf::new(),
+            ArchivePath::Empty => Self::new(),
             ArchivePath::Cluster(path) => path,
             ArchivePath::Namespaced(path) => path,
             ArchivePath::NamespacedList(path) => path,
@@ -258,10 +258,12 @@ pub struct Representation {
 }
 
 impl Representation {
+    #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Representation::default()
     }
 
+    #[must_use]
     pub fn with_data(self, data: &str) -> Self {
         Self {
             data: data.into(),
@@ -269,18 +271,22 @@ impl Representation {
         }
     }
 
+    #[must_use]
     pub fn with_path(self, path: ArchivePath) -> Self {
         Self { path, ..self }
     }
 
+    #[must_use]
     pub fn data(&self) -> &str {
         self.data.as_ref()
     }
 
+    #[must_use]
     pub fn path(&self) -> ArchivePath {
         self.path.clone()
     }
 
+    #[must_use]
     pub fn load_data(&self) -> Self {
         self.clone()
     }
