@@ -55,6 +55,7 @@ pub struct Destination {
 }
 
 impl Destination {
+    #[must_use]
     pub fn get_server(&self) -> &str {
         &self.server
     }
@@ -71,6 +72,7 @@ pub struct Get {
 }
 
 impl Get {
+    #[must_use]
     pub fn get_server(&self) -> &str {
         &self.server
     }
@@ -103,6 +105,7 @@ pub struct List {
 }
 
 impl List {
+    #[must_use]
     pub fn get_server(&self) -> &str {
         &self.server
     }
@@ -117,6 +120,7 @@ pub struct ObjectValueList {
 }
 
 impl ObjectValueList {
+    #[must_use]
     pub fn new(list: NamedObject, items: Vec<DynamicObject>) -> Self {
         Self {
             type_meta: TypeMeta {
@@ -147,7 +151,7 @@ impl Table {
     ) -> anyhow::Result<Self> {
         let mut data = vec![];
 
-        data.extend(Table::table_entries(storage, crd_path, list).await?);
+        data.extend(Self::table_entries(storage, crd_path, list).await?);
         let items: anyhow::Result<Vec<serde_json::Value>> = items
             .into_iter()
             .map(|i| serde_json::to_value(i).map_err(Into::into))
@@ -186,7 +190,7 @@ impl Table {
                     },
                     ..Default::default()
                 },
-                None => Default::default(),
+                None => CustomResourceDefinition::default(),
             },
         };
 
@@ -245,7 +249,7 @@ impl Table {
     }
 
     fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
-        let Table { data: rows, .. } = self;
+        let Self { data: rows, .. } = self;
         let obj = serde_json::to_value(obj)?;
         let cells: Vec<serde_json::Value> = rows
             .iter()
@@ -259,11 +263,14 @@ impl Table {
     }
 
     fn definitions(&self) -> Vec<serde_json::Value> {
-        self.data.iter().map(|r| r.to_definition()).collect()
+        self.data
+            .iter()
+            .map(super::printers::TablePath::to_definition)
+            .collect()
     }
 
     fn rows(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let Table { items, .. } = self;
+        let Self { items, .. } = self;
         items.iter().map(|i| self.to_row(i)).collect()
     }
 
@@ -314,7 +321,7 @@ trait GatherObject: ResourceExt + Sized + Serialize {
                 serde_json::from_str(&format!("\"{last_sync_timestamp}\"")).ok()
             }
             // Handling of pre-record feature versions
-            None => Some(Default::default()),
+            None => Some(DateTime::default()),
         }
     }
 
@@ -370,13 +377,18 @@ impl NamedResource {
 struct NamedResourcesState<'a> {
     archive: Archive,
     storage: &'a Storage,
+    served_crs_only: bool,
 }
 
 type DiscoveryResource = (String, String, APIResourceDiscovery);
 
 impl<'a> NamedResourcesState<'a> {
-    fn new(archive: Archive, storage: &'a Storage) -> Self {
-        Self { archive, storage }
+    const fn new(archive: Archive, storage: &'a Storage, served_crs_only: bool) -> Self {
+        Self {
+            archive,
+            storage,
+            served_crs_only,
+        }
     }
 
     async fn discovery_file(&self, path: ArchivePath) -> anyhow::Result<Vec<DiscoveryResource>> {
@@ -463,13 +475,17 @@ impl<'a> NamedResourcesState<'a> {
             singular: resource
                 .singular_resource
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| kind.to_string().to_lowercase()),
+                .unwrap_or_else(|| kind.clone().to_lowercase()),
         };
 
-        self.filter_crd_resource(resource).await
+        if !self.served_crs_only {
+            return Some(resource)
+        }
+        
+        self.only_served_stored_resource(resource).await
     }
 
-    async fn filter_crd_resource(&self, resource: NamedResource) -> Option<NamedResource> {
+    async fn only_served_stored_resource(&self, resource: NamedResource) -> Option<NamedResource> {
         let Some(crd_path) = resource.get_crd_path() else {
             return Some(resource);
         };
@@ -543,14 +559,17 @@ pub struct NamedObject {
 }
 
 impl NamedObject {
+    #[must_use]
     pub fn get_path(&self) -> ArchivePath {
         ArchivePath::new_path(self, self.to_type_meta())
     }
 
+    #[must_use]
     pub fn get_crd_path(&self) -> Option<ArchivePath> {
         self.named_resource.get_crd_path()
     }
 
+    #[must_use]
     pub fn get_logs_path(&self, log: &Log) -> ArchivePath {
         ArchivePath::new_logs(
             self,
@@ -596,8 +615,13 @@ pub struct ArchiveReader {
 }
 
 impl ArchiveReader {
-    pub async fn new(archive: Archive, storage: &Storage, buffer_size: usize) -> Self {
-        let state = NamedResourcesState::new(archive.clone(), storage);
+    pub async fn new(
+        archive: Archive,
+        storage: &Storage,
+        buffer_size: usize,
+        served_crs_only: bool,
+    ) -> Self {
+        let state = NamedResourcesState::new(archive.clone(), storage, served_crs_only);
         let mut named_resources = NamedResources::default();
 
         match state
@@ -618,7 +642,7 @@ impl ArchiveReader {
             Err(e) => {
                 tracing::error!("Fail parsing api.json : {e:?}");
             }
-        };
+        }
 
         Self {
             archive,
@@ -627,11 +651,13 @@ impl ArchiveReader {
         }
     }
 
+    #[must_use]
     pub fn join(&self, path: ArchivePath) -> PathBuf {
         self.archive.join(path)
     }
 
     /// Returns the archive's root path. Used to distinguish archives in hash/eq.
+    #[must_use]
     pub fn path(&self) -> PathBuf {
         self.archive.path()
     }
@@ -718,7 +744,7 @@ impl Reader {
                 let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)?;
                 beginning.signed_duration_since(record_timestamp).to_std()?
             }
-            false => Default::default(),
+            false => Duration::default(),
         };
         Ok(Self {
             archive,
@@ -742,6 +768,7 @@ impl Reader {
         Utc::now() - self.diff
     }
 
+    #[must_use]
     pub fn pop_next_event_time(&self) -> Duration {
         let mut next_patch_time = self
             .next_patch_time
@@ -785,7 +812,7 @@ impl Reader {
             let event = object
                 .table_watch_event(crd_path, list.clone(), &self.storage)
                 .await?;
-            events.push(event)
+            events.push(event);
         }
 
         Ok(events)
@@ -803,7 +830,7 @@ impl Reader {
         self.objects(list.get_path())
             .await?
             .filter(|obj| selector.matches(obj.labels()))
-            .map(|obj| obj.watch_event())
+            .map(GatherObject::watch_event)
             .map(|ev| serde_json::to_value(ev).map_err(Into::into))
             .collect()
     }
@@ -855,7 +882,7 @@ impl Reader {
                         items.push(version);
                     }
                 }
-            };
+            }
         }
 
         {
@@ -957,7 +984,7 @@ impl Reader {
                         self.interpolate(
                             &original,
                             path.with_extension("patch"),
-                            Default::default(),
+                            DateTime::default(),
                             self.archive_time(),
                         )
                         .await?,
@@ -1009,17 +1036,16 @@ impl Reader {
                             return Ok(versions);
                         } else if last_sync_timestamp <= from {
                             break;
-                        } else {
-                            do_apply = true;
                         }
+                        do_apply = true;
                     }
                     _ => (),
-                };
+                }
             }
 
             if do_apply && !patches.is_empty() {
                 patch(&mut target, &patches)?;
-                versions.push(serde_json::from_value(target.clone())?)
+                versions.push(serde_json::from_value(target.clone())?);
             }
         }
 

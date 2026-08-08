@@ -14,14 +14,13 @@ pub struct Selector {
 }
 
 impl Selector {
+    #[must_use]
     pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
         let Some(selector) = self.label_selector.as_deref() else {
             return true;
         };
 
-        Expressions::try_from(selector)
-            .map(|expr| expr.matches(labels))
-            .unwrap_or_default()
+        Expressions::try_from(selector).is_ok_and(|expr| expr.matches(labels))
     }
 }
 
@@ -39,6 +38,7 @@ impl schemars::JsonSchema for Expressions {
 }
 
 impl Expressions {
+    #[must_use]
     pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
         self.deref().clone().into_iter().all(|expression| {
             match expression.deref().clone() {
@@ -59,6 +59,6 @@ impl TryFrom<&str> for Expressions {
 
     #[instrument(err)]
     fn try_from(selector: &str) -> unselector::Result<Self> {
-        Ok(Expressions(selector.try_into()?))
+        Ok(Self(selector.try_into()?))
     }
 }

@@ -8,7 +8,7 @@ use k8s_openapi::serde_json;
 use kube::Api;
 use kube::api::WatchEvent;
 use kube::core::gvk::ParseGroupVersionError;
-use kube::core::params::ListParams;
+use kube::core::params::{ListParams, WatchParams};
 use kube::core::{DynamicObject, ResourceExt, Status};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -68,6 +68,7 @@ pub const DELETED_ANNOTATION: &str = "crust-gather.io/deleted";
 pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Default retry policy - exponential backoff.
     /// Starts at 10ms, doubles each iteration, up to max of 60s.
+    #[must_use]
     fn retry_policy() -> ExponentialBuilder {
         ExponentialBuilder::default()
             .with_min_delay(Duration::from_millis(10))
@@ -102,11 +103,11 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         ArchivePath::to_path(obj, self.resource().to_type_meta())
     }
 
-    /// Filters objects based on their GroupVersionKind and the object itself.
+    /// Filters objects based on their `GroupVersionKind` and the object itself.
     /// Returns true if the object should be included, false otherwise.
     fn filter(&self, object: &R) -> Result<bool, CollectError>;
 
-    /// Converts the provided DynamicObject into a vector of Representation
+    /// Converts the provided `DynamicObject` into a vector of Representation
     /// with YAML object data and output path for the object.
     #[instrument(skip_all, fields(
         kind = self.resource().to_type_meta().kind,
@@ -131,13 +132,13 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Returns the Kubernetes API client for the resource type this scanner handles.
     fn get_api(&self) -> Api<R>;
 
-    /// Returns the TypeMetaGetter for the API resource type this scanner handles.
-    /// Used to set the TypeMeta on the returned objects in the list,
+    /// Returns the `TypeMetaGetter` for the API resource type this scanner handles.
+    /// Used to set the `TypeMeta` on the returned objects in the list,
     /// as the API server does not provide this data in the response.
     fn resource(&self) -> impl TypeMetaGetter;
 
     /// Lists Kubernetes objects of the type handled by this scanner, and set
-    /// the get_type_meta() information on the objects. Objects are filtered
+    /// the `get_type_meta()` information on the objects. Objects are filtered
     /// before getting added to the result.
     #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
     async fn list(&self) -> anyhow::Result<Vec<R>> {
@@ -212,7 +213,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
 
         let mut stream = self
             .get_api()
-            .watch(&Default::default(), "0")
+            .watch(&WatchParams::default(), "0")
             .await?
             .boxed();
 
@@ -223,19 +224,19 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                     let mut obj = obj.clone();
                     obj.annotations_mut()
                         .insert(ADDED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?
+                    self.sync_with_retry(&obj).await?;
                 }
                 WatchEvent::Modified(obj) => {
                     let mut obj = obj.clone();
                     obj.annotations_mut()
                         .insert(UPDATED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?
+                    self.sync_with_retry(&obj).await?;
                 }
                 WatchEvent::Deleted(obj) => {
                     let mut obj = obj.clone();
                     obj.annotations_mut()
                         .insert(DELETED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?
+                    self.sync_with_retry(&obj).await?;
                 }
                 WatchEvent::Error(e) => Err(WatchError::Stream(e))?,
                 WatchEvent::Bookmark(_) => (),

@@ -52,7 +52,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 pub struct Cli {
     /// Controls the verbosity of the output.
     ///
-    /// OneOf: OFF, ERROR, WARN, INFO, DEBUG, TRACE
+    /// `OneOf`: OFF, ERROR, WARN, INFO, DEBUG, TRACE
     #[arg(short, long, default_value = "INFO", global = true)]
     verbosity: LevelFilter,
 
@@ -124,14 +124,14 @@ pub enum Commands {
 impl Commands {
     pub async fn run(self) -> anyhow::Result<()> {
         match self {
-            Commands::Collect { config } => {
+            Self::Collect { config } => {
                 Into::<GatherCommands>::into(config)
                     .load()
                     .await?
                     .collect()
                     .await
             }
-            Commands::CollectFromConfig { source, overrides } => {
+            Self::CollectFromConfig { source, overrides } => {
                 source
                     .gather(overrides.origin_client().await?)
                     .await?
@@ -141,11 +141,9 @@ impl Commands {
                     .collect()
                     .await
             }
-            Commands::Serve { serve } => {
-                serve.get_api().await?.serve().await.map_err(|e| anyhow!(e))
-            }
-            Commands::Mcp => mcp_server::run().await,
-            Commands::Record { config } => {
+            Self::Serve { serve } => serve.get_api().await?.serve().await.map_err(|e| anyhow!(e)),
+            Self::Mcp => mcp_server::run().await,
+            Self::Record { config } => {
                 let config = GatherCommands {
                     mode: GatherMode::Record,
                     ..config
@@ -156,7 +154,7 @@ impl Commands {
                     .collect()
                     .await
             }
-            Commands::RecordFromConfig { source, overrides } => {
+            Self::RecordFromConfig { source, overrides } => {
                 let config = source
                     .gather(overrides.origin_client().await?)
                     .await?
@@ -180,9 +178,9 @@ pub struct ConfigSource {
     /// Example file:
     ///
     /// filters:
-    /// - include_namespace:
+    /// - `include_namespace`:
     ///   - default
-    ///   include_kind:
+    ///   `include_kind`:
     ///   - Pod
     /// settings:
     ///   secret:
@@ -200,15 +198,15 @@ pub struct ConfigSource {
     /// Example content:
     ///
     /// apiVersion: v1
-    /// kind: ConfigMap
+    /// kind: `ConfigMap`
     /// metadata:
     ///   name: crust-gather-config
     /// data:
     ///   config: |
     ///     filters:
-    ///     - include_namespace:
+    ///     - `include_namespace`:
     ///       - default
-    ///       include_kind:
+    ///       `include_kind`:
     ///       - Pod
     ///     settings:
     ///       secret:
@@ -263,6 +261,7 @@ pub struct GatherCommands {
 }
 
 impl GatherCommands {
+    #[must_use]
     pub fn merge(&self, other: GatherSettings) -> Self {
         Self {
             mode: self.mode.clone(),
@@ -275,6 +274,7 @@ impl GatherCommands {
 }
 
 impl GatherSettings {
+    #[must_use]
     pub fn merge(&self, other: Self) -> Self {
         Self {
             kubeconfig: other.kubeconfig.or(self.kubeconfig.clone()),
@@ -339,7 +339,7 @@ pub struct GatherSettings {
     /// Encoding for the output file.
     /// By default there is no encoding and data is written to the filesystem.
     /// The available options are:
-    /// - gzip: GZip encoded tar.
+    /// - gzip: `GZip` encoded tar.
     /// - zip: ZIP encoded.
     ///
     /// Example:
@@ -360,7 +360,7 @@ pub struct GatherSettings {
     /// Can be specified multiple times to exclude multiple values.
     ///
     /// Example:
-    ///     --secret=MY_ENV_SECRET_DATA --secret=SOME_OTHER_SECRET_DATA
+    ///     --`secret=MY_ENV_SECRET_DATA` --`secret=SOME_OTHER_SECRET_DATA`
     #[arg(short, long = "secret", action = ArgAction::Append)]
     #[serde(default)]
     pub secrets: Vec<String>,
@@ -466,9 +466,9 @@ pub struct OCIReference {
 impl From<OCIReference> for Reference {
     fn from(reference: OCIReference) -> Self {
         let mut r = if let Some(tag) = reference.tag {
-            Reference::with_tag(reference.registry, reference.repository, tag)
+            Self::with_tag(reference.registry, reference.repository, tag)
         } else {
-            Reference::with_digest(
+            Self::with_digest(
                 reference.registry,
                 reference.repository,
                 reference.digest.unwrap_or_default(),
@@ -476,7 +476,7 @@ impl From<OCIReference> for Reference {
         };
 
         if let Some(mirror) = reference.mirror_registry {
-            r.set_mirror_registry(mirror)
+            r.set_mirror_registry(mirror);
         }
 
         r
@@ -550,11 +550,12 @@ impl OCISettings {
         }
     }
 
+    #[must_use]
     pub fn to_client_config(&self) -> ClientConfig {
         let mut config = ClientConfig::default();
         if self.insecure {
             config.protocol = ClientProtocol::Http;
-        };
+        }
 
         if let Some(cert) = self.ca_file.as_ref() {
             config.extra_root_certificates.push(client::Certificate {
@@ -568,12 +569,13 @@ impl OCISettings {
         config
     }
 
+    #[must_use]
     pub fn to_auth(&self) -> RegistryAuth {
         let mut auth = RegistryAuth::Anonymous;
         if let Some(token) = self.token.as_ref() {
-            auth = RegistryAuth::Bearer(token.clone())
+            auth = RegistryAuth::Bearer(token.clone());
         } else if let Some(up) = self.regular.as_ref() {
-            auth = RegistryAuth::Basic(up.username.clone(), up.password.clone())
+            auth = RegistryAuth::Basic(up.username.clone(), up.password.clone());
         }
 
         auth
@@ -763,7 +765,7 @@ pub struct AdditionalLogs {
     /// file.
     ///
     /// Example config file:
-    /// additional_logs:
+    /// `additional_logs`:
     /// - name: test.txt
     ///   command: echo "hi"
     /// - name: test2.txt
@@ -988,6 +990,7 @@ impl TryFrom<&str> for GatherCommands {
 }
 
 impl GatherCommands {
+    #[must_use]
     pub fn new(mode: GatherMode, filter: Option<Filters>, settings: GatherSettings) -> Self {
         Self {
             mode,
@@ -1001,7 +1004,7 @@ impl GatherCommands {
     pub async fn load(&self) -> anyhow::Result<Config> {
         let env_secrets: Secrets = self.settings.secrets.clone().into();
         let mut secrets: Secrets = match self.settings.secrets_file.clone() {
-            Some(file) => file.clone().try_into()?,
+            Some(file) => file.try_into()?,
             None => vec![].into(),
         };
 
@@ -1027,16 +1030,11 @@ impl GatherCommands {
             systemd_units: self.settings.systemd_units.clone(),
             debug_pod: self.settings.debug_pod.clone(),
             disable_additional_logs: self.additional_logs.disable,
-            skip_logs_collection: self
-                .filter
-                .as_ref()
-                .map(|f| f.skip_logs_collection)
-                .unwrap_or_default(),
+            skip_logs_collection: self.filter.as_ref().is_some_and(|f| f.skip_logs_collection),
             skip_events_collection: self
                 .filter
                 .as_ref()
-                .map(|f| f.skip_events_collection)
-                .unwrap_or_default(),
+                .is_some_and(|f| f.skip_events_collection),
         })
     }
 
@@ -1046,8 +1044,8 @@ impl GatherCommands {
 }
 
 impl From<&GatherCommands> for FilterGroup {
-    fn from(val: &GatherCommands) -> FilterGroup {
-        FilterGroup(match &val.filter {
+    fn from(val: &GatherCommands) -> Self {
+        Self(match &val.filter {
             Some(filter) => vec![filter.into()],
             None => val.filters.iter().map(Into::into).collect(),
         })

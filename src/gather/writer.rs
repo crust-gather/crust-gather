@@ -53,6 +53,7 @@ use super::representation::{ArchivePath, Representation};
 pub struct ArchiveSearch(PathBuf);
 
 impl ArchiveSearch {
+    #[must_use]
     pub fn path(&self) -> PathBuf {
         self.0.clone()
     }
@@ -106,22 +107,25 @@ pub struct Archive(PathBuf);
 
 /// Creates a new Archive instance with the given path.
 impl Archive {
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
         Self(path)
     }
 
+    #[must_use]
     pub fn path(&self) -> PathBuf {
         self.0.clone()
     }
 
+    #[must_use]
     pub fn name(&self) -> &OsStr {
         self.0
             .components()
             .next_back()
-            .map(|c| c.as_os_str())
-            .unwrap_or(OsStr::new("snapshot"))
+            .map_or(OsStr::new("snapshot"), std::path::Component::as_os_str)
     }
 
+    #[must_use]
     pub fn join(&self, path: ArchivePath) -> PathBuf {
         match path {
             ArchivePath::Empty => self.path(),
@@ -148,8 +152,8 @@ impl From<Archive> for PathBuf {
 }
 
 impl From<PathBuf> for Archive {
-    fn from(val: PathBuf) -> Archive {
-        Archive(val)
+    fn from(val: PathBuf) -> Self {
+        Self(val)
     }
 }
 
@@ -189,6 +193,7 @@ impl From<&str> for Encoding {
 }
 
 /// The Writer enum represents the different archive writer implementations.
+///
 /// Gzip uses the gzip compression format.
 /// Zip uses the zip compression format.
 /// Oci uses the remote image reference as a destination.
@@ -252,7 +257,7 @@ impl Writer {
 
     /// Finish writing the archive, finalizing any compression and flushing buffers.
     pub async fn finish_oci(&self) -> anyhow::Result<()> {
-        if let Writer::Oci(ocistate) = self {
+        if let Self::Oci(ocistate) = self {
             return ocistate.publish_image().await;
         }
 
@@ -284,7 +289,8 @@ impl Writer {
             }
             Self::Gzip(Archive(archive), builder) => {
                 let mut header = Header::new_gnu();
-                header.set_size(data.len() as u64 + 1);
+                let size = data.len() + 1;
+                header.set_size(size.try_into()?);
                 header.set_cksum();
                 header.set_mode(0o644);
 
@@ -330,8 +336,13 @@ impl Writer {
 
                 // generate diff and write
                 let original = Reader::new(
-                    ArchiveReader::new(archive.clone(), &Storage::FS, DEFAULT_OCI_BUFFER_SIZE)
-                        .await,
+                    ArchiveReader::new(
+                        archive.clone(),
+                        &Storage::FS,
+                        DEFAULT_OCI_BUFFER_SIZE,
+                        false,
+                    )
+                    .await,
                     Utc::now(),
                     Storage::FS,
                 )
@@ -377,7 +388,7 @@ impl Writer {
                 DirBuilder::new().recursive(true).create(parent)?;
             }
             Some(_) | None => (),
-        };
+        }
 
         Ok(match encoding {
             Encoding::Path => Self::Path(archive.clone()),
@@ -427,7 +438,7 @@ impl OCIState {
                 .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
         ))?;
 
-        let resource_paths = Arc::new(Mutex::new(Default::default()));
+        let resource_paths = Arc::new(Mutex::new(BTreeMap::default()));
         let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())
             .filter_map(|path| Self::prepare_resource_layer(path, resource_paths.clone()))
             .collect()
@@ -465,11 +476,11 @@ impl OCIState {
         let (digest, size) = self.push_blob(config.data).await?;
 
         let mut manifest = OciImageManifest::default();
-        manifest.config.media_type = config.media_type.to_string();
+        manifest.config.media_type = config.media_type.clone();
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
         manifest.config.digest = digest;
-        manifest.config.size = size as i64;
+        manifest.config.size = size.try_into()?;
 
         info!("Pushing manifest: {}", self.image_ref);
         let manifest = manifest.into();
@@ -532,7 +543,7 @@ impl OCIState {
                         index
                     },
                 });
-                index += 4
+                index += 4;
             }
         }
 
@@ -584,7 +595,7 @@ impl OCIState {
             // That could only happen for empty logs, so we publish an empty json instead
             // as ghcr doesn't allow empty layers
             data = "{}".to_string();
-        };
+        }
 
         info!("Pushing layer: {:?}", archive_path);
         let (digest, size) = self.push_blob(data).await?;
@@ -594,11 +605,11 @@ impl OCIState {
                 urls: None,
                 media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
                 digest,
-                size: size as i64,
+                size: size.try_into()?,
                 annotations: Some(
                     [(
                         "org.opencontainers.image.title".to_string(),
-                        archive_path.to_string(),
+                        archive_path.clone(),
                     )]
                     .into(),
                 ),

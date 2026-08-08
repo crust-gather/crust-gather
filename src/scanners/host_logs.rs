@@ -20,7 +20,7 @@ use kube::{
     api::TypeMeta,
     core::{
         ApiResource, DynamicObject, ObjectMeta, ResourceExt, WatchEvent,
-        params::{DeleteParams, WatchParams},
+        params::{DeleteParams, PostParams, WatchParams},
         subresource::AttachParams,
     },
 };
@@ -106,9 +106,9 @@ impl Debug for HostLogs {
 impl From<Config> for HostLogs {
     fn from(value: Config) -> Self {
         let mut logs = value.additional_logs.clone();
-        for systemd_unit in value.systemd_units.iter() {
+        for systemd_unit in &value.systemd_units {
             logs.push(CustomLog {
-                path: systemd_unit.to_string(),
+                path: systemd_unit.clone(),
                 command: format!(
                     "chroot /host /bin/sh <<\"EOT\"\njournalctl -u {systemd_unit}\nEOT"
                 ),
@@ -219,7 +219,7 @@ impl HostLogs {
 
         let obj = serde_json::to_value(&archive_pod)?;
         let mut data: DynamicObject = serde_json::from_value(obj)?;
-        data.types = Some(data.types.unwrap_or(TypeMeta::resource::<Pod>()));
+        data.types = Some(data.types.unwrap_or_else(TypeMeta::resource::<Pod>));
 
         Ok(Representation::new()
             .with_path(ArchivePath::to_path(pod, TypeMeta::resource::<Pod>()))
@@ -249,8 +249,13 @@ impl HostLogs {
     fn get_template_pod(debug_pod: &DebugPod, node_name: String) -> Pod {
         Pod {
             metadata: ObjectMeta {
-                name: Some(node_name.to_string()),
-                namespace: Some(debug_pod.namespace.clone().unwrap_or("default".to_string())),
+                name: Some(node_name.clone()),
+                namespace: Some(
+                    debug_pod
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                ),
                 creation_timestamp: Some(Time(Timestamp::now())),
                 ..Default::default()
             },
@@ -297,9 +302,7 @@ impl HostLogs {
                 }]),
                 ..Default::default()
             }),
-            status: Some(PodStatus {
-                ..Default::default()
-            }),
+            status: Some(PodStatus::default()),
         }
     }
 
@@ -307,7 +310,7 @@ impl HostLogs {
     async fn get_or_create(&self, pod: Pod) -> anyhow::Result<()> {
         let api = Api::namespaced(
             self.get_api().into(),
-            &pod.namespace().unwrap_or("default".to_string()),
+            &pod.namespace().unwrap_or_else(|| "default".to_string()),
         );
 
         let found = api
@@ -317,10 +320,10 @@ impl HostLogs {
 
         if found.is_none() {
             tracing::info!("Creating user logs debug pod");
-            api.create(&Default::default(), &pod)
+            api.create(&PostParams::default(), &pod)
                 .await
                 .map_err(DebugPodError::Create)?;
-        };
+        }
 
         Ok(())
     }
@@ -333,7 +336,7 @@ impl HostLogs {
                 .debug_pod
                 .namespace
                 .clone()
-                .unwrap_or("default".to_string()),
+                .unwrap_or_else(|| "default".to_string()),
         );
         api.delete(&pod.name_any(), &DeleteParams::default().grace_period(0))
             .await?;
@@ -354,7 +357,7 @@ impl HostLogs {
 
         let api = Api::namespaced(
             self.get_api().into(),
-            &pod.namespace().unwrap_or("default".to_string()),
+            &pod.namespace().unwrap_or_else(|| "default".to_string()),
         );
         let mut stream = api.watch(&wp, "0").await?.boxed();
         while let Some(event) = stream.try_next().await? {
@@ -362,7 +365,7 @@ impl HostLogs {
                 && Self::pod_ready(&pod)
             {
                 break;
-            };
+            }
         }
 
         Ok(vec![
@@ -392,7 +395,7 @@ impl HostLogs {
     ) -> anyhow::Result<Representation> {
         let api: Api<Pod> = Api::namespaced(
             self.get_api().into(),
-            &pod.namespace().unwrap_or("default".to_string()),
+            &pod.namespace().unwrap_or_else(|| "default".to_string()),
         );
         let args = vec!["sh", "-c", command];
 
@@ -423,6 +426,8 @@ impl HostLogs {
 
 #[cfg(test)]
 mod test {
+    use k8s_openapi::api::core::v1::PodStatus;
+
     use super::*;
 
     #[test]

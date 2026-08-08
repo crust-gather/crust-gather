@@ -26,6 +26,7 @@ pub struct Info {
 }
 
 impl Info {
+    #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
             collectable: Objects::new_typed(config),

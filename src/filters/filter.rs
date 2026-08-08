@@ -43,7 +43,7 @@ where
         let mut f = self
             .clone()
             .into_iter()
-            .flat_map(|f| f.filter_object(obj, gvk))
+            .filter_map(|f| f.filter_object(obj, gvk))
             .peekable();
 
         f.peek()?;
@@ -158,6 +158,7 @@ impl Serialize for FilterRegex {
 }
 
 impl FilterRegex {
+    #[must_use]
     pub fn matches(&self, s: &str) -> bool {
         self.0.is_match(s)
     }
@@ -271,7 +272,7 @@ mod tests {
         assert_eq!(
             FilterList(vec![]).filter_object(
                 &obj,
-                &GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK")
+                &GroupVersionKind::try_from(pod_tm).expect("parse GVK")
             ),
             Some(true)
         );
@@ -305,7 +306,7 @@ mod tests {
             Selector::<Exclude, Labels>::try_from("name=crust-gather").unwrap(),
         ])]);
 
-        let gvk = GroupVersionKind::try_from(pod_tm.clone()).expect("parse GVK");
+        let gvk = GroupVersionKind::try_from(pod_tm).expect("parse GVK");
         assert_eq!(filter.filter_object(&app_obj, &gvk), Some(false));
         assert_eq!(filter.filter_object(&name_obj, &gvk), Some(false));
     }

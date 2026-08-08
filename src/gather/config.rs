@@ -43,6 +43,7 @@ pub struct SecretsFile(pub PathBuf);
 
 impl Secrets {
     /// Replaces any secrets in representation data with xxx.
+    #[must_use]
     pub fn strip(&self, repr: &Representation) -> Representation {
         let mut data = repr.data().to_string();
         for secret in &self.0 {
@@ -163,7 +164,7 @@ impl KubeconfigFile {
     /// Creates a new Kubernetes client from the `KubeconfigFile`.
     pub async fn client(&self, insecure: bool) -> Result<Client, kube::Error> {
         let kubeconfig = match insecure {
-            true => KubeconfigFile::insecure(self.into()),
+            true => Self::insecure(self.into()),
             false => self.into(),
         };
 
@@ -173,7 +174,7 @@ impl KubeconfigFile {
     /// Creates a new Kubernetes client from the inferred config.
     pub async fn infer(insecure: bool) -> Result<Client, kube::Error> {
         let kubeconfig = match insecure {
-            true => KubeconfigFile::insecure(Kubeconfig::read()?),
+            true => Self::insecure(Kubeconfig::read()?),
             false => Kubeconfig::read()?,
         };
 
@@ -181,7 +182,7 @@ impl KubeconfigFile {
     }
 
     fn insecure(config: kube::config::Kubeconfig) -> kube::config::Kubeconfig {
-        let mut config = config.clone();
+        let mut config = config;
         Kubeconfig {
             clusters: config
                 .clusters
@@ -270,14 +271,12 @@ impl KubeconfigSecretNamespaceName {
             } => {
                 let api: Api<Secret> = Api::all(client);
                 SecretSearch(
-                    api.list(&ListParams {
-                        ..Default::default()
-                    })
-                    .await?
-                    .items
-                    .into_iter()
-                    .filter(|s| s.name_any() == name)
-                    .collect(),
+                    api.list(&ListParams::default())
+                        .await?
+                        .items
+                        .into_iter()
+                        .filter(|s| s.name_any() == name)
+                        .collect(),
                 )
             }
             NamespaceName { .. } => SecretSearch(vec![]),
@@ -296,6 +295,7 @@ impl From<String> for KubeconfigSecretNamespaceName {
 pub struct SecretSearch(Vec<Secret>);
 
 impl SecretSearch {
+    #[must_use]
     pub fn lookup<D: DeserializeOwned>(&self) -> Vec<D> {
         self.0
             .iter()
@@ -317,7 +317,7 @@ impl SecretSearch {
                 )
                 .ok()
             })
-            .filter_map(|v| BASE64_STANDARD.decode(v.replace("'", "").trim_end()).ok())
+            .filter_map(|v| BASE64_STANDARD.decode(v.replace('\'', "").trim_end()).ok())
             .filter_map(|v| String::from_utf8(v).ok())
             .find_map(|v| serde_saphyr::from_str(&v).ok())
     }
@@ -397,7 +397,7 @@ impl Config {
         };
         let collectables = discovery
             .groups()
-            .flat_map(|r| r.resources_by_stability())
+            .flat_map(kube::discovery::ApiGroup::resources_by_stability)
             .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
             .flat_map(|group: Group| group.into_collectable(self.clone()));
 
@@ -408,7 +408,7 @@ impl Config {
                     self.duration.0.into(),
                     self.iterate_until_completion(collectables),
                 )
-                .await?
+                .await?;
             }
             GatherMode::Record => {
                 tracing::info!("Recording resources...");
@@ -501,13 +501,13 @@ impl Group {
                 }
             },
             GatherMode::Record => match self {
-                Group::Nodes(resource)
-                | Group::Pods(resource)
-                | Group::Events(resource)
-                | Group::Dynamic(resource) => {
+                Self::Nodes(resource)
+                | Self::Pods(resource)
+                | Self::Events(resource)
+                | Self::Dynamic(resource) => {
                     vec![
                         Collectable::Info(Info::new(gather.clone())),
-                        Collectable::WatchDynamic(Dynamic::new(gather.clone(), resource)),
+                        Collectable::WatchDynamic(Dynamic::new(gather, resource)),
                     ]
                 }
             },
@@ -613,12 +613,12 @@ mod tests {
             .await
             .expect("failed to create builder")
             .into(),
-            secrets: Default::default(),
+            secrets: Secrets::default(),
             mode: GatherMode::Collect,
             duration: "10s".try_into().unwrap(),
-            additional_logs: Default::default(),
-            systemd_units: Default::default(),
-            debug_pod: Default::default(),
+            additional_logs: Vec::default(),
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
             skip_events_collection: false,
@@ -627,7 +627,7 @@ mod tests {
         // Gzip archive is failing due to timeout.
         // As the archive can't be consumed, it can't be closed other way... (TODO)
         let result = config.collect().await;
-        assert!(result.is_err())
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -655,10 +655,10 @@ mod tests {
             .into(),
             duration: "1m".try_into().unwrap(),
             mode: GatherMode::Collect,
-            secrets: Default::default(),
-            additional_logs: Default::default(),
-            systemd_units: Default::default(),
-            debug_pod: Default::default(),
+            secrets: Secrets::default(),
+            additional_logs: Vec::default(),
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
             skip_events_collection: false,
@@ -693,10 +693,10 @@ mod tests {
             .into(),
             duration: "1m".try_into().unwrap(),
             mode: GatherMode::Collect,
-            secrets: Default::default(),
-            additional_logs: Default::default(),
-            systemd_units: Default::default(),
-            debug_pod: Default::default(),
+            secrets: Secrets::default(),
+            additional_logs: Vec::default(),
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
             skip_events_collection: false,
