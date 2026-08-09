@@ -4,5 +4,4 @@ pub mod info;
 pub mod interface;
 pub mod logs;
 pub mod objects;
-pub mod versions;
 pub mod type_meta;

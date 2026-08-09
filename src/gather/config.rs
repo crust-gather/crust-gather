@@ -29,7 +29,6 @@ use crate::scanners::host_logs::HostLogs;
 use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
 use crate::scanners::logs::{LogSelection, Logs};
-use crate::scanners::versions::Versions;
 
 use super::representation::{CustomLog, NamespaceName, Representation};
 use super::writer::Writer;
@@ -369,7 +368,6 @@ pub struct Config {
 
     pub disable_additional_logs: bool,
     pub skip_logs_collection: bool,
-    pub skip_events_collection: bool,
 }
 
 impl Config {
@@ -455,7 +453,6 @@ enum Collectable {
     Pods(Logs),
     HostLogs(HostLogs),
     Info(Info),
-    Versions(Versions),
 }
 
 impl Collectable {
@@ -466,7 +463,6 @@ impl Collectable {
             Self::Pods(l) => l.collect_retry(),
             Self::HostLogs(u) => u.collect_retry(),
             Self::Info(i) => i.collect_retry(),
-            Self::Versions(v) => v.collect_retry(),
         }
         .await;
     }
@@ -484,7 +480,6 @@ impl Group {
                 Self::Pods(resource) => vec![
                     Collectable::Pods(Logs::new(gather.clone(), LogSelection::Current)),
                     Collectable::Pods(Logs::new(gather.clone(), LogSelection::Previous)),
-                    Collectable::Versions(Versions::new(gather.clone())),
                     Collectable::Dynamic(Dynamic::new(gather, resource)),
                 ],
                 Self::Dynamic(resource) => {
@@ -611,7 +606,6 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            skip_events_collection: false,
         };
 
         // Gzip archive is failing due to timeout.
@@ -651,7 +645,6 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            skip_events_collection: false,
         };
 
         let result = config.collect().await;
@@ -689,7 +682,6 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            skip_events_collection: false,
         };
 
         let result = config.collect().await;

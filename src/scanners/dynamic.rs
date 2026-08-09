@@ -180,7 +180,6 @@ mod test {
                     debug_pod: DebugPod::default(),
                     disable_additional_logs: false,
                     skip_logs_collection: false,
-                    skip_events_collection: false,
                 },
                 ApiResource::erase::<Pod>(&()),
             ),
