@@ -4,12 +4,11 @@ use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt as _};
-use k8s_openapi::serde_json;
 use kube::Api;
 use kube::api::WatchEvent;
 use kube::core::gvk::ParseGroupVersionError;
 use kube::core::params::{ListParams, WatchParams};
-use kube::core::{DynamicObject, ResourceExt, Status};
+use kube::core::{ResourceExt, Status};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -25,13 +24,14 @@ use trait_set::trait_set;
 use crate::gather::config::Secrets;
 use crate::gather::representation::{ArchivePath, Representation, TypeMetaGetter};
 use crate::gather::writer::Writer;
+use crate::scanners::type_meta::TypeMetaDefaulter;
 
 trait_set! {
     pub trait Base = Clone + Debug;
     pub trait ThreadSafe = Send + Sync;
     pub trait SerDe = Serialize + DeserializeOwned;
     pub trait ResourceReq = Base + ThreadSafe + SerDe;
-    pub trait ResourceThreadSafe = ResourceReq + ResourceExt;
+    pub trait ResourceThreadSafe = ResourceReq + ResourceExt + TypeMetaDefaulter;
 }
 
 /// Indicates failure of conversion to Expression
@@ -118,14 +118,13 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
         tracing::debug!("Collecting representation");
 
-        let obj = serde_json::to_value(object)?;
-        let mut data: DynamicObject = serde_json::from_value(obj)?;
-        data.types = Some(data.types.unwrap_or(self.resource().to_type_meta()));
+        let mut object = object.clone();
+        object.default_type_meta(self.resource().to_type_meta());
 
         Ok(vec![
             Representation::new()
-                .with_path(self.path(object))
-                .with_data(serde_saphyr::to_string(&data)?.as_str()),
+                .with_path(self.path(&object))
+                .with_data(serde_saphyr::to_string(&serde_json::to_value(object)?)?.as_str()),
         ])
     }
 

@@ -9,7 +9,7 @@ use anyhow::{self, bail};
 use base64::prelude::*;
 use duration_string::DurationString;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, Pod, Secret};
+use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod, Secret};
 use kube::api::ListParams;
 use kube::config::Kubeconfig;
 use kube::core::ApiResource;
@@ -25,7 +25,6 @@ use tracing::instrument;
 use crate::cli::DebugPod;
 use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
-use crate::scanners::events::Events;
 use crate::scanners::host_logs::HostLogs;
 use crate::scanners::info::Info;
 use crate::scanners::interface::Collect;
@@ -436,14 +435,12 @@ impl Config {
 enum Group {
     Nodes(ApiResource),
     Pods(ApiResource),
-    Events(ApiResource),
     Dynamic(ApiResource),
 }
 
 impl From<ApiResource> for Group {
     fn from(val: ApiResource) -> Self {
         match val {
-            r if r == ApiResource::erase::<Event>(&()) => Self::Events(r),
             r if r == ApiResource::erase::<Pod>(&()) => Self::Pods(r),
             r if r == ApiResource::erase::<Node>(&()) => Self::Nodes(r),
             r => Self::Dynamic(r),
@@ -456,7 +453,6 @@ enum Collectable {
     WatchDynamic(Dynamic),
     Dynamic(Dynamic),
     Pods(Logs),
-    Events(Events),
     HostLogs(HostLogs),
     Info(Info),
     Versions(Versions),
@@ -468,7 +464,6 @@ impl Collectable {
             Self::WatchDynamic(o) => o.watch_retry(),
             Self::Dynamic(o) => o.collect_retry(),
             Self::Pods(l) => l.collect_retry(),
-            Self::Events(e) => e.collect_retry(),
             Self::HostLogs(u) => u.collect_retry(),
             Self::Info(i) => i.collect_retry(),
             Self::Versions(v) => v.collect_retry(),
@@ -492,10 +487,6 @@ impl Group {
                     Collectable::Versions(Versions::new(gather.clone())),
                     Collectable::Dynamic(Dynamic::new(gather, resource)),
                 ],
-                Self::Events(resource) => vec![
-                    Collectable::Events(Events::from(gather.clone())),
-                    Collectable::Dynamic(Dynamic::new(gather, resource)),
-                ],
                 Self::Dynamic(resource) => {
                     vec![Collectable::Dynamic(Dynamic::new(gather, resource))]
                 }
@@ -503,7 +494,6 @@ impl Group {
             GatherMode::Record => match self {
                 Self::Nodes(resource)
                 | Self::Pods(resource)
-                | Self::Events(resource)
                 | Self::Dynamic(resource) => {
                     vec![
                         Collectable::Info(Info::new(gather.clone())),

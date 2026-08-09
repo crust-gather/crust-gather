@@ -15,7 +15,7 @@ use tracing::instrument;
 
 use std::{fmt::Debug, sync::Arc};
 
-use super::interface::{Collect, CollectError, ResourceReq, ResourceThreadSafe};
+use super::interface::{Collect, CollectError, ResourceThreadSafe};
 
 #[derive(Clone)]
 pub struct Objects<R: Resource> {
@@ -36,7 +36,7 @@ impl<R: ResourceThreadSafe> Debug for Objects<R> {
 
 impl<R> Objects<R>
 where
-    R: Resource<DynamicType = ApiResource> + ResourceReq,
+    R: Resource<DynamicType = ApiResource> + ResourceThreadSafe,
 {
     #[must_use]
     pub fn new(config: Config, resource: ApiResource) -> Self {
