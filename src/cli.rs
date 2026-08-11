@@ -968,17 +968,6 @@ pub struct Filters {
     #[arg(long = "skip-logs-collection")]
     #[serde(default)]
     skip_logs_collection: bool,
-
-    /// Disable collection of events, which is enabled by default.
-    ///
-    /// By default, events from all namespaces collected by the gather are included in the collection as an html file.
-    /// This flag allows to disable events collection.
-    ///
-    /// Example:
-    ///   --skip-events-collection
-    #[arg(long = "skip-events-collection")]
-    #[serde(default)]
-    skip_events_collection: bool,
 }
 
 impl TryFrom<&str> for GatherCommands {
@@ -1031,10 +1020,6 @@ impl GatherCommands {
             debug_pod: self.settings.debug_pod.clone(),
             disable_additional_logs: self.additional_logs.disable,
             skip_logs_collection: self.filter.as_ref().is_some_and(|f| f.skip_logs_collection),
-            skip_events_collection: self
-                .filter
-                .as_ref()
-                .is_some_and(|f| f.skip_events_collection),
         })
     }
 

@@ -232,7 +232,6 @@ mod test {
             skip_logs_collection: false,
             collectable: Objects::new_typed(Config {
                 skip_logs_collection: false,
-                skip_events_collection: false,
                 client: test_env.client().expect("client"),
                 filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![filter].into()])])),
                 writer: Writer::new(

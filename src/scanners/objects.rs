@@ -15,7 +15,7 @@ use tracing::instrument;
 
 use std::{fmt::Debug, sync::Arc};
 
-use super::interface::{Collect, CollectError, ResourceReq, ResourceThreadSafe};
+use super::interface::{Collect, CollectError, ResourceThreadSafe};
 
 #[derive(Clone)]
 pub struct Objects<R: Resource> {
@@ -36,7 +36,7 @@ impl<R: ResourceThreadSafe> Debug for Objects<R> {
 
 impl<R> Objects<R>
 where
-    R: Resource<DynamicType = ApiResource> + ResourceReq,
+    R: Resource<DynamicType = ApiResource> + ResourceThreadSafe,
 {
     #[must_use]
     pub fn new(config: Config, resource: ApiResource) -> Self {
@@ -195,7 +195,6 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                skip_events_collection: false,
             },
             ApiResource::erase::<Pod>(&()),
         )
@@ -241,7 +240,6 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                skip_events_collection: false,
             },
             ApiResource::erase::<v1::Namespace>(&()),
         );
@@ -284,7 +282,6 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                skip_events_collection: false,
             },
             ApiResource::erase::<Pod>(&()),
         );

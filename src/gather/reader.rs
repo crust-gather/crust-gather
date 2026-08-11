@@ -143,8 +143,9 @@ pub struct Table {
 }
 
 impl Table {
+    #[instrument(skip_all, err)]
     async fn new(
-        crd_path: PathBuf,
+        crd_path: Option<PathBuf>,
         list: NamedObject,
         items: Vec<impl Serialize>,
         storage: &Storage,
@@ -164,16 +165,15 @@ impl Table {
 
     async fn table_entries(
         storage: &Storage,
-        crd_path: PathBuf,
+        crd_path: Option<PathBuf>,
         list: NamedObject,
     ) -> anyhow::Result<Vec<TablePath>> {
-        let crd: CustomResourceDefinition = match storage.exist(&crd_path) {
-            true => {
-                let mut file = vec![];
-                storage.read(crd_path, &mut file).await?;
-                serde_saphyr::from_slice(&file)?
-            }
-            false => match predefined_table(&list.named_resource.resource) {
+        let crd: CustomResourceDefinition = if let Some(crd_path) = crd_path && storage.exist(&crd_path) {
+            let mut file = vec![];
+            storage.read(crd_path, &mut file).await?;
+            serde_json::from_slice(&file)?
+        } else {
+            match predefined_table(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
                     spec: CustomResourceDefinitionSpec {
                         versions: vec![CustomResourceDefinitionVersion {
@@ -191,7 +191,7 @@ impl Table {
                     ..Default::default()
                 },
                 None => CustomResourceDefinition::default(),
-            },
+            }
         };
 
         let crd_version = crd
@@ -336,7 +336,7 @@ trait GatherObject: ResourceExt + Sized + Serialize {
 
     async fn table_watch_event(
         &self,
-        crd_path: PathBuf,
+        crd_path: Option<PathBuf>,
         list: NamedObject,
         storage: &Storage,
     ) -> anyhow::Result<serde_json::Value> {
@@ -782,7 +782,7 @@ impl Reader {
         tracing::trace!("Reading table...");
 
         Table::new(
-            self.archive.join(list.get_crd_path().unwrap_or_default()),
+            list.get_crd_path().map(|crd| self.archive.join(crd)),
             list.clone(),
             self.items(self.archive.join(list.get_path()), selector)
                 .await?
@@ -808,7 +808,7 @@ impl Reader {
             .await?
             .filter(|obj| selector.matches(obj.labels()))
         {
-            let crd_path = self.archive.join(list.get_crd_path().unwrap_or_default());
+            let crd_path = list.get_crd_path().map(|crd| self.archive.join(crd));
             let event = object
                 .table_watch_event(crd_path, list.clone(), &self.storage)
                 .await?;
@@ -1074,7 +1074,7 @@ mod tests {
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1126,7 +1126,7 @@ mod tests {
         };
         let items = vec!["foo", "bar", "baz"];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1201,7 +1201,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1252,7 +1252,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1294,7 +1294,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1346,7 +1346,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1403,7 +1403,7 @@ mod tests {
             "status": {}
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1476,7 +1476,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
@@ -1543,7 +1543,7 @@ mod tests {
             }
         })];
         let tbl = Table::new(
-            PathBuf::from("hello".to_string()),
+            Some(PathBuf::from("hello".to_string())),
             list,
             items,
             &Storage::FS,
