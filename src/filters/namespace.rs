@@ -62,18 +62,14 @@ where
 {
     #[instrument(fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
-        let empty = obj.namespace().unwrap_or_default().is_empty();
-        let matches = M::matches(self.namespace.matches(&obj.namespace().unwrap_or_default()));
-        match (empty, matches) {
-            (true, _) => None,
-            (false, true) => Some(true),
-            (false, false) => {
-                tracing::debug!(
-                    "Namespace filter excluded object as it is not present in the expected namespace list"
-                );
-                Some(false)
-            }
+        let matches = M::matches(self.namespace.matches(&obj.namespace()?));
+        if !matches {
+            tracing::debug!(
+                "Namespace filter excluded object as it is not present in the expected namespace list"
+            );
         }
+
+        Some(matches)
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, io::Read as _, path::PathBuf, pin::pin, sync::Arc};
+use std::{collections::HashMap, io::Read as _, path::PathBuf, pin::pin, sync::Arc};
 
 use anyhow::bail;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
@@ -13,7 +13,7 @@ use crate::gather::writer::ManifestConfig;
 #[derive(Clone)]
 pub enum Storage {
     FS,
-    OCI(Box<OCIState>),
+    OCI(Arc<OCIState>),
 }
 
 #[derive(Clone)]
@@ -35,31 +35,25 @@ impl Storage {
     #[must_use]
     pub fn new(oci: Option<OCIState>) -> Self {
         match oci {
-            Some(oci) => Self::OCI(Box::new(oci)),
+            Some(oci) => Self::OCI(Arc::new(oci)),
             None => Self::FS,
         }
     }
 
     pub async fn read_raw(&self, path: PathBuf) -> anyhow::Result<String> {
         match self {
-            Self::FS => {
-                let mut file = File::open(path)?;
-                let mut data = String::new();
-                File::read_to_string(&mut file, &mut data)?;
-                Ok(data)
-            }
+            Self::FS => Ok(tokio::fs::read_to_string(&path).await?),
             Self::OCI(oci_state) => Ok(oci_state.read_raw(path).await?),
         }
     }
 
-    pub async fn read<W: AsyncWrite>(&self, path: PathBuf, out: W) -> anyhow::Result<usize> {
+    pub async fn read<W: AsyncWrite>(&self, path: &PathBuf, out: W) -> anyhow::Result<usize> {
         match self {
             Self::FS => {
-                let mut file = File::open(path)?;
-                let mut data = String::new();
-                File::read_to_string(&mut file, &mut data)?;
+                let data = tokio::fs::read(path).await?;
                 let mut out = pin!(out);
-                Ok(out.write(data.as_bytes()).await?)
+                out.write_all(&data).await?;
+                Ok(data.len())
             }
             Self::OCI(oci_state) => Ok(oci_state.read(path, out).await?),
         }
@@ -113,10 +107,10 @@ impl OCIState {
         Ok(String::from_utf8(data)?)
     }
 
-    async fn read<W: AsyncWrite>(&self, path: PathBuf, out: W) -> anyhow::Result<usize> {
+    async fn read<W: AsyncWrite>(&self, path: &PathBuf, out: W) -> anyhow::Result<usize> {
         let layer = self
             .index
-            .get(&path)
+            .get(path)
             .ok_or_else(|| anyhow::anyhow!("missing OCI layer entry for path: {path:?}"))?;
 
         let size = self.pull_blob(layer, out).await?;
@@ -151,6 +145,7 @@ impl OCIState {
 #[cached(
     result = true,
     key = "String",
+    sync_writes = "by_key",
     convert = r#"{ format!("{}@{}", reference, descriptor.digest) }"#
 )]
 pub(crate) async fn pull_blob_cached(

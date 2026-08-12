@@ -105,7 +105,12 @@ impl Collect<Pod> for Logs {
 
         let mut representations = vec![];
 
-        for container in pod.spec.clone().unwrap().containers {
+        let Some(spec) = pod.spec.as_ref() else {
+            return Ok(representations);
+        };
+
+        for container in &spec.containers {
+            let container_name = container.name.clone();
             let logs = match Api::<Pod>::namespaced(
                 self.get_api().into(),
                 pod.namespace().unwrap_or_default().as_ref(),
@@ -113,7 +118,7 @@ impl Collect<Pod> for Logs {
             .logs(
                 pod.name_any().as_str(),
                 &LogParams {
-                    container: Some(container.name.clone()),
+                    container: Some(container_name.clone()),
                     since_time: Some(Timestamp::default()),
                     timestamps: true,
                     ..self.group.clone().into()
@@ -137,8 +142,8 @@ impl Collect<Pod> for Logs {
                         pod,
                         TypeMeta::resource::<Pod>(),
                         match self.group {
-                            LogSelection::Current => LogGroup::Current(Container(container.name)),
-                            LogSelection::Previous => LogGroup::Previous(Container(container.name)),
+                            LogSelection::Current => LogGroup::Current(Container(container_name)),
+                            LogSelection::Previous => LogGroup::Previous(Container(container_name)),
                         },
                     ))
                     .with_data(logs.as_str()),

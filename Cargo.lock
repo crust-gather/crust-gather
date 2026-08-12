@@ -793,12 +793,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47a40f338a8c3505921000b609279775792c07cc21f97a3011578c0c5e1738ae"
 dependencies = [
  "antlr4rust",
+ "base64 0.22.1",
  "chrono",
  "lazy_static",
  "nom",
  "pastey",
  "regex",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 

@@ -51,7 +51,9 @@ impl Secrets {
             data = data.replace(BASE64_STANDARD.encode(b64).as_str(), "xxx");
         }
 
-        repr.clone().with_data(data.as_str())
+        Representation::new()
+            .with_path(repr.path())
+            .with_data(data.as_str())
     }
 }
 
@@ -417,7 +419,7 @@ impl Config {
     }
 
     async fn finish(&self) -> anyhow::Result<()> {
-        let writer = &self.writer.clone();
+        let writer = &self.writer;
         writer.lock().await.finish_oci().await?;
         writer.lock().await.finish_gzip()?;
         drop(writer.lock().await);

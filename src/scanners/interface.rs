@@ -219,20 +219,17 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         while let Some(e) = stream.try_next().await? {
             let now = Utc::now().to_string();
             match e {
-                WatchEvent::Added(obj) => {
-                    let mut obj = obj.clone();
+                WatchEvent::Added(mut obj) => {
                     obj.annotations_mut()
                         .insert(ADDED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?;
                 }
-                WatchEvent::Modified(obj) => {
-                    let mut obj = obj.clone();
+                WatchEvent::Modified(mut obj) => {
                     obj.annotations_mut()
                         .insert(UPDATED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?;
                 }
-                WatchEvent::Deleted(obj) => {
-                    let mut obj = obj.clone();
+                WatchEvent::Deleted(mut obj) => {
                     obj.annotations_mut()
                         .insert(DELETED_ANNOTATION.to_string(), now);
                     self.sync_with_retry(&obj).await?;

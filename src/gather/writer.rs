@@ -337,20 +337,20 @@ impl Writer {
                 // generate diff and write
                 let original = Reader::new(
                     ArchiveReader::new(
-                        archive.clone(),
-                        &Storage::FS,
+                        Arc::new(archive.clone()),
+                        Arc::new(Storage::FS),
                         DEFAULT_OCI_BUFFER_SIZE,
                         false,
                     )
                     .await,
                     Utc::now(),
-                    Storage::FS,
+                    Arc::new(Storage::FS),
                 )
                 .await?
                 .read(file_path.clone())
                 .await?;
                 let updated = serde_saphyr::from_str(repr.data())?;
-                let patch = &diff(&original, &updated);
+                let patch = &diff(&original.json, &updated);
                 if !patch.deref().is_empty() {
                     let mut patches = File::options()
                         .create(true)
