@@ -487,9 +487,7 @@ impl Group {
                 }
             },
             GatherMode::Record => match self {
-                Self::Nodes(resource)
-                | Self::Pods(resource)
-                | Self::Dynamic(resource) => {
+                Self::Nodes(resource) | Self::Pods(resource) | Self::Dynamic(resource) => {
                     vec![
                         Collectable::Info(Info::new(gather.clone())),
                         Collectable::WatchDynamic(Dynamic::new(gather, resource)),

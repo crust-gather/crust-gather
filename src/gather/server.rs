@@ -34,7 +34,9 @@ use tokio::time::{Instant, sleep};
 use crate::{
     cli::{DEFAULT_OCI_BUFFER_SIZE, OCISettings},
     gather::{
-        reader::{ArchiveReader, Destination, Get, List, Log, NamedObject, Reader, Watch},
+        reader::{
+            ArchiveReader, Destination, Get, List, ListResponse, Log, NamedObject, Reader, Watch,
+        },
         representation::TypeMetaGetter,
         storage::{Descriptor, OCIState, Storage, pull_blob_cached},
         writer::{Archive, YamlPath},
@@ -640,7 +642,7 @@ async fn list_items(
     list: Path<List>,
     query: Query<Selector>,
     state: web::Data<ApiState>,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ListResponse> {
     let archive = state
         .archives
         .get(list.get_server())
@@ -650,9 +652,9 @@ async fn list_items(
     let selector = query.0;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            reader.load_table(list, selector).await?
+            reader.load_table(list, selector).await?.into()
         }
-        _ => reader.list(list, selector).await?,
+        _ => reader.list(list, selector).await?.into(),
     })
 }
 

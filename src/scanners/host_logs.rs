@@ -19,7 +19,7 @@ use kube::Api;
 use kube::{
     api::TypeMeta,
     core::{
-        ApiResource, DynamicObject, ObjectMeta, ResourceExt, WatchEvent,
+        ApiResource, ObjectMeta, ResourceExt, WatchEvent,
         params::{DeleteParams, PostParams, WatchParams},
         subresource::AttachParams,
     },
@@ -217,13 +217,9 @@ impl HostLogs {
             status.container_statuses = Some(container_statuses);
         }
 
-        let obj = serde_json::to_value(&archive_pod)?;
-        let mut data: DynamicObject = serde_json::from_value(obj)?;
-        data.types = Some(data.types.unwrap_or_else(TypeMeta::resource::<Pod>));
-
         Ok(Representation::new()
             .with_path(ArchivePath::to_path(pod, TypeMeta::resource::<Pod>()))
-            .with_data(&serde_saphyr::to_string(&data)?))
+            .with_data(&serde_saphyr::to_string(&archive_pod)?))
     }
 
     async fn read_stream<R>(reader: Option<R>) -> anyhow::Result<String>
@@ -427,6 +423,7 @@ impl HostLogs {
 #[cfg(test)]
 mod test {
     use k8s_openapi::api::core::v1::PodStatus;
+    use kube::api::DynamicObject;
 
     use super::*;
 

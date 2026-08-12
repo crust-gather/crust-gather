@@ -997,7 +997,7 @@ impl GatherCommands {
             None => vec![].into(),
         };
 
-        secrets.0.extend(env_secrets.0.into_iter());
+        secrets.0.extend(env_secrets.0);
 
         let writer: Writer = self.settings.to_writer().await?;
 
@@ -1012,7 +1012,7 @@ impl GatherCommands {
                 .logs
                 .clone()
                 .into_iter()
-                .chain(self.additional_logs.additional_logs.clone().into_iter())
+                .chain(self.additional_logs.additional_logs.clone())
                 .map(Into::into)
                 .collect(),
             duration: self.settings.duration.unwrap_or_default(),
