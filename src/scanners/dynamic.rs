@@ -11,6 +11,7 @@ use crate::gather::{
     representation::{Representation, TypeMetaGetter},
     writer::Writer,
 };
+use crate::scanners::type_meta::TypeMetaDefaulter as _;
 
 use super::{
     interface::{Collect, CollectError},
@@ -56,13 +57,13 @@ impl Collect<DynamicObject> for Dynamic {
     async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
         tracing::debug!("Collecting representations");
 
+        let mut object = object.clone();
+        object.default_type_meta(self.resource().to_type_meta());
+
         Ok(vec![
             Representation::new()
-                .with_path(self.path(object))
-                .with_data(&serde_saphyr::to_string(&DynamicObject {
-                    types: Some(self.resource().to_type_meta()),
-                    ..object.clone()
-                })?),
+                .with_path(self.path(&object))
+                .with_data(&serde_saphyr::to_string(&object)?),
         ])
     }
 

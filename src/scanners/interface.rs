@@ -124,7 +124,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(serde_saphyr::to_string(&serde_json::to_value(object)?)?.as_str()),
+                .with_data(serde_saphyr::to_string(&object)?.as_str()),
         ])
     }
 

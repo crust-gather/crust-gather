@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use derive_more::From;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream};
 use json_patch::{AddOperation, PatchOperation, ReplaceOperation, patch};
 use jsonptr::PointerBuf;
@@ -111,6 +112,13 @@ impl List {
     }
 }
 
+#[derive(Serialize, From)]
+#[serde(untagged)]
+pub enum ListResponse {
+    List(ObjectValueList),
+    Table(ResultTable),
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ObjectValueList {
     #[serde(flatten)]
@@ -168,10 +176,12 @@ impl Table {
         crd_path: Option<PathBuf>,
         list: NamedObject,
     ) -> anyhow::Result<Vec<TablePath>> {
-        let crd: CustomResourceDefinition = if let Some(crd_path) = crd_path && storage.exist(&crd_path) {
+        let crd: CustomResourceDefinition = if let Some(crd_path) = crd_path
+            && storage.exist(&crd_path)
+        {
             let mut file = vec![];
             storage.read(crd_path, &mut file).await?;
-            serde_json::from_slice(&file)?
+            serde_saphyr::from_slice(&file)?
         } else {
             match predefined_table(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
@@ -284,6 +294,35 @@ impl Table {
             "columnDefinitions": self.definitions(),
             "rows": self.rows()?,
         }))
+    }
+
+    fn to_result_table(&self) -> anyhow::Result<ResultTable> {
+        ResultTable::from_table(self)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultTable {
+    pub kind: String,
+    pub api_version: String,
+    pub metadata: ObjectMeta,
+    pub column_definitions: Vec<serde_json::Value>,
+    pub rows: Vec<serde_json::Value>,
+}
+
+impl ResultTable {
+    pub fn from_table(table: &Table) -> anyhow::Result<ResultTable> {
+        Ok(ResultTable {
+            kind: "Table".to_string(),
+            api_version: "meta.k8s.io/v1".to_string(),
+            metadata: ObjectMeta {
+                resource_version: Some("1".to_string()),
+                ..Default::default()
+            },
+            column_definitions: table.definitions(),
+            rows: table.rows()?,
+        })
     }
 }
 
@@ -479,9 +518,9 @@ impl<'a> NamedResourcesState<'a> {
         };
 
         if !self.served_crs_only {
-            return Some(resource)
+            return Some(resource);
         }
-        
+
         self.only_served_stored_resource(resource).await
     }
 
@@ -760,8 +799,8 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.table(list, selector).await?.to_value()
+    ) -> anyhow::Result<ResultTable> {
+        self.table(list, selector).await?.to_result_table()
     }
 
     fn archive_time(&self) -> DateTime<Utc> {
@@ -902,7 +941,7 @@ impl Reader {
         selector: Selector,
     ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
         let items = Arc::new(sync::Mutex::new(vec![]));
-        stream::iter(self.storage.matching_paths(path)?.into_iter())
+        stream::iter(self.storage.matching_paths(path)?)
             .map(|path| {
                 let selector = &selector;
                 let items = items.clone();
@@ -947,19 +986,18 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ObjectValueList> {
         tracing::trace!("Reading list...");
 
         let path = self.archive.join(list.get_path());
 
-        serde_json::to_value(ObjectValueList::new(
+        Ok(ObjectValueList::new(
             list,
             self.items(path, selector)
                 .await?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
         ))
-        .map_err(Into::into)
     }
 
     pub async fn read<R: DeserializeOwned + Clone>(&self, path: PathBuf) -> anyhow::Result<R> {
