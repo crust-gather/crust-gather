@@ -27,15 +27,17 @@ use kube::{
     },
 };
 use oci_client::{Client, Reference, manifest::OciImageManifest};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep};
 
 use crate::{
     cli::{DEFAULT_OCI_BUFFER_SIZE, OCISettings},
     gather::{
+        json_resource::JsonResourceExt,
         reader::{
             ArchiveReader, Destination, Get, List, ListResponse, Log, NamedObject, Reader, Watch,
+            WatchResponse,
         },
         representation::TypeMetaGetter,
         storage::{Descriptor, OCIState, Storage, pull_blob_cached},
@@ -150,7 +152,7 @@ struct ApiState {
     kubeconfig_path: PathBuf,
     previous_context: Option<String>,
     serve_time: DateTime<Utc>,
-    storage: Storage,
+    storage: Arc<Storage>,
 }
 
 impl ApiState {
@@ -196,8 +198,8 @@ impl Api {
             readers.insert(
                 Self::convert_name(archive.name().to_string_lossy().to_string()),
                 ArchiveReader::new(
-                    archive,
-                    &Storage::FS,
+                    Arc::new(archive),
+                    Arc::new(Storage::FS),
                     DEFAULT_OCI_BUFFER_SIZE,
                     served_crs_only,
                 )
@@ -211,7 +213,7 @@ impl Api {
                 kubeconfig_path,
                 previous_context,
                 serve_time: Utc::now(),
-                storage: Storage::FS,
+                storage: Arc::new(Storage::FS),
             },
             socket,
         })
@@ -258,21 +260,21 @@ impl Api {
         let config = serde_json::from_slice(&config)?;
         let index = Arc::new(Self::collect_index(&client, &reference, &auth, manifest).await?);
 
-        let storage = Storage::new(Some(OCIState {
+        let storage = Arc::new(Storage::new(Some(OCIState {
             reference: reference.clone(),
             client,
             config,
             index,
             auth,
-        }));
+        })));
 
         let search = ArchiveSearch::default();
         let mut archives = HashMap::new();
         archives.insert(
             Self::convert_name(reference.repository().to_string()),
             ArchiveReader::new(
-                Archive::new(search.path()),
-                &storage,
+                Arc::new(Archive::new(search.path())),
+                storage.clone(),
                 oci.buffer_size,
                 served_crs_only,
             )
@@ -285,7 +287,7 @@ impl Api {
                 kubeconfig_path,
                 previous_context,
                 serve_time: Utc::now(),
-                storage,
+                storage: storage.clone(),
             },
             socket,
         })
@@ -383,7 +385,7 @@ impl Api {
         config.current_context = match config
             .contexts
             .iter()
-            .find(|c| Some(c.name.clone()) == state.previous_context)
+            .find(|c| Some(c.name.as_str()) == state.previous_context.as_deref())
         {
             Some(context) => Some(context.name.clone()),
             None => config.contexts.first().map(|c| c.name.clone()),
@@ -619,7 +621,7 @@ async fn api_namespaced_list(
     }
 }
 
-fn publish(val: serde_json::Value) -> Result<Bytes, anyhow::Error> {
+fn publish(val: impl Serialize) -> Result<Bytes, anyhow::Error> {
     Ok(Bytes::copy_from_slice(&serde_json::to_vec(&val)?))
 }
 
@@ -663,13 +665,21 @@ async fn watch_events(
     list: NamedObject,
     query: Query<Selector>,
     reader: &Reader,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+) -> anyhow::Result<Vec<WatchResponse>> {
     let selector = query.0;
     Ok(match accept.0.as_slice() {
-        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => {
-            reader.watch_table_events(list, selector).await?
-        }
-        _ => reader.watch_events(list, selector).await?,
+        [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
+            .watch_table_events(list, selector)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        _ => reader
+            .watch_events(list, selector)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     })
 }
 
@@ -725,7 +735,7 @@ async fn watch_response(
                 let Some(true) = watch.send_initial_events &&
                 !bookmark_published {
                 let event = bookmark_event(list.to_type_meta());
-                yield publish(serde_json::to_value(event)?);
+                yield publish(event);
                 bookmark_published = true;
             }
 
@@ -879,7 +889,7 @@ fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: boo
     logs.split_inclusive('\n').map(convert_timestamp).collect()
 }
 
-async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<serde_json::Value> {
+async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<JsonResourceExt> {
     let archive = state
         .archives
         .get(get.get_server())

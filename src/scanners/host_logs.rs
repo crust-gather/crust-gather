@@ -150,7 +150,7 @@ impl Collect<Node> for HostLogs {
 
         let node_name = node.name_any();
 
-        let pod = Self::get_template_pod(&self.debug_pod, node_name.clone());
+        let pod = Self::get_template_pod(&self.debug_pod, node_name);
         defer! {
             let _ = block_on(self.delete(&pod));
         }
