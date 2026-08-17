@@ -48,6 +48,10 @@ impl Collect<Node> for Info {
         Ok(true)
     }
 
+    fn extension(&self) -> &str {
+        &self.collectable.extension
+    }
+
     #[instrument(skip_all, err)]
     async fn collect(&self) -> anyhow::Result<()> {
         let c = self.get_api().into_client();

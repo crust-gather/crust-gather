@@ -46,6 +46,10 @@ impl Collect<DynamicObject> for Dynamic {
         self.collectable.filter(obj)
     }
 
+    fn extension(&self) -> &str {
+        &self.collectable.extension
+    }
+
     /// Converts the provided `DynamicObject` into a vector of Representation
     /// with YAML object data and output path for the object.
     #[instrument(skip_all, fields(
@@ -63,7 +67,7 @@ impl Collect<DynamicObject> for Dynamic {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(&serde_saphyr::to_string(&object)?),
+                .with_data(&self.to_string()(&object)?),
         ])
     }
 
@@ -181,6 +185,7 @@ mod test {
                     debug_pod: DebugPod::default(),
                     disable_additional_logs: false,
                     skip_logs_collection: false,
+                    extension: String::new(),
                 },
                 ApiResource::erase::<Pod>(&()),
             ),

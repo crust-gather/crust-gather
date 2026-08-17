@@ -98,6 +98,10 @@ impl Collect<Pod> for Logs {
         self.collectable.filter(obj)
     }
 
+    fn extension(&self) -> &str {
+        &self.collectable.extension
+    }
+
     /// Collects container logs representations.
     #[instrument(skip_all, fields(name = pod.name_any(), namespace = pod.namespace(), group=self.group.to_string()), err)]
     async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
@@ -256,6 +260,7 @@ mod test {
                 systemd_units: Vec::default(),
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
+                extension: String::new(),
             }),
             group: LogSelection::Current,
         }

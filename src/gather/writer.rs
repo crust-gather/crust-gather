@@ -214,10 +214,10 @@ pub struct OCIState {
     buffer_size: usize,
 }
 
-// YamlPath contains a full path in the yaml file in archive
-// and a range of bytes to extract yaml from a list
+// JsonPath contains a full path in the json file in archive
+// and a range of bytes to extract json from a list
 #[derive(Serialize, Deserialize)]
-pub struct YamlPath {
+pub struct JsonPath {
     pub path: PathBuf,
     pub from: usize,
     pub to: usize,
@@ -227,6 +227,17 @@ pub struct YamlPath {
 pub struct ManifestConfig {
     #[serde(default)]
     pub compressed: bool,
+    #[serde(default)]
+    pub json: bool,
+}
+
+impl ManifestConfig {
+    pub fn extension(&self) -> &str {
+        match self.json {
+            true => "json",
+            false => "yaml",
+        }
+    }
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -407,13 +418,25 @@ impl Writer {
             ),
             Encoding::Oci(image_ref) => Self::Oci(OCIState {
                 archive: archive.clone(),
-                config: ManifestConfig { compressed: true },
                 client: Client::new(client_config.unwrap_or_default()),
+                config: ManifestConfig {
+                    compressed: true,
+                    json: true,
+                },
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),
                 buffer_size,
             }),
         })
+    }
+
+    pub fn extension(&self) -> &str {
+        match self {
+            Writer::Path(_) => ".yaml",
+            Writer::Gzip(..) => ".yaml",
+            Writer::Zip(..) => ".yaml",
+            Writer::Oci(_) => ".json",
+        }
     }
 }
 
@@ -440,7 +463,7 @@ impl OCIState {
 
         let resource_paths = Arc::new(Mutex::new(BTreeMap::default()));
         let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())
-            .filter_map(|path| Self::prepare_resource_layer(path, resource_paths.clone()))
+            .filter_map(|path| self.prepare_resource_layer(path, resource_paths.clone()))
             .collect()
             .await;
 
@@ -453,22 +476,21 @@ impl OCIState {
 
         let resource_layer_entries = { resource_paths.lock().await.clone() };
         let resources = stream::iter(resource_layer_entries)
-            .filter_map(|(p, yamls)| {
+            .filter_map(|(p, jsons)| {
                 future::ready(
-                    Self::combined_oci_archive_layer(&yamls)
+                    Self::combined_oci_archive_layer(&jsons)
                         .ok()
-                        .map(|data| (p + ".yaml", data)),
+                        .map(|data| (p + self.config.extension(), data)),
                 )
             })
             .map(|(p, data)| self.push_oci_layer(p, data, layers.clone()))
             .buffer_unordered(self.buffer_size)
             .try_for_each(future::ok::<(), anyhow::Error>);
 
-        let yamls = Self::prepare_index(resource_paths.lock().await.values().cloned().collect())?;
-        let yamls =
-            serde_saphyr::to_string(&yamls).context("unable to collect yamls index file")?;
+        let jsons = Self::prepare_index(resource_paths.lock().await.values().cloned().collect())?;
+        let jsons = serde_saphyr::to_string(&jsons).context("unable to collect json index file")?;
 
-        let index_layer = self.push_oci_layer("index.yaml".to_string(), yamls, layers.clone());
+        let index_layer = self.push_oci_layer("index.yaml".to_string(), jsons, layers.clone());
 
         try_join!(resources, raw_layers, index_layer).context("failed to upload OCI layers")?;
 
@@ -526,15 +548,15 @@ impl OCIState {
         Ok((digest, data.len()))
     }
 
-    fn prepare_index(yamls: Vec<Vec<PathBuf>>) -> anyhow::Result<Vec<YamlPath>> {
+    fn prepare_index(jsons: Vec<Vec<PathBuf>>) -> anyhow::Result<Vec<JsonPath>> {
         let mut list = vec![];
-        for yaml_list in yamls {
-            let mut index = 0;
-            for yaml in yaml_list {
-                let path = yaml.to_string_lossy();
-                let mut file = File::open(&yaml).context(format!("failed to open file {path}"))?;
-                list.push(YamlPath {
-                    path: yaml,
+        for json_list in jsons {
+            let mut index = 1;
+            for json in json_list {
+                let path = json.to_string_lossy();
+                let mut file = File::open(&json).context(format!("failed to open file {path}"))?;
+                list.push(JsonPath {
+                    path: json,
                     from: index,
                     to: {
                         let mut data = vec![];
@@ -543,7 +565,7 @@ impl OCIState {
                         index
                     },
                 });
-                index += 4;
+                index += 1;
             }
         }
 
@@ -551,6 +573,7 @@ impl OCIState {
     }
 
     async fn prepare_resource_layer(
+        &self,
         path: glob::GlobResult,
         resource_layers: Arc<Mutex<BTreeMap<String, Vec<PathBuf>>>>,
     ) -> Option<PathBuf> {
@@ -568,7 +591,8 @@ impl OCIState {
             return Some(path);
         };
 
-        if ext != "yaml" || path.to_string_lossy().ends_with("version.yaml") {
+        if (ext != "yaml" && ext != "json") || path.parent() == Some(self.archive.path().as_path())
+        {
             return Some(path);
         }
 
@@ -620,18 +644,17 @@ impl OCIState {
     }
 
     #[instrument(skip_all, err)]
-    fn combined_oci_archive_layer(yamls: &Vec<PathBuf>) -> anyhow::Result<String> {
+    fn combined_oci_archive_layer(jsons: &Vec<PathBuf>) -> anyhow::Result<String> {
         let mut files: Vec<serde_json::Value> = vec![];
-        for yaml in yamls {
-            let path = yaml.to_string_lossy();
-            let file = File::open(yaml).context(format!("failed to open file {path}"))?;
+        for json in jsons {
+            let path = json.to_string_lossy();
+            let file = File::open(json).context(format!("failed to open file {path}"))?;
             files.push(
-                serde_saphyr::from_reader(file).context(format!("failed to read file {path}"))?,
+                serde_json::from_reader(file).context(format!("failed to read file {path}"))?,
             );
         }
 
-        let data = serde_saphyr::to_string_multiple(&files)
-            .context("failed to serialize a list of yamls")?;
+        let data = serde_json::to_string(&files).context("failed to serialize a list of jsons")?;
         Ok(data)
     }
 

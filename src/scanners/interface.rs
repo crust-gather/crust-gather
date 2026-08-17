@@ -92,15 +92,27 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// representations to.
     fn get_writer(&self) -> Arc<Mutex<Writer>>;
 
+    /// Returns suffix for the generic file extension.
+    fn extension(&self) -> &str;
+
+    /// Backend agnosting to_string implementation for the representation serialization
+    fn to_string<T: Serialize>(&self) -> fn(value: &T) -> anyhow::Result<String> {
+        if self.extension() == ".json" {
+            return |v| Ok(serde_json::to_string(v)?);
+        }
+
+        |v| Ok(serde_saphyr::to_string(v)?)
+    }
+
     /// Constructs the path for storing the collected Kubernetes object.
     ///
     /// The path is constructed differently for cluster-scoped vs namespaced objects.
-    /// Cluster-scoped objects are stored under `cluster/{api_version}/{kind}/{name}.yaml`.
-    /// Namespaced objects are stored under `namespaces/{namespace}/{api_version}/{kind}/{name}.yaml`.
+    /// Cluster-scoped objects are stored under `cluster/{api_version}/{kind}/{name}.json`.
+    /// Namespaced objects are stored under `namespaces/{namespace}/{api_version}/{kind}/{name}.json`.
     ///
     /// Example output: `crust-gather/namespaces/default/pod/nginx-deployment-549849849849849849849
     fn path(&self, obj: &R) -> ArchivePath {
-        ArchivePath::to_path(obj, self.resource().to_type_meta())
+        ArchivePath::to_path(obj, self.resource().to_type_meta(), self.extension())
     }
 
     /// Filters objects based on their `GroupVersionKind` and the object itself.
@@ -124,7 +136,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(serde_saphyr::to_string(&object)?.as_str()),
+                .with_data(self.to_string()(&object)?.as_str()),
         ])
     }
 

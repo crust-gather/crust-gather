@@ -139,11 +139,15 @@ impl ArchivePath {
         path.replace([':', '*', '?', '|'], "-")
     }
 
-    pub fn to_path<R: ResourceThreadSafe>(resource: &R, type_meta: TypeMeta) -> Self {
-        Self::new_path(resource.meta(), type_meta)
+    pub fn to_path<R: ResourceThreadSafe>(resource: &R, type_meta: TypeMeta, suffix: &str) -> Self {
+        Self::new_path(resource.meta(), type_meta, suffix)
     }
 
-    pub fn new_path(namespace_name: impl NamespacedName, type_meta: TypeMeta) -> Self {
+    pub fn new_path(
+        namespace_name: impl NamespacedName,
+        type_meta: TypeMeta,
+        suffix: &str,
+    ) -> Self {
         let (api_version, kind) = (
             type_meta.api_version.to_lowercase().replace('/', "-"),
             type_meta.kind.to_lowercase(),
@@ -151,15 +155,15 @@ impl ArchivePath {
 
         match (namespace_name.name(), namespace_name.namespace()) {
             (Some(name), Some(namespace)) => Self::Namespaced(
-                format!("namespaces/{namespace}/{api_version}/{kind}/{name}.yaml").into(),
+                format!("namespaces/{namespace}/{api_version}/{kind}/{name}{suffix}").into(),
             ),
             (Some(name), None) => {
-                Self::Cluster(format!("cluster/{api_version}/{kind}/{name}.yaml").into())
+                Self::Cluster(format!("cluster/{api_version}/{kind}/{name}{suffix}").into())
             }
             (None, Some(namespace)) => Self::NamespacedList(
-                format!("namespaces/{namespace}/{api_version}/{kind}/*.yaml").into(),
+                format!("namespaces/{namespace}/{api_version}/{kind}/*{suffix}").into(),
             ),
-            (None, None) => Self::ClusterList(format!("**/{api_version}/{kind}/*.yaml").into()),
+            (None, None) => Self::ClusterList(format!("**/{api_version}/{kind}/*{suffix}").into()),
         }
     }
 
@@ -168,7 +172,7 @@ impl ArchivePath {
         type_meta: TypeMeta,
         logs: LogGroup,
     ) -> Self {
-        match Self::new_path(namespace_name, type_meta) {
+        match Self::new_path(namespace_name, type_meta, ".json") {
             Self::Namespaced(path) | Self::Cluster(path) => match logs {
                 LogGroup::Current(Container(container)) => {
                     Self::Logs(path.with_extension("").join(container).join("current.log"))
@@ -383,9 +387,9 @@ mod tests {
     #[test]
     fn test_cluster_list_path() {
         let resource = Pod::default();
-        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>());
+        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>(), ".json");
 
-        assert_eq!(result, ArchivePath::ClusterList("**/v1/pod/*.yaml".into()));
+        assert_eq!(result, ArchivePath::ClusterList("**/v1/pod/*.json".into()));
     }
 
     #[test]
@@ -398,11 +402,11 @@ mod tests {
             ..Default::default()
         };
 
-        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>());
+        let result = ArchivePath::new_path(resource.meta(), TypeMeta::resource::<Pod>(), ".json");
 
         assert_eq!(
             result,
-            ArchivePath::NamespacedList("namespaces/default/v1/pod/*.yaml".into())
+            ArchivePath::NamespacedList("namespaces/default/v1/pod/*.json".into())
         );
     }
 }

@@ -94,6 +94,29 @@ impl Storage {
         }
         Ok(paths)
     }
+
+    pub fn extension(&self) -> &str {
+        match self {
+            Storage::FS => ".yaml",
+            Storage::OCI(ocistate) if ocistate.config.json => ".json",
+            Storage::OCI(_) => ".yaml",
+        }
+    }
+
+    /// Reads bytes. FS uses YAML. OCI uses JSON when the flag is on.
+    pub fn from_slice<T: serde::de::DeserializeOwned + Send>(
+        &self,
+        data: Vec<u8>,
+    ) -> anyhow::Result<T> {
+        match self {
+            Self::FS => Ok(serde_saphyr::from_slice(&data)?),
+            Self::OCI(state) => Ok(if state.config.json {
+                serde_json::from_slice(&data)?
+            } else {
+                serde_saphyr::from_slice(&data)?
+            }),
+        }
+    }
 }
 
 impl OCIState {
@@ -171,4 +194,28 @@ pub(crate) async fn pull_blob_cached(
     let mut objects = vec![];
     dec.read_to_end(&mut objects)?;
     Ok(objects)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::serde_json;
+
+    #[test]
+    fn test_manifest_config_default() {
+        // Old archives have no json field, it defaults to false
+        let data: Vec<u8> = b"{\"compressed\": true}".to_vec();
+        let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
+        assert!(config.compressed);
+        assert!(!config.json);
+    }
+
+    #[test]
+    fn test_manifest_config_new() {
+        // New archives set json to true
+        let data: Vec<u8> = b"{\"compressed\": true, \"json\": true}".to_vec();
+        let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
+        assert!(config.compressed);
+        assert!(config.json);
+    }
 }

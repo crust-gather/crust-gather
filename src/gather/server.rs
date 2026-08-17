@@ -41,7 +41,7 @@ use crate::{
         },
         representation::TypeMetaGetter,
         storage::{Descriptor, OCIState, Storage, pull_blob_cached},
-        writer::{Archive, YamlPath},
+        writer::{Archive, JsonPath, ManifestConfig},
     },
 };
 
@@ -257,8 +257,9 @@ impl Api {
         let auth = oci.to_auth();
         let (manifest, _) = client.pull_image_manifest(&reference, &auth).await?;
         let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true).await?;
-        let config = serde_json::from_slice(&config)?;
-        let index = Arc::new(Self::collect_index(&client, &reference, &auth, manifest).await?);
+        let config: ManifestConfig = serde_json::from_slice(&config)?;
+        let index =
+            Arc::new(Self::collect_index(&client, &reference, &auth, manifest, &config).await?);
 
         let storage = Arc::new(Storage::new(Some(OCIState {
             reference: reference.clone(),
@@ -298,6 +299,7 @@ impl Api {
         reference: &Reference,
         auth: &oci_client::secrets::RegistryAuth,
         manifest: OciImageManifest,
+        config: &ManifestConfig,
     ) -> anyhow::Result<HashMap<PathBuf, Descriptor>> {
         let mut index = HashMap::new();
 
@@ -316,16 +318,16 @@ impl Api {
         };
 
         let data = pull_blob_cached(client, reference, auth, index_layer, true).await?;
-        let resource_paths: Vec<YamlPath> = serde_saphyr::from_slice(&data)?;
-        for yaml_path in resource_paths {
-            let resource_path = yaml_path.path;
+        let resource_paths: Vec<JsonPath> = serde_saphyr::from_slice(&data)?;
+        for json_path in resource_paths {
+            let resource_path = json_path.path;
             let Some(parent_path) = resource_path.parent() else {
                 anyhow::bail!(format!(
                     "index layer must reference a parent list object: {resource_path:?}"
                 ))
             };
 
-            let Some(parent) = index.get(&parent_path.with_extension("yaml")) else {
+            let Some(parent) = index.get(&parent_path.with_extension(config.extension())) else {
                 anyhow::bail!(format!(
                     "index layer must reference a yaml list object: {resource_path:?}"
                 ))
@@ -333,7 +335,7 @@ impl Api {
 
             index.insert(
                 resource_path,
-                Descriptor::ListOciDescriptor(parent.deref().clone(), yaml_path.from, yaml_path.to),
+                Descriptor::ListOciDescriptor(parent.deref().clone(), json_path.from, json_path.to),
             );
         }
 
