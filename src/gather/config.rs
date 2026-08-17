@@ -367,6 +367,7 @@ pub struct Config {
     pub duration: RunDuration,
     pub systemd_units: Vec<String>,
     pub debug_pod: DebugPod,
+    pub extension: String,
 
     pub disable_additional_logs: bool,
     pub skip_logs_collection: bool,
@@ -635,6 +636,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
+            extension: "".to_string(),
         };
 
         // Gzip archive is failing due to timeout.
@@ -674,6 +676,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
+            extension: "".to_string(),
         };
 
         let result = config.collect().await;
@@ -711,6 +714,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
+            extension: "".to_string(),
         };
 
         let result = config.collect().await;

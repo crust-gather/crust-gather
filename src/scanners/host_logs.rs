@@ -138,6 +138,10 @@ impl Collect<Node> for HostLogs {
         self.collectable.filter(obj)
     }
 
+    fn extension(&self) -> &str {
+        &self.collectable.extension
+    }
+
     /// Collects container logs representations.
     #[instrument(skip_all, fields(node = node.name_any()), err)]
     async fn representations(&self, node: &Node) -> anyhow::Result<Vec<Representation>> {
@@ -158,7 +162,7 @@ impl Collect<Node> for HostLogs {
 
         let mut representations = vec![];
         let logs = self.logs.iter().map(|l| l.path.clone()).collect();
-        representations.push(Self::pod_representation(&pod, logs)?);
+        representations.push(self.pod_representation(&pod, logs)?);
 
         for log in self.logs.deref() {
             let logs = self.collect_logs(&pod, log).await?;
@@ -180,6 +184,7 @@ impl Collect<Node> for HostLogs {
 
 impl HostLogs {
     fn pod_representation(
+        &self,
         pod: &Pod,
         log_containers: Vec<String>,
     ) -> anyhow::Result<Representation> {
@@ -218,8 +223,12 @@ impl HostLogs {
         }
 
         Ok(Representation::new()
-            .with_path(ArchivePath::to_path(pod, TypeMeta::resource::<Pod>()))
-            .with_data(&serde_saphyr::to_string(&archive_pod)?))
+            .with_path(ArchivePath::to_path(
+                pod,
+                TypeMeta::resource::<Pod>(),
+                self.extension(),
+            ))
+            .with_data(&self.to_string()(&archive_pod)?))
     }
 
     async fn read_stream<R>(reader: Option<R>) -> anyhow::Result<String>
@@ -416,19 +425,63 @@ impl HostLogs {
 
         Ok(Representation::new()
             .with_path(path)
-            .with_data(&serde_saphyr::to_string(&result)?))
+            .with_data(&self.to_string()(&result)?))
     }
 }
 
 #[cfg(test)]
 mod test {
+
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
     use k8s_openapi::api::core::v1::PodStatus;
     use kube::api::DynamicObject;
 
+    use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
+    use crate::filters::filter::{FilterGroup, FilterList, Include};
+    use crate::filters::namespace::Namespace;
+    use crate::gather::config::{GatherMode, Secrets};
+    use crate::gather::writer::{Archive, Encoding, Writer};
+
     use super::*;
 
-    #[test]
-    fn pod_representation_uses_regular_pod_archive_path() {
+    #[tokio::test]
+    async fn pod_representation_uses_regular_pod_archive_path() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let file_path = tmp_dir.path().join("test");
+        let f = Namespace::<Include>::try_from("default").unwrap();
+        let host_logs = HostLogs::from(Config {
+            client,
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![vec![f].into()])])),
+            writer: Writer::new(
+                &Archive::new(file_path),
+                &Encoding::Path,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
+            secrets: Secrets::default(),
+            mode: GatherMode::Collect,
+            additional_logs: Vec::default(),
+            duration: "1m".try_into().unwrap(),
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod {
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            disable_additional_logs: false,
+            skip_logs_collection: false,
+            extension: ".json".to_string(),
+        });
         let pod = HostLogs::get_template_pod(
             &DebugPod {
                 namespace: Some("default".into()),
@@ -437,14 +490,15 @@ mod test {
             "worker-1".into(),
         );
 
-        let representation =
-            HostLogs::pod_representation(&pod, vec!["kubelet-log-path".to_string()]).unwrap();
+        let representation = host_logs
+            .pod_representation(&pod, vec!["kubelet-log-path".to_string()])
+            .unwrap();
         let dynamic_pod: DynamicObject = serde_saphyr::from_str(representation.data()).unwrap();
         let archived_pod: Pod = serde_saphyr::from_str(representation.data()).unwrap();
 
         assert_eq!(
             representation.path(),
-            ArchivePath::Namespaced("namespaces/default/v1/pod/worker-1.yaml".into())
+            ArchivePath::Namespaced("namespaces/default/v1/pod/worker-1.json".into())
         );
         assert!(pod.metadata.creation_timestamp.is_some());
         assert_eq!(dynamic_pod.types.unwrap(), TypeMeta::resource::<Pod>());

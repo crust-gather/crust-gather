@@ -1000,6 +1000,7 @@ impl GatherCommands {
         secrets.0.extend(env_secrets.0);
 
         let writer: Writer = self.settings.to_writer().await?;
+        let extension = writer.extension().to_string();
 
         Ok(Config {
             client: self.client().await?,
@@ -1020,6 +1021,7 @@ impl GatherCommands {
             debug_pod: self.settings.debug_pod.clone(),
             disable_additional_logs: self.additional_logs.disable,
             skip_logs_collection: self.filter.as_ref().is_some_and(|f| f.skip_logs_collection),
+            extension,
         })
     }
 
