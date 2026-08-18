@@ -46,7 +46,7 @@ indicatif = "0.18.4"
 pin-project = "1.1.13"
 cel = "0.13"
 kube-cel = { version = "0.8.0", features = ["strings", "lists", "format"] }
-unselector = "0.2.0"
+unselector = "0.3.0"
 derive_more = { version = "2.1.1", features = ["deref"] }
 serde-saphyr = "1.0.0"
 scopeguard = "1.2.0"
