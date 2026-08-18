@@ -41,7 +41,7 @@ use crate::{
 };
 
 use super::{
-    interface::{Collect, CollectError},
+    interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
 
@@ -138,8 +138,8 @@ impl Collect<Node> for HostLogs {
         self.collectable.filter(obj)
     }
 
-    fn extension(&self) -> &str {
-        &self.collectable.extension
+    fn extension(&self) -> Extension {
+        self.collectable.extension
     }
 
     /// Collects container logs representations.
@@ -228,7 +228,7 @@ impl HostLogs {
                 TypeMeta::resource::<Pod>(),
                 self.extension(),
             ))
-            .with_data(&self.to_string()(&archive_pod)?))
+            .with_data(&self.extension().to_string(&archive_pod)?))
     }
 
     async fn read_stream<R>(reader: Option<R>) -> anyhow::Result<String>
@@ -425,12 +425,13 @@ impl HostLogs {
 
         Ok(Representation::new()
             .with_path(path)
-            .with_data(&self.to_string()(&result)?))
+            .with_data(&self.extension().to_string(&result)?))
     }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::scanners::interface::Extension;
 
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -480,7 +481,7 @@ mod test {
             },
             disable_additional_logs: false,
             skip_logs_collection: false,
-            extension: ".json".to_string(),
+            extension: Extension::Json,
         });
         let pod = HostLogs::get_template_pod(
             &DebugPod {

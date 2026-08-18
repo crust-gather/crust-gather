@@ -46,6 +46,7 @@ use crate::gather::{
     reader::{ArchiveReader, Reader},
     storage::Storage,
 };
+use crate::scanners::interface::Extension;
 
 use super::representation::{ArchivePath, Representation};
 
@@ -235,10 +236,10 @@ pub struct ManifestConfig {
 }
 
 impl ManifestConfig {
-    pub fn extension(&self) -> &str {
+    pub fn extension(&self) -> Extension {
         match self.json {
-            true => "json",
-            false => "yaml",
+            true => Extension::Json,
+            false => Extension::Yaml,
         }
     }
 }
@@ -442,12 +443,12 @@ impl Writer {
         })
     }
 
-    pub fn extension(&self) -> &str {
+    pub fn extension(&self) -> Extension {
         match self {
-            Writer::Path(_) => ".yaml",
-            Writer::Gzip(..) => ".yaml",
-            Writer::Zip(..) => ".yaml",
-            Writer::Oci(_) => ".json",
+            Writer::Path(_) => Extension::Yaml,
+            Writer::Gzip(..) => Extension::Yaml,
+            Writer::Zip(..) => Extension::Yaml,
+            Writer::Oci(_) => Extension::Json,
         }
     }
 }
@@ -503,7 +504,7 @@ impl OCIState {
                 future::ready(
                     Self::combined_oci_archive_layer(&jsons)
                         .ok()
-                        .map(|data| (p + self.config.extension(), data)),
+                        .map(|data| (format!("{p}{}", self.config.extension()), data)),
                 )
             })
             .map(|(p, data)| self.push_oci_layer(p, data, layers.clone()))

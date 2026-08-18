@@ -16,7 +16,7 @@ use crate::gather::{
 };
 
 use super::{
-    interface::{Collect, CollectError},
+    interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
 
@@ -48,8 +48,8 @@ impl Collect<Node> for Info {
         Ok(true)
     }
 
-    fn extension(&self) -> &str {
-        &self.collectable.extension
+    fn extension(&self) -> Extension {
+        self.collectable.extension
     }
 
     #[instrument(skip_all, err)]

@@ -15,14 +15,14 @@ use tracing::instrument;
 
 use std::{fmt::Debug, sync::Arc};
 
-use super::interface::{Collect, CollectError, ResourceThreadSafe};
+use super::interface::{Collect, CollectError, Extension, ResourceThreadSafe};
 
 #[derive(Clone)]
 pub struct Objects<R: Resource> {
     pub api: Api<R>,
     pub filter: Arc<dyn Filter<R>>,
     pub resource: ApiResource,
-    pub extension: String,
+    pub extension: Extension,
     secrets: Secrets,
     writer: Arc<Mutex<Writer>>,
 }
@@ -81,8 +81,8 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
         self.writer.clone()
     }
 
-    fn extension(&self) -> &str {
-        &self.extension
+    fn extension(&self) -> Extension {
+        self.extension
     }
 
     #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
@@ -111,6 +111,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
 
 #[cfg(test)]
 mod test {
+    use crate::scanners::interface::Extension;
     use backon::{ConstantBuilder, Retryable};
 
     use k8s_openapi::{
@@ -202,7 +203,7 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             ApiResource::erase::<Pod>(&()),
         )
@@ -248,7 +249,7 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             ApiResource::erase::<v1::Namespace>(&()),
         );
@@ -291,7 +292,7 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             ApiResource::erase::<Pod>(&()),
         );
