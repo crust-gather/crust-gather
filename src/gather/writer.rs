@@ -43,6 +43,7 @@ use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
 use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
 use crate::gather::{
+    json_resource::ReadState,
     reader::{ArchiveReader, Reader},
     storage::Storage,
 };
@@ -229,15 +230,12 @@ pub struct ManifestConfig {
     #[serde(default)]
     pub compressed: bool,
     #[serde(default)]
-    pub json: bool,
+    pub extension: Extension,
 }
 
 impl ManifestConfig {
     pub fn extension(&self) -> Extension {
-        match self.json {
-            true => Extension::Json,
-            false => Extension::Yaml,
-        }
+        self.extension
     }
 }
 
@@ -359,7 +357,7 @@ impl Writer {
                     Arc::new(Storage::FS),
                 )
                 .await?
-                .read(file_path.clone())
+                .read(file_path.clone(), ReadState::TableView)
                 .await?;
                 let updated = serde_saphyr::from_str(repr.data())?;
                 let patch = &diff(&original.json, &updated);
@@ -422,7 +420,7 @@ impl Writer {
                 client: Client::new(client_config.unwrap_or_default()),
                 config: ManifestConfig {
                     compressed: true,
-                    json: true,
+                    extension: Extension::Json,
                 },
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),
@@ -481,7 +479,7 @@ impl OCIState {
                 future::ready(
                     Self::combined_oci_archive_layer(&jsons)
                         .ok()
-                        .map(|data| (format!("{p}{}", self.config.extension()), data)),
+                        .map(|data| (format!("{p}.{}", self.config.extension()), data)),
                 )
             })
             .map(|(p, data)| self.push_oci_layer(p, data, layers.clone()))

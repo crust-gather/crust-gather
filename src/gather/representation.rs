@@ -162,15 +162,15 @@ impl ArchivePath {
 
         match (namespace_name.name(), namespace_name.namespace()) {
             (Some(name), Some(namespace)) => Self::Namespaced(
-                format!("namespaces/{namespace}/{api_version}/{kind}/{name}{suffix}").into(),
+                format!("namespaces/{namespace}/{api_version}/{kind}/{name}.{suffix}").into(),
             ),
             (Some(name), None) => {
-                Self::Cluster(format!("cluster/{api_version}/{kind}/{name}{suffix}").into())
+                Self::Cluster(format!("cluster/{api_version}/{kind}/{name}.{suffix}").into())
             }
             (None, Some(namespace)) => Self::NamespacedList(
-                format!("namespaces/{namespace}/{api_version}/{kind}/*{suffix}").into(),
+                format!("namespaces/{namespace}/{api_version}/{kind}/*.{suffix}").into(),
             ),
-            (None, None) => Self::ClusterList(format!("**/{api_version}/{kind}/*{suffix}").into()),
+            (None, None) => Self::ClusterList(format!("**/{api_version}/{kind}/*.{suffix}").into()),
         }
     }
 
@@ -400,7 +400,7 @@ mod tests {
             Default::default(),
         );
 
-        assert_eq!(result, ArchivePath::ClusterList("**/v1/pod/*.json".into()));
+        assert_eq!(result, ArchivePath::ClusterList("**/v1/pod/*.yaml".into()));
     }
 
     #[test]
@@ -421,7 +421,7 @@ mod tests {
 
         assert_eq!(
             result,
-            ArchivePath::NamespacedList("namespaces/default/v1/pod/*.json".into())
+            ArchivePath::NamespacedList("namespaces/default/v1/pod/*.yaml".into())
         );
     }
 }

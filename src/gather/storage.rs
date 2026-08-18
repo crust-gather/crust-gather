@@ -8,6 +8,7 @@ use flate2::read::GzDecoder;
 use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
+use crate::gather::json_resource::{JsonResource, ReadState};
 use crate::gather::writer::ManifestConfig;
 use crate::scanners::interface::Extension;
 
@@ -99,8 +100,7 @@ impl Storage {
     pub fn extension(&self) -> Extension {
         match self {
             Storage::FS => Extension::Yaml,
-            Storage::OCI(ocistate) if ocistate.config.json => Extension::Json,
-            Storage::OCI(_) => Extension::Yaml,
+            Storage::OCI(ocistate) => ocistate.config.extension,
         }
     }
 
@@ -109,14 +109,14 @@ impl Storage {
         &self,
         data: Vec<u8>,
     ) -> anyhow::Result<T> {
-        match self {
-            Self::FS => Ok(serde_saphyr::from_slice(&data)?),
-            Self::OCI(state) => Ok(if state.config.json {
-                serde_json::from_slice(&data)?
-            } else {
-                serde_saphyr::from_slice(&data)?
-            }),
-        }
+        // The Extension is taken from OCI state (when present) or defaults to Yaml (FS),
+        // via `Self::extension()`.
+        self.extension().from_slice(&data)
+    }
+
+    pub fn object(&self, data: Vec<u8>, state: ReadState) -> anyhow::Result<JsonResource> {
+        let ext = self.extension();
+        ext.object(&data, state)
     }
 }
 
@@ -204,19 +204,18 @@ mod tests {
 
     #[test]
     fn test_manifest_config_default() {
-        // Old archives have no json field, it defaults to false
         let data: Vec<u8> = b"{\"compressed\": true}".to_vec();
         let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
         assert!(config.compressed);
-        assert!(!config.json);
+        assert_eq!(config.extension, Extension::Yaml);
     }
 
     #[test]
     fn test_manifest_config_new() {
-        // New archives set json to true
-        let data: Vec<u8> = b"{\"compressed\": true, \"json\": true}".to_vec();
+        // New archives set the extension field directly.
+        let data: Vec<u8> = b"{\"compressed\": true, \"extension\": \"json\"}".to_vec();
         let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
         assert!(config.compressed);
-        assert!(config.json);
+        assert_eq!(config.extension, Extension::Json);
     }
 }

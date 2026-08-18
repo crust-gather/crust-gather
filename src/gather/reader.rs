@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derive_more::From;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream};
@@ -35,7 +34,10 @@ use tokio::sync;
 use tracing::instrument;
 
 use crate::{
-    gather::{json_resource::JsonResourceExt, storage::Storage},
+    gather::{
+        json_resource::{JsonResource, ReadState},
+        storage::Storage,
+    },
     scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, Extension, UPDATED_ANNOTATION},
 };
 
@@ -127,21 +129,21 @@ pub enum ListResponse {
 #[derive(Serialize, From)]
 #[serde(untagged)]
 pub enum WatchResponse {
-    Watch(WatchEvent<JsonResourceExt>),
+    Watch(WatchEvent<JsonResource>),
     Table(WatchEvent<ResultTable>),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct ObjectValueList {
     #[serde(flatten)]
     type_meta: TypeMeta,
     metadata: ObjectMeta,
-    items: Vec<JsonResourceExt>,
+    items: Vec<JsonResource>,
 }
 
 impl ObjectValueList {
     #[must_use]
-    pub fn new(list: NamedObject, items: Vec<JsonResourceExt>) -> Self {
+    pub fn new(list: NamedObject, items: Vec<JsonResource>) -> Self {
         Self {
             type_meta: TypeMeta {
                 kind: list.named_resource.list_kind.clone(),
@@ -159,7 +161,7 @@ impl ObjectValueList {
 #[derive(Clone)]
 pub struct Table {
     pub data: Vec<TablePath>,
-    pub items: Vec<JsonResourceExt>,
+    pub items: Vec<JsonResource>,
 }
 
 impl Table {
@@ -167,7 +169,7 @@ impl Table {
     pub(crate) async fn new(
         crd_path: Option<PathBuf>,
         list: NamedObject,
-        items: Vec<JsonResourceExt>,
+        items: Vec<JsonResource>,
         storage: &Storage,
     ) -> anyhow::Result<Self> {
         Ok(Self {
@@ -263,7 +265,7 @@ impl Table {
         })
     }
 
-    fn to_row(&self, obj: &JsonResourceExt) -> anyhow::Result<TableRow> {
+    fn to_row(&self, obj: &JsonResource) -> anyhow::Result<TableRow> {
         let Self { data: rows, .. } = self;
         let context = TablePath::build_context(&obj.json)
             .ok_or_else(|| anyhow::anyhow!("failed to build context"))?;
@@ -765,7 +767,7 @@ impl ArchiveReader {
 pub struct Reader {
     pub archive: ArchiveReader,
     diff: Duration,
-    objects_state: Arc<Mutex<HashMap<PathBuf, JsonResourceExt>>>,
+    objects_state: Arc<Mutex<HashMap<PathBuf, JsonResource>>>,
     next_patch_time: Arc<Mutex<Duration>>,
     storage: Arc<Storage>,
 }
@@ -842,14 +844,17 @@ impl Reader {
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
     async fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
         tracing::trace!("Reading table...");
-
         Table::new(
             list.get_crd_path().map(|crd| self.archive.join(crd)),
             list.clone(),
-            self.items(self.archive.join(list.get_path()), selector)
-                .await?
-                .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
-                .collect(),
+            self.items(
+                self.archive.join(list.get_path()),
+                selector,
+                ReadState::TableView,
+            )
+            .await?
+            .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
+            .collect(),
             &self.storage,
         )
         .await
@@ -863,10 +868,9 @@ impl Reader {
         selector: Selector,
     ) -> anyhow::Result<Vec<WatchEvent<ResultTable>>> {
         tracing::trace!("Watching table...");
-
         let mut events = vec![];
         for object in self
-            .objects(list.get_path())
+            .objects(list.get_path(), ReadState::TableView)
             .await?
             .filter(|obj| selector.matches(obj.labels()))
         {
@@ -886,11 +890,11 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<Vec<WatchEvent<JsonResourceExt>>> {
+    ) -> anyhow::Result<Vec<WatchEvent<JsonResource>>> {
         tracing::trace!("Watching list...");
 
         Ok(self
-            .objects(list.get_path())
+            .objects(list.get_path(), ReadState::Watch)
             .await?
             .filter(|obj| selector.matches(obj.labels()))
             .map(GatherObject::watch_event)
@@ -900,7 +904,8 @@ impl Reader {
     async fn objects(
         &self,
         path: ArchivePath,
-    ) -> anyhow::Result<impl Iterator<Item = JsonResourceExt>> {
+        state: ReadState,
+    ) -> anyhow::Result<impl Iterator<Item = JsonResource>> {
         let mut new_objects = HashMap::new();
         let objects = {
             let mut objects_state = self
@@ -935,10 +940,10 @@ impl Reader {
                 }
                 None => {
                     for version in self
-                        .versions(path.clone())
+                        .versions(path.clone(), state)
                         .await?
                         .into_iter()
-                        .filter(|obj: &JsonResourceExt| obj.older(self.archive_time()))
+                        .filter(|obj: &JsonResource| obj.older(self.archive_time()))
                     {
                         new_objects.insert(path.clone(), version.clone());
                         items.push(version);
@@ -962,14 +967,15 @@ impl Reader {
         &self,
         path: PathBuf,
         selector: Selector,
-    ) -> anyhow::Result<impl Iterator<Item = JsonResourceExt>> {
+        state: ReadState,
+    ) -> anyhow::Result<impl Iterator<Item = JsonResource>> {
         let items = Arc::new(sync::Mutex::new(vec![]));
         stream::iter(self.storage.matching_paths(path)?)
             .map(|path| {
                 let selector = &selector;
                 let items = items.clone();
                 async move {
-                    let obj: JsonResourceExt = self.read(path).await?;
+                    let obj = self.read(path, state).await?;
                     if selector.matches(obj.labels()) {
                         items.lock().await.push(obj);
                     }
@@ -993,15 +999,13 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(path = get.get_path().to_string()))]
-    pub async fn load(&self, get: NamedObject) -> anyhow::Result<JsonResourceExt> {
+    pub async fn load(&self, get: NamedObject) -> anyhow::Result<JsonResource> {
         tracing::debug!("Reading file...");
-
-        let obj: JsonResourceExt = self.read(self.archive.join(get.get_path())).await?;
-        if obj.deleted() {
-            bail!("Object was deleted")
-        }
-
-        Ok(obj)
+        self.read(
+            self.archive.join(get.get_path()),
+            ReadState::SelectorSet(false),
+        )
+        .await
     }
 
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
@@ -1011,20 +1015,20 @@ impl Reader {
         selector: Selector,
     ) -> anyhow::Result<ObjectValueList> {
         tracing::trace!("Reading list...");
-
+        let read_state = ReadState::SelectorSet(!selector.is_empty());
         let path = self.archive.join(list.get_path());
 
         Ok(ObjectValueList::new(
             list,
-            self.items(path, selector)
+            self.items(path, selector, read_state)
                 .await?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
         ))
     }
 
-    pub async fn read(&self, path: PathBuf) -> anyhow::Result<JsonResourceExt> {
-        self.versions(path)
+    pub async fn read(&self, path: PathBuf, state: ReadState) -> anyhow::Result<JsonResource> {
+        self.versions(path, state)
             .await?
             .last()
             .cloned()
@@ -1032,14 +1036,14 @@ impl Reader {
     }
 
     // Collect a sequence of versions for the given object until clusters equivalent of Utc::now()
-    async fn versions(&self, path: PathBuf) -> anyhow::Result<Vec<JsonResourceExt>> {
+    async fn versions(&self, path: PathBuf, state: ReadState) -> anyhow::Result<Vec<JsonResource>> {
         let mut object = vec![];
         self.storage.read(&path, &mut object).await?;
         match self.storage.exist(&path.with_extension("patch")) {
-            false => Ok(vec![self.storage.from_slice(object)?]),
+            false => Ok(vec![self.storage.object(object, state)?]),
             true => {
                 self.interpolate(
-                    &self.storage.from_slice(object)?,
+                    &self.storage.object(object, state)?,
                     path.with_extension("patch"),
                     DateTime::default(),
                     self.archive_time(),
@@ -1061,11 +1065,11 @@ impl Reader {
     // Goes through all json patches and applies them on the resource in order
     async fn interpolate(
         &self,
-        target: &JsonResourceExt,
+        target: &JsonResource,
         patches_file: PathBuf,
         from: DateTime<Utc>,
         until: DateTime<Utc>,
-    ) -> anyhow::Result<Vec<JsonResourceExt>> {
+    ) -> anyhow::Result<Vec<JsonResource>> {
         let mut target = target.clone();
         let mut versions = vec![];
         for list in self.read_lines(patches_file).await? {
@@ -1099,7 +1103,8 @@ impl Reader {
 
             if do_apply && !patches.is_empty() {
                 patch(&mut target.json, &patches)?;
-                versions.push(JsonResourceExt::new(target.json.clone()));
+                let raw = serde_json::from_value(target.json.clone())?;
+                versions.push(JsonResource::new(target.json.clone(), raw));
             }
         }
 
@@ -1127,7 +1132,7 @@ mod tests {
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
-        let items = vec![JsonResourceExt::default()];
+        let items = vec![JsonResource::default()];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1180,7 +1185,7 @@ mod tests {
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
-        let items = vec![JsonResourceExt::default()];
+        let items = vec![JsonResource::default()];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1234,29 +1239,32 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "pod-a",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "containers": [
-                    {"name": "c1"},
-                    {"name": "c2"}
-                ]
-            },
-            "status": {
-                "phase": "Running",
-                "containerStatuses": [
-                    {"ready": true, "restartCount": 1},
-                    {"ready": false, "restartCount": 2}
-                ],
-                "initContainerStatuses": [
-                    {"restartCount": 3}
-                ]
-            }
-        }))];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "pod-a",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "containers": [
+                        {"name": "c1"},
+                        {"name": "c2"}
+                    ]
+                },
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {"ready": true, "restartCount": 1},
+                        {"ready": false, "restartCount": 2}
+                    ],
+                    "initContainerStatuses": [
+                        {"restartCount": 3}
+                    ]
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1297,18 +1305,21 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "pod-b",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "containers": [
-                    {"name": "c1"}
-                ]
-            }
-        }))];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "pod-b",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "containers": [
+                        {"name": "c1"}
+                    ]
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1342,16 +1353,19 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::hours(2)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "ns-a",
-                "creationTimestamp": created,
-                "deletionTimestamp": Utc::now().to_rfc3339(),
-            },
-            "status": {
-                "phase": "Active"
-            }
-        }))];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "ns-a",
+                    "creationTimestamp": created,
+                    "deletionTimestamp": Utc::now().to_rfc3339(),
+                },
+                "status": {
+                    "phase": "Active"
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1390,21 +1404,24 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::days(3)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "deploy-a",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "replicas": 3
-            },
-            "status": {
-                "readyReplicas": 2,
-                "updatedReplicas": 3,
-                "availableReplicas": 2
-            }
-        }))];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "deploy-a",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "replicas": 3
+                },
+                "status": {
+                    "readyReplicas": 2,
+                    "updatedReplicas": 3,
+                    "availableReplicas": 2
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1448,21 +1465,24 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::days(5) - Duration::hours(9)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "kubernetes",
-                "namespace": "default",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "type": "ClusterIP",
-                "clusterIP": "10.96.0.1",
-                "ports": [
-                    {"port": 443, "protocol": "TCP"}
-                ]
-            },
-            "status": {}
-        }))];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "kubernetes",
+                    "namespace": "default",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "type": "ClusterIP",
+                    "clusterIP": "10.96.0.1",
+                    "ports": [
+                        {"port": 443, "protocol": "TCP"}
+                    ]
+                },
+                "status": {}
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1514,29 +1534,32 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::days(10)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "node-local-dns",
-                "namespace": "kube-system",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "template": {
-                    "spec": {
-                        "nodeSelector": {
-                            "kubernetes.io/os": "linux"
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "node-local-dns",
+                    "namespace": "kube-system",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "nodeSelector": {
+                                "kubernetes.io/os": "linux"
+                            }
                         }
                     }
+                },
+                "status": {
+                    "desiredNumberScheduled": 3,
+                    "currentNumberScheduled": 3,
+                    "numberReady": 3,
+                    "updatedNumberScheduled": 3,
+                    "numberAvailable": 3
                 }
-            },
-            "status": {
-                "desiredNumberScheduled": 3,
-                "currentNumberScheduled": 3,
-                "numberReady": 3,
-                "updatedNumberScheduled": 3,
-                "numberAvailable": 3
-            }
-        }))];
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1592,19 +1615,22 @@ mod tests {
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(15)).to_rfc3339();
-        let items = vec![JsonResourceExt::new(json!({
-            "metadata": {
-                "name": "binding-a",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "policyName": "require-team-label",
-                "paramRef": {
-                    "namespace": "default",
-                    "name": "team-label-params"
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "binding-a",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "policyName": "require-team-label",
+                    "paramRef": {
+                        "namespace": "default",
+                        "name": "team-label-params"
+                    }
                 }
-            }
-        }))];
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,

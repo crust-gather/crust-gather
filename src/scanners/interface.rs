@@ -22,6 +22,7 @@ use std::time::Duration;
 use trait_set::trait_set;
 
 use crate::gather::config::Secrets;
+use crate::gather::json_resource::{Format, JsonResource, ReadState};
 use crate::gather::representation::{ArchivePath, Representation, TypeMetaGetter};
 use crate::gather::writer::Writer;
 use crate::scanners::type_meta::TypeMetaDefaulter;
@@ -35,49 +36,60 @@ trait_set! {
 }
 
 /// File extension for serialization format.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    Hash,
+    Default,
+    derive_more::FromStr,
+    derive_more::Display,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[from_str(rename_all = "lowercase")]
+#[display(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum Extension {
-    #[default]
     Json,
+    #[default]
     Yaml,
-}
-
-impl std::fmt::Display for Extension {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Json => write!(f, ".json"),
-            Self::Yaml => write!(f, ".yaml"),
-        }
-    }
-}
-
-impl std::str::FromStr for Extension {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            ".json" => Ok(Self::Json),
-            ".yaml" => Ok(Self::Yaml),
-            other => anyhow::bail!("unknown extension: {other}"),
-        }
-    }
-}
-
-impl From<&str> for Extension {
-    fn from(s: &str) -> Self {
-        match s {
-            ".json" | "json" => Self::Json,
-            _ => Self::Yaml,
-        }
-    }
 }
 
 impl Extension {
     /// Serialises a `Serialize` value to a string.
     /// JSON uses `serde_json`, YAML uses `serde-saphyr`.
-    pub fn to_string<T: serde::Serialize>(&self, obj: &T) -> anyhow::Result<String> {
+    pub fn string<T: serde::Serialize>(&self, obj: &T) -> anyhow::Result<String> {
         match self {
             Self::Json => Ok(serde_json::to_string(obj)?),
             Self::Yaml => Ok(serde_saphyr::to_string(obj)?),
+        }
+    }
+
+    /// Deserialises a `serde::de::DeserializeOwned` value.
+    /// JSON uses `serde_json`, YAML uses `serde-saphyr`.
+    pub fn from_slice<T: serde::de::DeserializeOwned>(&self, data: &[u8]) -> anyhow::Result<T> {
+        match self {
+            Self::Json => Ok(serde_json::from_slice(data)?),
+            Self::Yaml => Ok(serde_saphyr::from_slice(data)?),
+        }
+    }
+
+    /// Deserialises an arbitrary Kubernetes object into a `JsonResourceExt`.
+    ///
+    /// JSON uses `serde_json` directly; YAML is first parsed to a `Value` via
+    /// `serde_saphyr`, then wrapped with its raw text via `to_raw_value`.
+    pub fn object(&self, data: &[u8], state: ReadState) -> anyhow::Result<JsonResource> {
+        match self {
+            Extension::Json => Ok(JsonResource::deserialize_state(
+                &mut Format::new(state, *self),
+                &mut serde_json::Deserializer::from_slice(data),
+            )?),
+            Extension::Yaml => Ok(serde_saphyr::with_deserializer_from_slice(data, |de| {
+                JsonResource::deserialize_state(&mut Format::new(state, *self), de)
+            })?),
         }
     }
 }
@@ -175,7 +187,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(self.extension().to_string(&object)?.as_str()),
+                .with_data(self.extension().string(&object)?.as_str()),
         ])
     }
 
