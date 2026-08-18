@@ -67,7 +67,7 @@ impl Collect<DynamicObject> for Dynamic {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(&self.extension().to_string(&object)?),
+                .with_data(&self.extension().string(&object)?),
         ])
     }
 

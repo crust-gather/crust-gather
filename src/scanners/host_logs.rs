@@ -228,7 +228,7 @@ impl HostLogs {
                 TypeMeta::resource::<Pod>(),
                 self.extension(),
             ))
-            .with_data(&self.extension().to_string(&archive_pod)?))
+            .with_data(&self.extension().string(&archive_pod)?))
     }
 
     async fn read_stream<R>(reader: Option<R>) -> anyhow::Result<String>
@@ -425,7 +425,7 @@ impl HostLogs {
 
         Ok(Representation::new()
             .with_path(path)
-            .with_data(&self.extension().to_string(&result)?))
+            .with_data(&self.extension().string(&result)?))
     }
 }
 

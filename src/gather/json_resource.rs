@@ -17,10 +17,44 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::{RawValue, to_raw_value};
 
 use crate::gather::reader::{NamedObject, ResultTable, Table};
 use crate::gather::storage::Storage;
-use crate::scanners::interface::{DELETED_ANNOTATION, UPDATED_ANNOTATION};
+use crate::scanners::interface::{DELETED_ANNOTATION, Extension, UPDATED_ANNOTATION};
+
+/// State threaded into deserialize [`JsonResourceExt`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadState {
+    /// Watch read — always materialize the full `serde_json::Value`.
+    Watch,
+    /// List/table read — materialize the full `serde_json::Value` when `bool` is `true`.
+    SelectorSet(bool),
+    /// Load/get read — always materialize the full `serde_json::Value`.
+    TableView,
+}
+
+#[derive(Default)]
+pub enum Format {
+    #[default]
+    ValueFirst,
+    TextFirst,
+    OnlyText,
+}
+
+impl Format {
+    pub fn new(state: ReadState, extension: Extension) -> Self {
+        match extension {
+            Extension::Yaml => Self::ValueFirst,
+            Extension::Json => match state {
+                ReadState::Watch | ReadState::SelectorSet(true) | ReadState::TableView => {
+                    Self::TextFirst
+                }
+                ReadState::SelectorSet(false) => Self::OnlyText,
+            },
+        }
+    }
+}
 
 /// A `Resource` backed by a [raw JSON value](Value).
 ///
@@ -28,16 +62,20 @@ use crate::scanners::interface::{DELETED_ANNOTATION, UPDATED_ANNOTATION};
 /// by the [`Resource`] trait methods. Since this type is used only in the reader path,
 /// mutations to `metadata` via [`meta_mut`](Resource::meta_mut) are not reflected back
 /// into the JSON representation.
-#[derive(Clone, Default, PartialEq)]
-pub struct JsonResourceExt {
-    /// The raw JSON representation of the Kubernetes object.
+#[derive(Clone, Default, derive_more::PartialEq)]
+pub struct JsonResource {
+    /// Parsed JSON representation of the Kubernetes object.
     pub json: Value,
+
+    /// Raw JSON text, for direct serving.
+    #[partial_eq(skip)]
+    pub text: Box<RawValue>,
 
     /// Cached metadata extracted from `json["metadata"]` during construction/deserialization.
     pub metadata: ObjectMeta,
 }
 
-impl std::fmt::Debug for JsonResourceExt {
+impl std::fmt::Debug for JsonResource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JsonResourceExt")
             .field("json", &self.json)
@@ -46,30 +84,53 @@ impl std::fmt::Debug for JsonResourceExt {
     }
 }
 
-impl<'de> Deserialize<'de> for JsonResourceExt {
+impl<'de> Deserialize<'de> for JsonResource {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let json = Value::deserialize(deserializer)?;
-        Ok(Self::new(json))
+        Self::deserialize_state(&mut Default::default(), deserializer)
     }
 }
 
-impl Serialize for JsonResourceExt {
+impl Serialize for JsonResource {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        self.json.serialize(serializer)
+        self.text.serialize(serializer)
     }
 }
 
-impl JsonResourceExt {
-    /// Creates a new [`JsonResourceExt`] wrapping a [`Value`], extracting the metadata
-    /// from the `"metadata"` key if present.
+impl JsonResource {
+    /// Deserialises a raw JSON/YAML object into a [`JsonResource`], threaded with a
+    /// [`Format`] that selects between value-first, text-first, and text-only materialisation.
+    pub fn deserialize_state<'de, D>(format: &mut Format, deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match format {
+            Format::ValueFirst => {
+                let json: Value = Value::deserialize(deserializer)?;
+                let text = to_raw_value(&json).map_err(serde::de::Error::custom)?;
+                Ok(Self::new(json, text))
+            }
+            Format::TextFirst => {
+                let text: Box<RawValue> = Box::deserialize(deserializer)?;
+                let json = serde_json::from_str(text.get()).map_err(serde::de::Error::custom)?;
+                Ok(Self::new(json, text))
+            }
+            Format::OnlyText => Ok(Self::new(
+                Default::default(),
+                Box::deserialize(deserializer)?,
+            )),
+        }
+    }
+
+    /// Creates a new [`JsonResourceExt`] wrapping a [`Value`] and its raw text,
+    /// extracting the metadata from the `"metadata"` key if present.
     #[must_use]
-    pub fn new(json: Value) -> Self {
+    pub fn new(json: Value, text: Box<RawValue>) -> Self {
         let metadata = match &json {
             Value::Object(map) => map
                 .get("metadata")
@@ -77,7 +138,11 @@ impl JsonResourceExt {
                 .unwrap_or_default(),
             _ => ObjectMeta::default(),
         };
-        Self { json, metadata }
+        Self {
+            json,
+            text,
+            metadata,
+        }
     }
 
     /// Build a table `WatchEvent` for this single object, leveraging cached
@@ -105,7 +170,7 @@ impl JsonResourceExt {
     }
 }
 
-impl Resource for JsonResourceExt {
+impl Resource for JsonResource {
     // The object's type information is only known at runtime, so the dynamic type is `ApiResource`.
     type DynamicType = ApiResource;
     // The scope is indeterminate for a raw JSON object.

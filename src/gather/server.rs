@@ -34,7 +34,7 @@ use tokio::time::{Instant, sleep};
 use crate::{
     cli::{DEFAULT_OCI_BUFFER_SIZE, OCISettings},
     gather::{
-        json_resource::JsonResourceExt,
+        json_resource::JsonResource,
         reader::{
             ArchiveReader, Destination, Get, List, ListResponse, Log, NamedObject, Reader, Watch,
             WatchResponse,
@@ -327,11 +327,10 @@ impl Api {
                 ))
             };
 
-            let Some(parent) =
-                index.get(&parent_path.with_extension(format!("{}", config.extension()).as_str()))
-            else {
+            let extension = config.extension();
+            let Some(parent) = index.get(&parent_path.with_extension(extension.to_string())) else {
                 anyhow::bail!(format!(
-                    "index layer must reference a yaml list object: {resource_path:?}"
+                    "index layer must reference a {extension} list object: {resource_path:?}",
                 ))
             };
 
@@ -893,7 +892,7 @@ fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: boo
     logs.split_inclusive('\n').map(convert_timestamp).collect()
 }
 
-async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<JsonResourceExt> {
+async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<JsonResource> {
     let archive = state
         .archives
         .get(get.get_server())
