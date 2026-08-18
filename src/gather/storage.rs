@@ -9,6 +9,7 @@ use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAu
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
 use crate::gather::writer::ManifestConfig;
+use crate::scanners::interface::Extension;
 
 #[derive(Clone)]
 pub enum Storage {
@@ -95,11 +96,11 @@ impl Storage {
         Ok(paths)
     }
 
-    pub fn extension(&self) -> &str {
+    pub fn extension(&self) -> Extension {
         match self {
-            Storage::FS => ".yaml",
-            Storage::OCI(ocistate) if ocistate.config.json => ".json",
-            Storage::OCI(_) => ".yaml",
+            Storage::FS => Extension::Yaml,
+            Storage::OCI(ocistate) if ocistate.config.json => Extension::Json,
+            Storage::OCI(_) => Extension::Yaml,
         }
     }
 

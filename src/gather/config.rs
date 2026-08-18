@@ -27,7 +27,7 @@ use crate::filters::filter::FilterGroup;
 use crate::scanners::dynamic::Dynamic;
 use crate::scanners::host_logs::HostLogs;
 use crate::scanners::info::Info;
-use crate::scanners::interface::Collect;
+use crate::scanners::interface::{Collect, Extension};
 use crate::scanners::logs::{LogSelection, Logs};
 
 use super::representation::{CustomLog, NamespaceName, Representation};
@@ -367,7 +367,7 @@ pub struct Config {
     pub duration: RunDuration,
     pub systemd_units: Vec<String>,
     pub debug_pod: DebugPod,
-    pub extension: String,
+    pub extension: Extension,
 
     pub disable_additional_logs: bool,
     pub skip_logs_collection: bool,
@@ -607,7 +607,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            extension: "".to_string(),
+            extension: Extension::Yaml,
         };
 
         // Gzip archive is failing due to timeout.
@@ -647,7 +647,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            extension: "".to_string(),
+            extension: Extension::Yaml,
         };
 
         let result = config.collect().await;
@@ -685,7 +685,7 @@ mod tests {
             debug_pod: DebugPod::default(),
             disable_additional_logs: false,
             skip_logs_collection: false,
-            extension: "".to_string(),
+            extension: Extension::Yaml,
         };
 
         let result = config.collect().await;

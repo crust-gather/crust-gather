@@ -327,7 +327,9 @@ impl Api {
                 ))
             };
 
-            let Some(parent) = index.get(&parent_path.with_extension(config.extension())) else {
+            let Some(parent) =
+                index.get(&parent_path.with_extension(format!("{}", config.extension()).as_str()))
+            else {
                 anyhow::bail!(format!(
                     "index layer must reference a yaml list object: {resource_path:?}"
                 ))

@@ -21,7 +21,7 @@ use crate::gather::{
 };
 
 use super::{
-    interface::{Collect, CollectError},
+    interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
 
@@ -98,8 +98,8 @@ impl Collect<Pod> for Logs {
         self.collectable.filter(obj)
     }
 
-    fn extension(&self) -> &str {
-        &self.collectable.extension
+    fn extension(&self) -> Extension {
+        self.collectable.extension
     }
 
     /// Collects container logs representations.
@@ -169,6 +169,7 @@ impl Collect<Pod> for Logs {
 
 #[cfg(test)]
 mod test {
+    use crate::scanners::interface::Extension;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -260,7 +261,7 @@ mod test {
                 systemd_units: Vec::default(),
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
-                extension: String::new(),
+                extension: Extension::Yaml,
             }),
             group: LogSelection::Current,
         }

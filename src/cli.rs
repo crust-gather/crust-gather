@@ -1000,7 +1000,7 @@ impl GatherCommands {
         secrets.0.extend(env_secrets.0);
 
         let writer: Writer = self.settings.to_writer().await?;
-        let extension = writer.extension().to_string();
+        let extension = writer.extension();
 
         Ok(Config {
             client: self.client().await?,

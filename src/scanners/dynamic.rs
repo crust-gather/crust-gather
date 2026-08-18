@@ -14,7 +14,7 @@ use crate::gather::{
 use crate::scanners::type_meta::TypeMetaDefaulter as _;
 
 use super::{
-    interface::{Collect, CollectError},
+    interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
 
@@ -46,8 +46,8 @@ impl Collect<DynamicObject> for Dynamic {
         self.collectable.filter(obj)
     }
 
-    fn extension(&self) -> &str {
-        &self.collectable.extension
+    fn extension(&self) -> Extension {
+        self.collectable.extension
     }
 
     /// Converts the provided `DynamicObject` into a vector of Representation
@@ -67,7 +67,7 @@ impl Collect<DynamicObject> for Dynamic {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(&self.to_string()(&object)?),
+                .with_data(&self.extension().to_string(&object)?),
         ])
     }
 
@@ -185,7 +185,7 @@ mod test {
                     debug_pod: DebugPod::default(),
                     disable_additional_logs: false,
                     skip_logs_collection: false,
-                    extension: String::new(),
+                    extension: Extension::Yaml,
                 },
                 ApiResource::erase::<Pod>(&()),
             ),

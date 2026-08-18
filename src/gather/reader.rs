@@ -36,7 +36,7 @@ use tracing::instrument;
 
 use crate::{
     gather::{json_resource::JsonResourceExt, storage::Storage},
-    scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION},
+    scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, Extension, UPDATED_ANNOTATION},
 };
 
 use super::{
@@ -420,7 +420,7 @@ struct NamedResource {
     resource: String,
     singular: String,
     list_kind: String,
-    extension: String,
+    extension: Extension,
 }
 
 impl NamedResource {
@@ -429,7 +429,7 @@ impl NamedResource {
             ArchivePath::new_path(
                 NamespaceName::new(Some(format!("{}.{}", self.resource, group)), None),
                 TypeMeta::resource::<CustomResourceDefinition>(),
-                &self.extension,
+                self.extension,
             )
         })
     }
@@ -537,7 +537,7 @@ impl NamedResourcesState {
                 .singular_resource
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| kind.clone().to_lowercase()),
-            extension: self.storage.extension().to_string(),
+            extension: self.storage.extension(),
         };
 
         if !self.served_crs_only {
@@ -623,7 +623,7 @@ pub struct NamedObject {
 impl NamedObject {
     #[must_use]
     pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(self, self.to_type_meta(), &self.named_resource.extension)
+        ArchivePath::new_path(self, self.to_type_meta(), self.named_resource.extension)
     }
 
     #[must_use]
@@ -1122,7 +1122,7 @@ mod tests {
                 resource: "my-kinds".to_string(),
                 singular: "my-kind".to_string(),
                 list_kind: "my-kindList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
@@ -1175,7 +1175,7 @@ mod tests {
                 resource: "my-kinds".to_string(),
                 singular: "type".to_string(),
                 list_kind: "TypeList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
@@ -1228,7 +1228,7 @@ mod tests {
                 resource: "pods".to_string(),
                 singular: "pod".to_string(),
                 list_kind: "PodList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
@@ -1291,7 +1291,7 @@ mod tests {
                 resource: "pods".to_string(),
                 singular: "pod".to_string(),
                 list_kind: "PodList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
@@ -1336,7 +1336,7 @@ mod tests {
                 resource: "namespaces".to_string(),
                 singular: "namespace".to_string(),
                 list_kind: "NamespaceList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: None,
             name: None,
@@ -1384,7 +1384,7 @@ mod tests {
                 resource: "deployments".to_string(),
                 singular: "deployment".to_string(),
                 list_kind: "DeploymentList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
@@ -1442,7 +1442,7 @@ mod tests {
                 resource: "services".to_string(),
                 singular: "service".to_string(),
                 list_kind: "ServiceList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("default".to_string()),
             name: None,
@@ -1508,7 +1508,7 @@ mod tests {
                 resource: "daemonsets".to_string(),
                 singular: "daemonset".to_string(),
                 list_kind: "DaemonSetList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("kube-system".to_string()),
             name: None,
@@ -1586,7 +1586,7 @@ mod tests {
                 resource: "validatingadmissionpolicybindings".to_string(),
                 singular: "validatingadmissionpolicybinding".to_string(),
                 list_kind: "ValidatingAdmissionPolicyBindingList".to_string(),
-                extension: ".json".to_string(),
+                extension: Extension::Json,
             },
             namespace: None,
             name: None,

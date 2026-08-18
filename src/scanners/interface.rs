@@ -34,6 +34,54 @@ trait_set! {
     pub trait ResourceThreadSafe = ResourceReq + ResourceExt + TypeMetaDefaulter;
 }
 
+/// File extension for serialization format.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
+pub enum Extension {
+    #[default]
+    Json,
+    Yaml,
+}
+
+impl std::fmt::Display for Extension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json => write!(f, ".json"),
+            Self::Yaml => write!(f, ".yaml"),
+        }
+    }
+}
+
+impl std::str::FromStr for Extension {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            ".json" => Ok(Self::Json),
+            ".yaml" => Ok(Self::Yaml),
+            other => anyhow::bail!("unknown extension: {other}"),
+        }
+    }
+}
+
+impl From<&str> for Extension {
+    fn from(s: &str) -> Self {
+        match s {
+            ".json" | "json" => Self::Json,
+            _ => Self::Yaml,
+        }
+    }
+}
+
+impl Extension {
+    /// Serialises a `Serialize` value to a string.
+    /// JSON uses `serde_json`, YAML uses `serde-saphyr`.
+    pub fn to_string<T: serde::Serialize>(&self, obj: &T) -> anyhow::Result<String> {
+        match self {
+            Self::Json => Ok(serde_json::to_string(obj)?),
+            Self::Yaml => Ok(serde_saphyr::to_string(obj)?),
+        }
+    }
+}
+
 /// Indicates failure of conversion to Expression
 #[derive(Debug, Error)]
 pub enum CollectError {
@@ -93,16 +141,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     fn get_writer(&self) -> Arc<Mutex<Writer>>;
 
     /// Returns suffix for the generic file extension.
-    fn extension(&self) -> &str;
-
-    /// Backend agnosting to_string implementation for the representation serialization
-    fn to_string<T: Serialize>(&self) -> fn(value: &T) -> anyhow::Result<String> {
-        if self.extension() == ".json" {
-            return |v| Ok(serde_json::to_string(v)?);
-        }
-
-        |v| Ok(serde_saphyr::to_string(v)?)
-    }
+    fn extension(&self) -> Extension;
 
     /// Constructs the path for storing the collected Kubernetes object.
     ///
@@ -136,7 +175,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(self.to_string()(&object)?.as_str()),
+                .with_data(self.extension().to_string(&object)?.as_str()),
         ])
     }
 
