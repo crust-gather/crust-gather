@@ -1105,7 +1105,7 @@ dependencies = [
  "rmcp",
  "scopeguard",
  "serde",
- "serde-saphyr 1.0.1",
+ "serde-saphyr 1.1.0",
  "serde_json",
  "serde_json_path",
  "serde_with",
@@ -1762,9 +1762,9 @@ dependencies = [
 
 [[package]]
 name = "granit-parser"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c60388b03522b86e24b6b45952255279936b08a871775156fc89c94e792d21d8"
+checksum = "4ccd1be9ebf2bd5520dbfcfb72b70ef492f654061299a097056f3e73410e38ec"
 dependencies = [
  "arraydeque",
  "smallvec",
@@ -3680,14 +3680,14 @@ dependencies = [
 
 [[package]]
 name = "serde-saphyr"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af2c6921c8ce48fb1b052b457619d008834039d80325992ed3bc55bbe6c155ad"
+checksum = "a1ec1f5cac0eb96063c64b28705255a7ed6e7d77f95c1d25e9f8b8c928006ce1"
 dependencies = [
  "annotate-snippets",
  "base64 0.23.1",
  "encoding_rs_io",
- "granit-parser 1.0.0",
+ "granit-parser 1.1.0",
  "nohash-hasher",
  "num-traits",
  "serde_core",
