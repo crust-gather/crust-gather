@@ -10,7 +10,7 @@ use kube::{
     api::TypeMeta,
     core::{ApiResource, ResourceExt, subresource::LogParams},
 };
-use thiserror::Error;
+use snafu::{ResultExt, Whatever};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -24,11 +24,6 @@ use super::{
     interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
-
-/// Failure to collect logs
-#[derive(Debug, Error)]
-#[error("Failed to collect logs: {0:?}")]
-pub struct LogsError(kube::Error);
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum LogSelection {
@@ -104,7 +99,7 @@ impl Collect<Pod> for Logs {
 
     /// Collects container logs representations.
     #[instrument(skip_all, fields(name = pod.name_any(), namespace = pod.namespace(), group=self.group.to_string()), err)]
-    async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, pod: &Pod) -> Result<Vec<Representation>, Whatever> {
         tracing::debug!("Collecting logs");
 
         let mut representations = vec![];
@@ -138,7 +133,7 @@ impl Collect<Pod> for Logs {
                 }
                 e => e,
             }
-            .map_err(LogsError)?;
+            .whatever_context("failed to read pod logs")?;
 
             representations.push(
                 Representation::new()

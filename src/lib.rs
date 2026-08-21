@@ -6,7 +6,7 @@ pub mod scanners;
 
 use clap::Parser;
 
-pub async fn run_cli() -> anyhow::Result<()> {
+pub async fn run_cli() -> Result<(), snafu::Whatever> {
     let cli = cli::Cli::parse();
     cli.init();
 

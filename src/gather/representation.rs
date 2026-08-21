@@ -3,12 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::bail;
 use kube::{
     api::{ApiResource, ObjectMeta},
     core::TypeMeta,
 };
 use serde::Deserialize;
+use snafu::prelude::*;
 
 use crate::{
     gather::log::HostLog,
@@ -229,11 +229,11 @@ impl Display for ArchivePath {
 }
 
 impl TryFrom<ArchivePath> for String {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(value: ArchivePath) -> Result<Self, Self::Error> {
         match value {
-            ArchivePath::Empty => bail!("Path is empty"),
+            ArchivePath::Empty => whatever!("Path is empty"),
             ArchivePath::NamespacedList(path)
             | ArchivePath::ClusterList(path)
             | ArchivePath::Cluster(path)
@@ -241,7 +241,7 @@ impl TryFrom<ArchivePath> for String {
             | ArchivePath::Logs(path)
             | ArchivePath::Custom(path) => match path.to_str() {
                 Some(path) => Ok(ArchivePath::fix_github_artifacts_path(path)),
-                None => bail!("Path is empty"),
+                None => whatever!("Path is empty"),
             },
         }
     }

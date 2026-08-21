@@ -7,6 +7,7 @@ use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
 use rmcp::schemars::{self, Schema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use snafu::{ResultExt, Whatever};
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -112,10 +113,13 @@ where
     F: Filter<R>,
     R: ResourceThreadSafe,
 {
-    filters
+    let mut matches = filters
         .iter()
         .filter_map(|f| f.filter_object(obj, gvk))
-        .any(|allowed| allowed)
+        .peekable();
+
+    // Empty or inapplicable include filters must not restrict collection.
+    matches.peek().is_none() || matches.any(|allowed| allowed)
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -161,15 +165,17 @@ impl Display for FilterRegex {
 }
 
 impl TryFrom<&str> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(Regex::new(s)?))
+        Ok(Self(
+            Regex::new(s).whatever_context("Failed to compile regex")?,
+        ))
     }
 }
 
 impl TryFrom<String> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())
@@ -201,7 +207,7 @@ impl Match for Exclude {
 #[cfg(test)]
 mod tests {
 
-    use k8s_openapi::api::core::v1::Pod;
+    use k8s_openapi::api::core::v1::{Node, Pod};
     use kube::core::{ApiResource, DynamicObject, TypeMeta};
 
     use crate::filters::{
@@ -214,6 +220,31 @@ mod tests {
     static POD: &str = r"---
     apiVersion: v1
     kind: Pod";
+
+    #[test]
+    fn default_filters_allow_resources() {
+        let filter = FilterList::from(&crate::cli::Filters::default());
+        let pod = DynamicObject::new("pod", &ApiResource::erase::<Pod>(&())).within("default");
+        let node = DynamicObject::new("node", &ApiResource::erase::<Node>(&()));
+
+        assert!(filter.filter(&GroupVersionKind::gvk("", "v1", "Pod"), &pod));
+        assert!(filter.filter(&GroupVersionKind::gvk("", "v1", "Node"), &node));
+    }
+
+    #[test]
+    fn namespace_include_preserves_cluster_resources() {
+        let settings: crate::cli::Filters =
+            serde_saphyr::from_str("include_namespace: ['^default$']").unwrap();
+        let filter = FilterList::from(&settings);
+        let pod = DynamicObject::new("pod", &ApiResource::erase::<Pod>(&())).within("default");
+        let other = DynamicObject::new("pod", &ApiResource::erase::<Pod>(&())).within("other");
+        let node = DynamicObject::new("node", &ApiResource::erase::<Node>(&()));
+        let pod_gvk = GroupVersionKind::gvk("", "v1", "Pod");
+
+        assert!(filter.filter(&pod_gvk, &pod));
+        assert!(!filter.filter(&pod_gvk, &other));
+        assert!(filter.filter(&GroupVersionKind::gvk("", "v1", "Node"), &node));
+    }
 
     #[test]
     fn filter_all_filters_allow() {

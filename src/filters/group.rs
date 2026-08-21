@@ -3,6 +3,7 @@ use std::fmt::Display;
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use snafu::Whatever;
 use tracing::instrument;
 
 use crate::{
@@ -53,7 +54,7 @@ where
 }
 
 impl TryFrom<&str> for GroupRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let gksplit = s.splitn(2, '/').collect::<Vec<_>>();
@@ -73,7 +74,7 @@ impl TryFrom<&str> for GroupRegex {
 }
 
 impl TryFrom<String> for GroupRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())
@@ -89,7 +90,7 @@ impl Display for GroupRegex {
 }
 
 impl<M: Match> TryFrom<&str> for Group<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -100,7 +101,7 @@ impl<M: Match> TryFrom<&str> for Group<M> {
 }
 
 impl<M: Match> TryFrom<String> for Group<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

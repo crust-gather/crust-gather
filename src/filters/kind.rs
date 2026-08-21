@@ -1,6 +1,7 @@
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use snafu::Whatever;
 use tracing::instrument;
 
 use crate::{
@@ -39,7 +40,7 @@ where
 }
 
 impl<M: Match> TryFrom<&str> for Kind<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -50,7 +51,7 @@ impl<M: Match> TryFrom<&str> for Kind<M> {
 }
 
 impl<M: Match> TryFrom<String> for Kind<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

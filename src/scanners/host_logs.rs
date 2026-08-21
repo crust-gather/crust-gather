@@ -26,7 +26,7 @@ use kube::{
 };
 use scopeguard::defer;
 use serde::{Serialize, Serializer};
-use thiserror::Error;
+use snafu::{ResultExt, Snafu, Whatever};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -46,13 +46,14 @@ use super::{
 };
 
 /// Failure of debug pod
-#[derive(Debug, Error)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
 pub enum DebugPodError {
-    #[error("Failed to create pod: {0:?}")]
-    Create(kube::Error),
+    #[snafu(display("Failed to create pod: {source:?}"))]
+    Create { source: kube::Error },
 
-    #[error("Failed to get pod: {0:?}")]
-    Get(kube::Error),
+    #[snafu(display("Failed to get pod: {source:?}"))]
+    Get { source: kube::Error },
 }
 
 #[derive(Clone)]
@@ -144,7 +145,7 @@ impl Collect<Node> for HostLogs {
 
     /// Collects container logs representations.
     #[instrument(skip_all, fields(node = node.name_any()), err)]
-    async fn representations(&self, node: &Node) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, node: &Node) -> Result<Vec<Representation>, Whatever> {
         if self.disabled {
             tracing::warn!("Host logs collection disabled, skipping...");
             return Ok(vec![]);
@@ -187,7 +188,7 @@ impl HostLogs {
         &self,
         pod: &Pod,
         log_containers: Vec<String>,
-    ) -> anyhow::Result<Representation> {
+    ) -> Result<Representation, Whatever> {
         let mut archive_pod = pod.clone();
         if let Some(spec) = archive_pod.spec.as_mut() {
             let template = spec.containers.first().cloned().unwrap_or_default();
@@ -228,10 +229,15 @@ impl HostLogs {
                 TypeMeta::resource::<Pod>(),
                 self.extension(),
             ))
-            .with_data(&self.extension().string(&archive_pod)?))
+            .with_data(
+                &self
+                    .extension()
+                    .string(&archive_pod)
+                    .whatever_context("failed to serialize pod")?,
+            ))
     }
 
-    async fn read_stream<R>(reader: Option<R>) -> anyhow::Result<String>
+    async fn read_stream<R>(reader: Option<R>) -> Result<String, Whatever>
     where
         R: AsyncRead + Unpin,
     {
@@ -240,7 +246,10 @@ impl HostLogs {
         };
 
         let mut output = String::new();
-        reader.read_to_string(&mut output).await?;
+        reader
+            .read_to_string(&mut output)
+            .await
+            .whatever_context("failed to read stream")?;
         Ok(output)
     }
 
@@ -312,7 +321,7 @@ impl HostLogs {
     }
 
     #[instrument(skip_all, fields(pod_name = pod.name_any()), err)]
-    async fn get_or_create(&self, pod: Pod) -> anyhow::Result<()> {
+    async fn get_or_create(&self, pod: Pod) -> Result<(), Whatever> {
         let api = Api::namespaced(
             self.get_api().into(),
             &pod.namespace().unwrap_or_else(|| "default".to_string()),
@@ -321,20 +330,22 @@ impl HostLogs {
         let found = api
             .get_opt(pod.name_any().as_str())
             .await
-            .map_err(DebugPodError::Get)?;
+            .map_err(|e| DebugPodError::Get { source: e })
+            .whatever_context("failed to get pod")?;
 
         if found.is_none() {
             tracing::info!("Creating user logs debug pod");
             api.create(&PostParams::default(), &pod)
                 .await
-                .map_err(DebugPodError::Create)?;
+                .map_err(|e| DebugPodError::Create { source: e })
+                .whatever_context("failed to create pod")?;
         }
 
         Ok(())
     }
 
     #[instrument(skip_all, fields(pod_name = pod.name_any(), namespace = self.debug_pod.namespace), err)]
-    async fn delete(&self, pod: &Pod) -> anyhow::Result<()> {
+    async fn delete(&self, pod: &Pod) -> Result<(), Whatever> {
         let api: Api<Pod> = Api::namespaced(
             self.get_api().into(),
             &self
@@ -344,7 +355,8 @@ impl HostLogs {
                 .unwrap_or_else(|| "default".to_string()),
         );
         api.delete(&pod.name_any(), &DeleteParams::default().grace_period(0))
-            .await?;
+            .await
+            .whatever_context("failed to delete pod")?;
         Ok(())
     }
 
@@ -353,7 +365,7 @@ impl HostLogs {
         &self,
         pod: &Pod,
         custom_log: &CustomLog,
-    ) -> anyhow::Result<Vec<Representation>> {
+    ) -> Result<Vec<Representation>, Whatever> {
         tracing::info!("Waiting for pod to be running");
 
         let wp = WatchParams::default()
@@ -364,8 +376,16 @@ impl HostLogs {
             self.get_api().into(),
             &pod.namespace().unwrap_or_else(|| "default".to_string()),
         );
-        let mut stream = api.watch(&wp, "0").await?.boxed();
-        while let Some(event) = stream.try_next().await? {
+        let mut stream = api
+            .watch(&wp, "0")
+            .await
+            .whatever_context("failed to watch pod")?
+            .boxed();
+        while let Some(event) = stream
+            .try_next()
+            .await
+            .whatever_context("failed to read watch stream")?
+        {
             if let WatchEvent::Added(pod) | WatchEvent::Modified(pod) = event
                 && Self::pod_ready(&pod)
             {
@@ -397,7 +417,7 @@ impl HostLogs {
         pod: &Pod,
         command: &str,
         path: ArchivePath,
-    ) -> anyhow::Result<Representation> {
+    ) -> Result<Representation, Whatever> {
         let api: Api<Pod> = Api::namespaced(
             self.get_api().into(),
             &pod.namespace().unwrap_or_else(|| "default".to_string()),
@@ -410,7 +430,8 @@ impl HostLogs {
                 args.clone(),
                 &AttachParams::default().stdout(true).stderr(true).tty(false),
             )
-            .await?;
+            .await
+            .whatever_context("failed to exec in pod")?;
 
         let result = HostLogsRepresentation {
             command: command.to_string(),
@@ -421,11 +442,17 @@ impl HostLogs {
                 _ => None,
             },
         };
-        attached.join().await?;
+        attached
+            .join()
+            .await
+            .whatever_context("failed to join pod exec")?;
 
-        Ok(Representation::new()
-            .with_path(path)
-            .with_data(&self.extension().string(&result)?))
+        Ok(Representation::new().with_path(path).with_data(
+            &self
+                .extension()
+                .string(&result)
+                .whatever_context("failed to serialize result")?,
+        ))
     }
 }
 

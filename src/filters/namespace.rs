@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use snafu::Whatever;
 use tracing::instrument;
 
 use crate::{
@@ -26,7 +27,7 @@ pub struct Namespace<M: Match> {
 }
 
 impl<M: Match> TryFrom<&str> for Namespace<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -37,7 +38,7 @@ impl<M: Match> TryFrom<&str> for Namespace<M> {
 }
 
 impl<M: Match> TryFrom<String> for Namespace<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

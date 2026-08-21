@@ -1,4 +1,3 @@
-use anyhow;
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
@@ -11,9 +10,9 @@ use kube::core::params::{ListParams, WatchParams};
 use kube::core::{ResourceExt, Status};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use snafu::{ResultExt, Snafu, Whatever};
 use std::fmt::Debug;
 use std::future::Future;
-use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -61,19 +60,27 @@ pub enum Extension {
 impl Extension {
     /// Serialises a `Serialize` value to a string.
     /// JSON uses `serde_json`, YAML uses `serde-saphyr`.
-    pub fn string<T: serde::Serialize>(&self, obj: &T) -> anyhow::Result<String> {
+    pub fn string<T: serde::Serialize>(&self, obj: &T) -> Result<String, Whatever> {
         match self {
-            Self::Json => Ok(serde_json::to_string(obj)?),
-            Self::Yaml => Ok(serde_saphyr::to_string(obj)?),
+            Self::Json => {
+                Ok(serde_json::to_string(obj).whatever_context("failed to serialize to JSON")?)
+            }
+            Self::Yaml => {
+                Ok(serde_saphyr::to_string(obj).whatever_context("failed to serialize to YAML")?)
+            }
         }
     }
 
     /// Deserialises a `serde::de::DeserializeOwned` value.
     /// JSON uses `serde_json`, YAML uses `serde-saphyr`.
-    pub fn from_slice<T: serde::de::DeserializeOwned>(&self, data: &[u8]) -> anyhow::Result<T> {
+    pub fn from_slice<T: serde::de::DeserializeOwned>(&self, data: &[u8]) -> Result<T, Whatever> {
         match self {
-            Self::Json => Ok(serde_json::from_slice(data)?),
-            Self::Yaml => Ok(serde_saphyr::from_slice(data)?),
+            Self::Json => {
+                Ok(serde_json::from_slice(data)
+                    .whatever_context("failed to deserialize from JSON")?)
+            }
+            Self::Yaml => Ok(serde_saphyr::from_slice(data)
+                .whatever_context("failed to deserialize from YAML")?),
         }
     }
 
@@ -81,42 +88,47 @@ impl Extension {
     ///
     /// JSON uses `serde_json` directly; YAML is first parsed to a `Value` via
     /// `serde_saphyr`, then wrapped with its raw text via `to_raw_value`.
-    pub fn object(&self, data: &[u8], state: ReadState) -> anyhow::Result<JsonResource> {
+    pub fn object(&self, data: &[u8], state: ReadState) -> Result<JsonResource, Whatever> {
         match self {
             Extension::Json => Ok(JsonResource::deserialize_state(
                 &mut Format::new(state, *self),
                 &mut serde_json::Deserializer::from_slice(data),
-            )?),
+            )
+            .whatever_context("failed to deserialize JSON resource")?),
             Extension::Yaml => Ok(serde_saphyr::with_deserializer_from_slice(data, |de| {
                 JsonResource::deserialize_state(&mut Format::new(state, *self), de)
-            })?),
+            })
+            .whatever_context("failed to deserialize YAML resource")?),
         }
     }
 }
 
 /// Indicates failure of conversion to Expression
-#[derive(Debug, Error)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
 pub enum CollectError {
-    #[error("Failed to list resources: {0}")]
-    List(kube::Error),
+    #[snafu(display("Failed to list resources: {source}"))]
+    List { source: kube::Error },
 
-    #[error("Unable to parse froup versoin for object: {0}")]
-    GroupVersion(ParseGroupVersionError),
+    #[snafu(display("Unable to parse group version for object: {source}"))]
+    #[snafu(context(suffix(Collect)))]
+    GroupVersion { source: ParseGroupVersionError },
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
 pub enum WatchError {
-    #[error("Failed to watch object: {0}")]
-    Watch(#[from] kube::Error),
+    #[snafu(display("Failed to watch object: {source}"))]
+    Watch { source: kube::Error },
 
-    #[error("Failed to sync object: {0}")]
-    Sync(#[from] anyhow::Error),
+    #[snafu(display("Failed to sync object: {source}"))]
+    Sync { source: Whatever },
 
-    #[error("Failed to stream object events: {0}")]
-    Stream(#[from] Box<Status>),
+    #[snafu(display("Failed to stream object events: {source}"))]
+    Stream { source: Box<Status> },
 
-    #[error("Unable to parse froup versoin for object: {0}")]
-    GroupVersion(#[from] ParseGroupVersionError),
+    #[snafu(display("Unable to parse group version for object: {source}"))]
+    GroupVersion { source: ParseGroupVersionError },
 }
 
 pub const ADDED_ANNOTATION: &str = "crust-gather.io/added";
@@ -136,10 +148,10 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
             .without_max_times()
     }
 
-    async fn retry<T, Fut, F>(&self, action: F) -> anyhow::Result<T>
+    async fn retry<T, Fut, F>(&self, action: F) -> Result<T, Whatever>
     where
         T: Send,
-        Fut: Future<Output = anyhow::Result<T>> + Send,
+        Fut: Future<Output = Result<T, Whatever>> + Send,
         F: FnMut() -> Fut + Send,
     {
         action.retry(Self::retry_policy()).await
@@ -178,7 +190,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
         name = object.name_any(),
         namespace = object.namespace(),
     ), err)]
-    async fn representations(&self, object: &R) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, object: &R) -> Result<Vec<Representation>, Whatever> {
         tracing::debug!("Collecting representation");
 
         let mut object = object.clone();
@@ -203,12 +215,13 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// the `get_type_meta()` information on the objects. Objects are filtered
     /// before getting added to the result.
     #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
-    async fn list(&self) -> anyhow::Result<Vec<R>> {
+    async fn list(&self) -> Result<Vec<R>, Whatever> {
         let data = self
             .get_api()
             .list(&ListParams::default())
             .await
-            .map_err(CollectError::List)?;
+            .map_err(|e| CollectError::List { source: e })
+            .whatever_context("failed to list resources")?;
 
         Ok(data
             .items
@@ -219,7 +232,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
 
     /// Lists all object and collects representations for them.
     #[instrument(skip_all, err)]
-    async fn collect(&self) -> anyhow::Result<()> {
+    async fn collect(&self) -> Result<(), Whatever> {
         join_all(
             self.list()
                 .await?
@@ -251,7 +264,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
 
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
-    async fn write_with_retry(&self, object: &R) -> anyhow::Result<()> {
+    async fn write_with_retry(&self, object: &R) -> Result<(), Whatever> {
         let representations = self
             .retry(|| async { self.representations(object).await })
             .await?;
@@ -262,7 +275,8 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
                 .lock()
                 .await
                 .store(&self.get_secrets().strip(&repr))
-                .await?;
+                .await
+                .whatever_context("failed to store representation")?;
         }
 
         Ok(())
@@ -271,33 +285,34 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Collect objects from watch events, storing difference from original as a series of json pathes
     #[instrument(skip_all, err)]
     async fn watch_collect(&self) -> Result<(), WatchError> {
-        self.collect().await?;
+        self.collect().await.context(SyncSnafu)?;
 
         let mut stream = self
             .get_api()
             .watch(&WatchParams::default(), "0")
-            .await?
+            .await
+            .context(WatchSnafu)?
             .boxed();
 
-        while let Some(e) = stream.try_next().await? {
+        while let Some(e) = stream.try_next().await.context(WatchSnafu)? {
             let now = Utc::now().to_string();
             match e {
                 WatchEvent::Added(mut obj) => {
                     obj.annotations_mut()
                         .insert(ADDED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?;
+                    self.sync_with_retry(&obj).await.context(SyncSnafu)?;
                 }
                 WatchEvent::Modified(mut obj) => {
                     obj.annotations_mut()
                         .insert(UPDATED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?;
+                    self.sync_with_retry(&obj).await.context(SyncSnafu)?;
                 }
                 WatchEvent::Deleted(mut obj) => {
                     obj.annotations_mut()
                         .insert(DELETED_ANNOTATION.to_string(), now);
-                    self.sync_with_retry(&obj).await?;
+                    self.sync_with_retry(&obj).await.context(SyncSnafu)?;
                 }
-                WatchEvent::Error(e) => Err(WatchError::Stream(e))?,
+                WatchEvent::Error(e) => Err(WatchError::Stream { source: e })?,
                 WatchEvent::Bookmark(_) => (),
             }
         }
@@ -308,7 +323,7 @@ pub trait Collect<R: ResourceThreadSafe>: Send {
     /// Retries collecting representations using an exponential backoff with jitter.
     /// This helps handle transient errors and spreading load.
     #[instrument(skip_all, err, fields(name = obj.name_any(), namespace = obj.namespace(), gvk))]
-    async fn sync_with_retry(&self, obj: &R) -> anyhow::Result<()> {
+    async fn sync_with_retry(&self, obj: &R) -> Result<(), Whatever> {
         let representations = self
             .retry(|| async { self.representations(obj).await })
             .await?;
