@@ -30,6 +30,7 @@ use kube::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json_path::JsonPath;
+use snafu::{FromString, ResultExt, Whatever};
 use tokio::sync;
 use tracing::instrument;
 
@@ -171,7 +172,7 @@ impl Table {
         list: NamedObject,
         items: Vec<JsonResource>,
         storage: &Storage,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, Whatever> {
         Ok(Self {
             data: Self::table_entries(storage, crd_path, list).await?,
             items,
@@ -182,7 +183,7 @@ impl Table {
         storage: &Storage,
         crd_path: Option<PathBuf>,
         list: NamedObject,
-    ) -> anyhow::Result<Vec<TablePath>> {
+    ) -> Result<Vec<TablePath>, Whatever> {
         let crd: CustomResourceDefinition = if let Some(crd_path) = crd_path
             && storage.exist(&crd_path)
         {
@@ -265,10 +266,10 @@ impl Table {
         })
     }
 
-    fn to_row(&self, obj: &JsonResource) -> anyhow::Result<TableRow> {
+    fn to_row(&self, obj: &JsonResource) -> Result<TableRow, Whatever> {
         let Self { data: rows, .. } = self;
         let context = TablePath::build_context(&obj.json)
-            .ok_or_else(|| anyhow::anyhow!("failed to build context"))?;
+            .ok_or_else(|| Whatever::without_source("failed to build context".to_string()))?;
         let cells: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
@@ -290,12 +291,12 @@ impl Table {
             .collect()
     }
 
-    fn rows(&self) -> anyhow::Result<Vec<TableRow>> {
+    fn rows(&self) -> Result<Vec<TableRow>, Whatever> {
         let Self { items, .. } = self;
         items.iter().map(|i| self.to_row(i)).collect()
     }
 
-    pub(crate) fn to_result_table(&self) -> anyhow::Result<ResultTable> {
+    pub(crate) fn to_result_table(&self) -> Result<ResultTable, Whatever> {
         ResultTable::from_table(self)
     }
 }
@@ -318,36 +319,7 @@ pub struct ResultTable {
 }
 
 impl ResultTable {
-    pub fn from_table(table: &Table) -> anyhow::Result<ResultTable> {
-        Ok(ResultTable {
-            kind: "Table".to_string(),
-            api_version: "meta.k8s.io/v1".to_string(),
-            metadata: ObjectMeta {
-                resource_version: Some("1".to_string()),
-                ..Default::default()
-            },
-            column_definitions: table.definitions(),
-            rows: table.rows()?,
-        })
-    }
-
-    fn to_result_table(&self) -> anyhow::Result<ResultTable> {
-        ResultTable::from_table(self)
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResultTable {
-    pub kind: String,
-    pub api_version: String,
-    pub metadata: ObjectMeta,
-    pub column_definitions: Vec<serde_json::Value>,
-    pub rows: Vec<serde_json::Value>,
-}
-
-impl ResultTable {
-    pub fn from_table(table: &Table) -> anyhow::Result<ResultTable> {
+    pub fn from_table(table: &Table) -> Result<ResultTable, Whatever> {
         Ok(ResultTable {
             kind: "Table".to_string(),
             api_version: "meta.k8s.io/v1".to_string(),
@@ -454,7 +426,7 @@ impl NamedResourcesState {
         }
     }
 
-    async fn discovery_file(&self, path: ArchivePath) -> anyhow::Result<Vec<DiscoveryResource>> {
+    async fn discovery_file(&self, path: ArchivePath) -> Result<Vec<DiscoveryResource>, Whatever> {
         let mut object = vec![];
         self.storage
             .read(&self.archive.join(path), &mut object)
@@ -726,7 +698,7 @@ impl ArchiveReader {
         self.archive.path()
     }
 
-    pub fn named_object_from_list(&self, list: List) -> anyhow::Result<NamedObject> {
+    pub fn named_object_from_list(&self, list: List) -> Result<NamedObject, Whatever> {
         let gvr = GroupVersionResource::gvr(
             &list.group.clone().unwrap_or_default(),
             &list.version,
@@ -734,17 +706,15 @@ impl ArchiveReader {
         );
 
         Ok(NamedObject {
-            named_resource: self
-                .named_resources
-                .get(&gvr)
-                .cloned()
-                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
+            named_resource: self.named_resources.get(&gvr).cloned().ok_or(
+                Whatever::without_source(format!("Failed to find named resource for {gvr:?}")),
+            )?,
             namespace: list.namespace,
             name: None,
         })
     }
 
-    pub fn named_object_from_get(&self, get: Get) -> anyhow::Result<NamedObject> {
+    pub fn named_object_from_get(&self, get: Get) -> Result<NamedObject, Whatever> {
         let gvr = GroupVersionResource::gvr(
             &get.group.clone().unwrap_or_default(),
             &get.version,
@@ -752,11 +722,9 @@ impl ArchiveReader {
         );
 
         Ok(NamedObject {
-            named_resource: self
-                .named_resources
-                .get(&gvr)
-                .cloned()
-                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
+            named_resource: self.named_resources.get(&gvr).cloned().ok_or(
+                Whatever::without_source(format!("Failed to find named resource for {gvr:?}")),
+            )?,
             namespace: get.namespace,
             name: Some(get.name),
         })
@@ -798,15 +766,19 @@ impl Reader {
         archive: ArchiveReader,
         beginning: DateTime<Utc>,
         storage: Arc<Storage>,
-    ) -> anyhow::Result<Self> {
-        let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp")?);
+    ) -> Result<Self, Whatever> {
+        let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp").unwrap());
         let path = archive.join(path);
         let diff = match storage.exist(&path) {
             true => {
                 let mut file = vec![];
                 storage.read(&path, &mut file).await?;
-                let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)?;
-                beginning.signed_duration_since(record_timestamp).to_std()?
+                let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)
+                    .whatever_context("failed to parse record timestamp")?;
+                beginning
+                    .signed_duration_since(record_timestamp)
+                    .to_std()
+                    .whatever_context("failed to convert signed duration to std")?
             }
             false => Duration::default(),
         };
@@ -824,7 +796,7 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<ResultTable> {
+    ) -> Result<ResultTable, Whatever> {
         self.table(list, selector).await?.to_result_table()
     }
 
@@ -842,7 +814,7 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
-    async fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
+    async fn table(&self, list: NamedObject, selector: Selector) -> Result<Table, Whatever> {
         tracing::trace!("Reading table...");
         Table::new(
             list.get_crd_path().map(|crd| self.archive.join(crd)),
@@ -866,7 +838,7 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<Vec<WatchEvent<ResultTable>>> {
+    ) -> Result<Vec<WatchEvent<ResultTable>>, Whatever> {
         tracing::trace!("Watching table...");
         let mut events = vec![];
         for object in self
@@ -890,7 +862,7 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<Vec<WatchEvent<JsonResource>>> {
+    ) -> Result<Vec<WatchEvent<JsonResource>>, Whatever> {
         tracing::trace!("Watching list...");
 
         Ok(self
@@ -905,7 +877,7 @@ impl Reader {
         &self,
         path: ArchivePath,
         state: ReadState,
-    ) -> anyhow::Result<impl Iterator<Item = JsonResource>> {
+    ) -> Result<impl Iterator<Item = JsonResource>, Whatever> {
         let mut new_objects = HashMap::new();
         let objects = {
             let mut objects_state = self
@@ -968,7 +940,7 @@ impl Reader {
         path: PathBuf,
         selector: Selector,
         state: ReadState,
-    ) -> anyhow::Result<impl Iterator<Item = JsonResource>> {
+    ) -> Result<impl Iterator<Item = JsonResource>, Whatever> {
         let items = Arc::new(sync::Mutex::new(vec![]));
         stream::iter(self.storage.matching_paths(path)?)
             .map(|path| {
@@ -980,26 +952,26 @@ impl Reader {
                         items.lock().await.push(obj);
                     }
 
-                    anyhow::Result::Ok(())
+                    Ok(())
                 }
             })
             .boxed()
             .buffered(self.archive.buffer_size)
-            .try_for_each(future::ok::<(), anyhow::Error>)
+            .try_for_each(future::ok::<(), Whatever>)
             .await?;
 
         Ok(items.lock().await.clone().into_iter())
     }
 
     #[instrument(skip_all, fields(path = path.to_string()))]
-    pub async fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
+    pub async fn load_raw(&self, path: ArchivePath) -> Result<String, Whatever> {
         tracing::debug!("Reading file...");
 
         self.storage.read_raw(self.archive.join(path)).await
     }
 
     #[instrument(skip_all, fields(path = get.get_path().to_string()))]
-    pub async fn load(&self, get: NamedObject) -> anyhow::Result<JsonResource> {
+    pub async fn load(&self, get: NamedObject) -> Result<JsonResource, Whatever> {
         tracing::debug!("Reading file...");
         self.read(
             self.archive.join(get.get_path()),
@@ -1013,7 +985,7 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<ObjectValueList> {
+    ) -> Result<ObjectValueList, Whatever> {
         tracing::trace!("Reading list...");
         let read_state = ReadState::SelectorSet(!selector.is_empty());
         let path = self.archive.join(list.get_path());
@@ -1027,16 +999,22 @@ impl Reader {
         ))
     }
 
-    pub async fn read(&self, path: PathBuf, state: ReadState) -> anyhow::Result<JsonResource> {
+    pub async fn read(&self, path: PathBuf, state: ReadState) -> Result<JsonResource, Whatever> {
         self.versions(path, state)
             .await?
             .last()
             .cloned()
-            .ok_or(anyhow::anyhow!("failed to find object"))
+            .ok_or(Whatever::without_source(
+                "failed to find object".to_string(),
+            ))
     }
 
     // Collect a sequence of versions for the given object until clusters equivalent of Utc::now()
-    async fn versions(&self, path: PathBuf, state: ReadState) -> anyhow::Result<Vec<JsonResource>> {
+    async fn versions(
+        &self,
+        path: PathBuf,
+        state: ReadState,
+    ) -> Result<Vec<JsonResource>, Whatever> {
         let mut object = vec![];
         self.storage.read(&path, &mut object).await?;
         match self.storage.exist(&path.with_extension("patch")) {
@@ -1056,7 +1034,7 @@ impl Reader {
     async fn read_lines(
         &self,
         filename: PathBuf,
-    ) -> anyhow::Result<io::Lines<io::BufReader<impl io::Read>>> {
+    ) -> Result<io::Lines<io::BufReader<impl io::Read>>, Whatever> {
         let mut file = vec![];
         self.storage.read(&filename, &mut file).await?;
         Ok(io::BufReader::new(io::Cursor::new(file)).lines())
@@ -1069,11 +1047,13 @@ impl Reader {
         patches_file: PathBuf,
         from: DateTime<Utc>,
         until: DateTime<Utc>,
-    ) -> anyhow::Result<Vec<JsonResource>> {
+    ) -> Result<Vec<JsonResource>, Whatever> {
         let mut target = target.clone();
         let mut versions = vec![];
         for list in self.read_lines(patches_file).await? {
-            let patches: Vec<PatchOperation> = serde_json::from_str(&list?)?;
+            let list = list.whatever_context("failed to read patch line")?;
+            let patches: Vec<PatchOperation> =
+                serde_json::from_str(&list).whatever_context("failed to parse patches")?;
             let mut do_apply = false;
             for p in patches.clone() {
                 match p {
@@ -1083,9 +1063,12 @@ impl Reader {
                             || path == PointerBuf::from_tokens(ADDED_PATH)
                             || path == PointerBuf::from_tokens(DELETED_PATH) =>
                     {
-                        let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
+                        let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)
+                            .whatever_context("failed to parse last sync timestamp")?;
                         if last_sync_timestamp >= until {
-                            let wait_duration = (last_sync_timestamp - until).to_std()?;
+                            let wait_duration = (last_sync_timestamp - until)
+                                .to_std()
+                                .whatever_context("failed to convert duration")?;
                             let mut next_patch_time = self
                                 .next_patch_time
                                 .lock()
@@ -1102,8 +1085,9 @@ impl Reader {
             }
 
             if do_apply && !patches.is_empty() {
-                patch(&mut target.json, &patches)?;
-                let raw = serde_json::from_value(target.json.clone())?;
+                patch(&mut target.json, &patches).whatever_context("failed to apply patches")?;
+                let raw = serde_json::from_value(target.json.clone())
+                    .whatever_context("failed to serialize json resource")?;
                 versions.push(JsonResource::new(target.json.clone(), raw));
             }
         }

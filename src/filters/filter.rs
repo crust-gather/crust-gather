@@ -7,6 +7,7 @@ use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
 use rmcp::schemars::{self, Schema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use snafu::{ResultExt, Whatever};
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -161,15 +162,17 @@ impl Display for FilterRegex {
 }
 
 impl TryFrom<&str> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(Regex::new(s)?))
+        Ok(Self(
+            Regex::new(s).whatever_context("Failed to compile regex")?,
+        ))
     }
 }
 
 impl TryFrom<String> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

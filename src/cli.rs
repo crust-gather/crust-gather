@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::anyhow;
 use clap::{ArgAction, Parser, Subcommand};
 use k8s_openapi::serde::{Deserialize, Serialize};
 use kube::{
@@ -16,6 +15,7 @@ use oci_client::{
     secrets::RegistryAuth,
 };
 use rmcp::schemars;
+use snafu::{FromString as _, ResultExt, Whatever};
 use tracing::level_filters::LevelFilter;
 
 use crate::{
@@ -46,6 +46,7 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt as _;
+type Result<T, E = snafu::Whatever> = std::result::Result<T, E>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -122,7 +123,7 @@ pub enum Commands {
 }
 
 impl Commands {
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self) -> Result<(), snafu::Whatever> {
         match self {
             Self::Collect { config } => {
                 Into::<GatherCommands>::into(config)
@@ -141,8 +142,15 @@ impl Commands {
                     .collect()
                     .await
             }
-            Self::Serve { serve } => serve.get_api().await?.serve().await.map_err(|e| anyhow!(e)),
-            Self::Mcp => mcp_server::run().await,
+            Self::Serve { serve } => serve
+                .get_api()
+                .await?
+                .serve()
+                .await
+                .whatever_context("failed to serve API"),
+            Self::Mcp => mcp_server::run()
+                .await
+                .whatever_context("failed to run MCP server"),
             Self::Record { config } => {
                 let config = GatherCommands {
                     mode: GatherMode::Record,
@@ -190,7 +198,7 @@ pub struct ConfigSource {
     /// Example:
     ///     --config=config.yaml
     #[arg(short, long, verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<GatherCommands> {Ok(GatherCommands::try_from(arg)?)},)]
+            value_parser = |arg: &str| -> Result<GatherCommands> {Ok(GatherCommands::try_from(arg)?)})]
     config: Option<GatherCommands>,
 
     /// Parse the gather configuration from an in-cluster config map specified by a name.
@@ -220,7 +228,7 @@ pub struct ConfigSource {
 }
 
 impl ConfigSource {
-    pub async fn gather(&self, client: Client) -> anyhow::Result<GatherCommands> {
+    pub async fn gather(&self, client: Client) -> Result<GatherCommands> {
         match self {
             Self {
                 config: Some(config),
@@ -311,7 +319,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --kubeconfig=./kubeconfig
     #[arg(short, long, value_name = "PATH",
-        value_parser = |arg: &str| -> anyhow::Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg)?)})]
+        value_parser = |arg: &str| -> Result<KubeconfigFile> {Ok(KubeconfigFile::try_from(arg)?)})]
     pub kubeconfig: Option<KubeconfigFile>,
 
     /// Collect kubeconfig from a secret.
@@ -377,7 +385,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --secrets-file=secrets.txt
     #[arg(long = "secrets-file", value_name = "PATH", verbatim_doc_comment,
-        value_parser = |arg: &str| -> anyhow::Result<SecretsFile> {Ok(SecretsFile::try_from(arg)?)})]
+        value_parser = |arg: &str| -> Result<SecretsFile> {Ok(SecretsFile::try_from(arg)?)})]
     #[serde(default)]
     pub secrets_file: Option<SecretsFile>,
 
@@ -387,7 +395,7 @@ pub struct GatherSettings {
     /// Example:
     ///     --duration=2m
     #[arg(short, long, value_name = "DURATION",
-        value_parser = |arg: &str| -> anyhow::Result<RunDuration> {Ok(RunDuration::try_from(arg)?)})]
+        value_parser = |arg: &str| -> Result<RunDuration> {Ok(RunDuration::try_from(arg)?)})]
     #[serde(default)]
     pub duration: Option<RunDuration>,
 
@@ -430,21 +438,21 @@ pub struct OCISettings {
     pub insecure: bool,
 
     /// CA file to use for registry communication
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<Certificate> {Ok(arg.try_into()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> Result<Certificate> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub ca_file: Option<Certificate>,
 
     /// OCI Image reference
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<OCIReference> {Ok(arg.try_into()?)})]
+    #[arg(short, long, value_parser = |arg: &str| -> Result<OCIReference> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub reference: Option<OCIReference>,
 
     /// Maximum number of OCI layers processed concurrently
-    #[arg(short, long, value_parser = |arg: &str| -> anyhow::Result<usize> {
-        let value = arg.parse::<u64>()?;
-        anyhow::ensure!(value >= 1, "buffer size must be at least 1");
-        Ok(value.try_into()?)
-    }, default_value_t = DEFAULT_OCI_BUFFER_SIZE)]
+    #[arg(short, long, value_parser = |arg: &str| -> Result<usize> {
+        let value = arg.parse::<u64>().whatever_context("failed to parse buffer size")?;
+        snafu::ensure_whatever!(value >= 1, "buffer size must be at least 1");
+        value.try_into().whatever_context("failed to convert to usize")
+     }, default_value_t = DEFAULT_OCI_BUFFER_SIZE)]
     #[serde(default = "default_oci_buffer_size")]
     pub buffer_size: usize,
 }
@@ -496,10 +504,12 @@ impl From<Reference> for OCIReference {
 }
 
 impl TryFrom<&str> for OCIReference {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(reference: &str) -> Result<Self, Self::Error> {
-        let reference: Reference = reference.parse()?;
+        let reference: Reference = reference
+            .parse()
+            .whatever_context("failed to parse OCI reference")?;
         Ok(reference.into())
     }
 }
@@ -525,11 +535,14 @@ pub struct Certificate {
 }
 
 impl TryFrom<&str> for Certificate {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(ca_file: &str) -> Result<Self, Self::Error> {
         Ok(Self {
-            data: fs::read_to_string(ca_file)?.as_bytes().to_vec(),
+            data: fs::read_to_string(ca_file)
+                .whatever_context("failed to read CA file")?
+                .as_bytes()
+                .to_vec(),
         })
     }
 }
@@ -583,7 +596,7 @@ impl OCISettings {
 }
 
 impl GatherSettings {
-    pub async fn client(&self) -> anyhow::Result<Client> {
+    pub async fn client(&self) -> Result<Client> {
         let origin = self.origin_client().await?;
         match &self.kubeconfig_secret {
             Some(secret) => {
@@ -595,22 +608,22 @@ impl GatherSettings {
                     {
                         Ok(client) => return Ok(client),
                         Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "Failed to open client using {secret:?}: {e}",
-                            ));
+                            return Err(Whatever::without_source(format!(
+                                "Failed to open client using {secret:?}: {e}"
+                            )));
                         }
                     };
                 }
 
-                Err(anyhow::anyhow!(
-                    "No kubeconfig found matching selector {secret:?}",
-                ))
+                Err(Whatever::without_source(format!(
+                    "No kubeconfig found matching selector {secret:?}"
+                )))
             }
             None => Ok(origin),
         }
     }
 
-    pub async fn origin_client(&self) -> anyhow::Result<Client> {
+    pub async fn origin_client(&self) -> Result<Client> {
         tracing::info!("Initializing client...");
 
         let client = match &self.kubeconfig {
@@ -628,13 +641,13 @@ impl GatherSettings {
         {
             return Client::try_default()
                 .await
-                .map_err(|_| anyhow::anyhow!("Failed to infer default client: {e}"));
+                .whatever_context(format!("Failed to infer default client: {e}"));
         }
 
-        client.map_err(|e| anyhow::anyhow!("Failed to initialize client from kubeconfig: {e}"))
+        client.whatever_context("Failed to initialize client from kubeconfig")
     }
 
-    pub async fn to_writer(&self) -> anyhow::Result<Writer> {
+    pub async fn to_writer(&self) -> Result<Writer> {
         let encoding = if let Some(reference) = self.oci.reference.as_ref() {
             &Encoding::Oci(reference.clone().into())
         } else if let Some(encoding) = self.encoding.as_ref() {
@@ -724,7 +737,7 @@ pub struct KubeconfigFromSecret {
 }
 
 impl KubeconfigFromSecret {
-    async fn get_config(&self, client: Client) -> anyhow::Result<Vec<Kubeconfig>> {
+    async fn get_config(&self, client: Client) -> Result<Vec<Kubeconfig>> {
         let (label, name) = (&self.kubeconfig_secret_label, &self.kubeconfig_secret_name);
         match (label, name) {
             (None, None) => Ok(vec![]),
@@ -753,7 +766,7 @@ pub struct AdditionalLogs {
     /// Example:
     ///     --additional-logs="my-binary.log:sh -c cat /host/var/log/my-binary.log"
     #[arg(long, alias("additional-logs"), value_name = "FILE:COMMAND",
-            value_parser = |arg: &str| -> anyhow::Result<HostLog> {Ok(HostLog::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<HostLog> {Ok(HostLog::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     logs: Vec<HostLog>,
@@ -788,7 +801,7 @@ pub struct Filters {
     /// Example:
     ///     --include-namespace=default --include-namespace=kube-.*
     #[arg(long, value_name = "NAMESPACE",
-            value_parser = |arg: &str| -> anyhow::Result<Namespace<Include>> {Ok(Namespace::<Include>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Namespace<Include>> {Ok(Namespace::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_namespace: Vec<Namespace<Include>>,
@@ -803,7 +816,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-namespace=default --exclude-namespace=kube-.*
     #[arg(long, value_name = "NAMESPACE",
-            value_parser = |arg: &str| -> anyhow::Result<Namespace<Exclude>> {Ok(Namespace::<Exclude>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Namespace<Exclude>> {Ok(Namespace::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_namespace: Vec<Namespace<Exclude>>,
@@ -818,7 +831,7 @@ pub struct Filters {
     /// Example:
     ///     --include-kind=Pod --include-kind=Deployment|ReplicaSet
     #[arg(long, value_name = "KIND",
-            value_parser = |arg: &str| -> anyhow::Result<Kind<Include>> {Ok(Kind::<Include>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Kind<Include>> {Ok(Kind::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_kind: Vec<Kind<Include>>,
@@ -833,7 +846,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-kind=Pod --exclude-kind=Deployment|ReplicaSet
     #[arg(long, value_name = "KIND",
-            value_parser = |arg: &str| -> anyhow::Result<Kind<Exclude>> {Ok(Kind::<Exclude>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Kind<Exclude>> {Ok(Kind::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_kind: Vec<Kind<Exclude>>,
@@ -850,7 +863,7 @@ pub struct Filters {
     ///     --include-group=/Node
     ///     --include-group=apps/Deployment|ReplicaSet
     #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<Group<Include>> {Ok(Group::<Include>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Group<Include>> {Ok(Group::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_group: Vec<Group<Include>>,
@@ -867,7 +880,7 @@ pub struct Filters {
     ///     --exclude-group=/Node
     ///     --exclude-group=apps/Deployment|ReplicaSet
     #[arg(long, value_name = "GROUP_KIND", verbatim_doc_comment,
-            value_parser = |arg: &str| -> anyhow::Result<Group<Exclude>> {Ok(Group::<Exclude>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Group<Exclude>> {Ok(Group::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_group: Vec<Group<Exclude>>,
@@ -880,7 +893,7 @@ pub struct Filters {
     /// Example:
     ///     --include-name=my-pod --include-name=frontend-.*
     #[arg(long, value_name = "NAME",
-            value_parser = |arg: &str| -> anyhow::Result<Name<Include>> {Ok(Name::<Include>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Name<Include>> {Ok(Name::<Include>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_name: Vec<Name<Include>>,
@@ -893,7 +906,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-name=my-secret --exclude-name=internal-.*
     #[arg(long, value_name = "NAME",
-            value_parser = |arg: &str| -> anyhow::Result<Name<Exclude>> {Ok(Name::<Exclude>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Name<Exclude>> {Ok(Name::<Exclude>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_name: Vec<Name<Exclude>>,
@@ -908,7 +921,7 @@ pub struct Filters {
     /// Example:
     ///     --include-labels=app=frontend --include-labels='environment notin (prod,staging),tier!=web'
     #[arg(long, value_name = "LABEL_SELECTOR",
-            value_parser = |arg: &str| -> anyhow::Result<Selector<Include, Labels>> {Ok(Selector::<Include, Labels>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Selector<Include, Labels>> {Ok(Selector::<Include, Labels>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_labels: Vec<Selector<Include, Labels>>,
@@ -923,7 +936,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-labels=app=internal --exclude-labels='environment in (prod,staging),tier==web'
     #[arg(long, value_name = "LABEL_SELECTOR",
-            value_parser = |arg: &str| -> anyhow::Result<Selector<Exclude, Labels>> {Ok(Selector::<Exclude, Labels>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Selector<Exclude, Labels>> {Ok(Selector::<Exclude, Labels>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_labels: Vec<Selector<Exclude, Labels>>,
@@ -938,7 +951,7 @@ pub struct Filters {
     /// Example:
     ///     --include-annotations=app=frontend --include-annotations='environment notin (prod,staging),tier!=web'
     #[arg(long, value_name = "ANNOTATION_SELECTOR",
-            value_parser = |arg: &str| -> anyhow::Result<Selector<Include, Annotations>> {Ok(Selector::<Include, Annotations>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Selector<Include, Annotations>> {Ok(Selector::<Include, Annotations>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub include_annotations: Vec<Selector<Include, Annotations>>,
@@ -953,7 +966,7 @@ pub struct Filters {
     /// Example:
     ///     --exclude-annotations=app=internal --exclude-annotations='environment in (prod,staging),tier==web'
     #[arg(long, value_name = "ANNOTATION_SELECTOR",
-            value_parser = |arg: &str| -> anyhow::Result<Selector<Exclude, Annotations>> {Ok(Selector::<Exclude, Annotations>::try_from(arg)?)},
+            value_parser = |arg: &str| -> Result<Selector<Exclude, Annotations>> {Ok(Selector::<Exclude, Annotations>::try_from(arg)?)},
             action = ArgAction::Append )]
     #[serde(default)]
     pub exclude_annotations: Vec<Selector<Exclude, Annotations>>,
@@ -971,10 +984,11 @@ pub struct Filters {
 }
 
 impl TryFrom<&str> for GatherCommands {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(file: &str) -> Result<Self, Self::Error> {
-        Ok(serde_saphyr::from_reader(File::open(file)?)?)
+        serde_saphyr::from_reader(File::open(file).whatever_context("failed to open file")?)
+            .whatever_context("failed to parse file")
     }
 }
 
@@ -990,7 +1004,7 @@ impl GatherCommands {
         }
     }
 
-    pub async fn load(&self) -> anyhow::Result<Config> {
+    pub async fn load(&self) -> Result<Config> {
         let env_secrets: Secrets = self.settings.secrets.clone().into();
         let mut secrets: Secrets = match self.settings.secrets_file.clone() {
             Some(file) => file.try_into()?,
@@ -1025,7 +1039,7 @@ impl GatherCommands {
         })
     }
 
-    async fn client(&self) -> anyhow::Result<Client> {
+    async fn client(&self) -> Result<Client> {
         self.settings.client().await
     }
 }

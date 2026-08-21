@@ -3,6 +3,7 @@ use std::{fmt::Debug, sync::Arc};
 use async_trait::async_trait;
 use kube::Api;
 use kube::core::{ApiResource, DynamicObject, ResourceExt};
+use snafu::{ResultExt, Whatever};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -58,7 +59,10 @@ impl Collect<DynamicObject> for Dynamic {
         name = object.name_any(),
         namespace = object.namespace(),
     ), err)]
-    async fn representations(&self, object: &DynamicObject) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(
+        &self,
+        object: &DynamicObject,
+    ) -> Result<Vec<Representation>, Whatever> {
         tracing::debug!("Collecting representations");
 
         let mut object = object.clone();
@@ -67,7 +71,12 @@ impl Collect<DynamicObject> for Dynamic {
         Ok(vec![
             Representation::new()
                 .with_path(self.path(&object))
-                .with_data(&self.extension().string(&object)?),
+                .with_data(
+                    &self
+                        .extension()
+                        .string(&object)
+                        .whatever_context("failed to serialize object")?,
+                ),
         ])
     }
 

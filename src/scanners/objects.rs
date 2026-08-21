@@ -89,7 +89,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
     fn filter(&self, obj: &R) -> Result<bool, CollectError> {
         Ok(self.filter.filter(
             &GroupVersionKind::try_from(self.resource().to_type_meta())
-                .map_err(CollectError::GroupVersion)?,
+                .map_err(|e| CollectError::GroupVersion { source: e })?,
             obj,
         ))
     }

@@ -18,6 +18,7 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::{RawValue, to_raw_value};
+use snafu::Whatever;
 
 use crate::gather::reader::{NamedObject, ResultTable, Table};
 use crate::gather::storage::Storage;
@@ -153,7 +154,7 @@ impl JsonResource {
         crd_path: Option<PathBuf>,
         list: NamedObject,
         storage: &Storage,
-    ) -> anyhow::Result<WatchEvent<ResultTable>> {
+    ) -> Result<WatchEvent<ResultTable>, Whatever> {
         let annotations = self.annotations().clone();
         let table = Table::new(crd_path, list, vec![self], storage).await?;
         let result = table.to_result_table()?;

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{self, bail};
 use base64::prelude::*;
 use duration_string::DurationString;
 use futures::future::join_all;
@@ -18,6 +17,8 @@ use kube::{Api, Client, ResourceExt, discovery};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_saphyr::ser_options;
+use snafu::prelude::*;
+use snafu::{FromString, Whatever};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::instrument;
@@ -70,12 +71,13 @@ impl From<Vec<String>> for Secrets {
 }
 
 impl TryFrom<SecretsFile> for Secrets {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(file: SecretsFile) -> Result<Self, Self::Error> {
         let file = file.0;
         Ok(Self(
-            fs::read_to_string(file.as_path())?
+            fs::read_to_string(file.as_path())
+                .whatever_context("failed to read secrets file")?
                 .lines()
                 .map(Into::into)
                 .collect(),
@@ -84,13 +86,11 @@ impl TryFrom<SecretsFile> for Secrets {
 }
 
 impl TryFrom<&str> for SecretsFile {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match File::open(value) {
-            Ok(_) => Ok(Self(Path::new(value).into())),
-            Err(e) => Err(e.into()),
-        }
+        File::open(value).whatever_context("failed to open secrets file")?;
+        Ok(Self(Path::new(value).into()))
     }
 }
 
@@ -104,14 +104,15 @@ impl Display for SecretsFile {
 pub struct ConfigFromConfigMap(pub String);
 
 impl ConfigFromConfigMap {
-    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<D> {
+    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> Result<D, Whatever> {
         let api: Api<ConfigMap> = Api::all(client);
         api.list(&ListParams::default())
-            .await?
+            .await
+            .whatever_context("failed to list configmaps")?
             .iter()
             .filter(|cm| cm.name_any() == self.0)
             .find_map(|cm| self.config_from_cm(cm))
-            .ok_or_else(|| anyhow::anyhow!("No configuration map found"))
+            .ok_or_else(|| Whatever::without_source("No configuration map found".to_string()))
     }
 
     fn config_from_cm<D: DeserializeOwned>(&self, cm: &ConfigMap) -> Option<D> {
@@ -134,7 +135,7 @@ impl From<String> for ConfigFromConfigMap {
 pub struct KubeconfigFile(pub Kubeconfig);
 
 impl KubeconfigFile {
-    pub fn with_context(mut self, context: Option<&str>) -> anyhow::Result<Self> {
+    pub fn with_context(mut self, context: Option<&str>) -> Result<Self, Whatever> {
         let Some(context) = context else {
             return Ok(self);
         };
@@ -145,19 +146,25 @@ impl KubeconfigFile {
             .iter()
             .any(|candidate| candidate.name == context)
         {
-            bail!("context not found in kubeconfig: {context}");
+            whatever!("context not found in kubeconfig: {context}");
         }
 
         self.0.current_context = Some(context.to_string());
         Ok(self)
     }
 
-    pub fn infer_file() -> anyhow::Result<Self> {
-        Ok(Self(Kubeconfig::read()?))
+    pub fn infer_file() -> Result<Self, Whatever> {
+        Ok(Self(
+            Kubeconfig::read().whatever_context("failed to read kubeconfig")?,
+        ))
     }
 
-    pub fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
-        serde_saphyr::to_io_writer(&mut File::create(path)?, &self.0)?;
+    pub fn write_to_path(&self, path: &Path) -> Result<(), Whatever> {
+        serde_saphyr::to_io_writer(
+            &mut File::create(path).whatever_context("failed to create path")?,
+            &self.0,
+        )
+        .whatever_context("failed to write kubeconfig")?;
         Ok(())
     }
 
@@ -214,10 +221,15 @@ impl<'de> Deserialize<'de> for KubeconfigFile {
 }
 
 impl TryFrom<&str> for KubeconfigFile {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(serde_saphyr::from_reader(File::open(s)?)?))
+        Ok(Self(
+            serde_saphyr::from_reader(
+                File::open(s).whatever_context("failed to open kubeconfig file")?,
+            )
+            .whatever_context("failed to parse kubeconfig file")?,
+        ))
     }
 }
 
@@ -232,14 +244,18 @@ impl From<&KubeconfigFile> for Kubeconfig {
 pub struct KubeconfigSecretLabel(pub String);
 
 impl KubeconfigSecretLabel {
-    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<Vec<D>> {
+    pub async fn get_config<D: DeserializeOwned>(
+        &self,
+        client: Client,
+    ) -> Result<Vec<D>, Whatever> {
         let api: Api<Secret> = Api::all(client);
         Ok(SecretSearch(
             api.list(&ListParams {
                 label_selector: Some(self.0.clone()),
                 ..Default::default()
             })
-            .await?
+            .await
+            .whatever_context("failed to list secrets")?
             .items,
         )
         .lookup())
@@ -257,14 +273,21 @@ impl From<String> for KubeconfigSecretLabel {
 pub struct KubeconfigSecretNamespaceName(pub NamespaceName);
 
 impl KubeconfigSecretNamespaceName {
-    pub async fn get_config<D: DeserializeOwned>(&self, client: Client) -> anyhow::Result<Vec<D>> {
+    pub async fn get_config<D: DeserializeOwned>(
+        &self,
+        client: Client,
+    ) -> Result<Vec<D>, Whatever> {
         let search = match self.0.clone() {
             NamespaceName {
                 name: Some(name),
                 namespace: Some(namespace),
             } => {
                 let api: Api<Secret> = Api::namespaced(client, &namespace);
-                SecretSearch(vec![api.get(&name).await?])
+                SecretSearch(vec![
+                    api.get(&name)
+                        .await
+                        .whatever_context("failed to get secret")?,
+                ])
             }
             NamespaceName {
                 name: Some(name), ..
@@ -272,7 +295,8 @@ impl KubeconfigSecretNamespaceName {
                 let api: Api<Secret> = Api::all(client);
                 SecretSearch(
                     api.list(&ListParams::default())
-                        .await?
+                        .await
+                        .whatever_context("failed to list secrets")?
                         .items
                         .into_iter()
                         .filter(|s| s.name_any() == name)
@@ -327,12 +351,12 @@ impl SecretSearch {
 pub struct RunDuration(DurationString);
 
 impl TryFrom<&str> for RunDuration {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self(match DurationString::try_from(value.to_string()) {
             Ok(duration) => duration,
-            Err(error) => bail!(error),
+            Err(error) => whatever!("DurationString parse failed: {error}"),
         }))
     }
 }
@@ -376,7 +400,7 @@ pub struct Config {
 impl Config {
     /// Collect representations for resources from discovery to the specified archive file.
     #[instrument(skip_all, err)]
-    pub async fn collect(&self) -> anyhow::Result<()> {
+    pub async fn collect(&self) -> Result<(), Whatever> {
         let discovery = match discovery::Discovery::new(self.client.clone())
             .run_aggregated()
             .await
@@ -387,7 +411,10 @@ impl Config {
                     %error,
                     "Aggregated discovery failed, falling back to standard discovery"
                 );
-                discovery::Discovery::new(self.client.clone()).run().await?
+                discovery::Discovery::new(self.client.clone())
+                    .run()
+                    .await
+                    .whatever_context("discovery failed")?
             }
         };
 
@@ -408,7 +435,8 @@ impl Config {
                     self.duration.0.into(),
                     self.iterate_until_completion(collectables),
                 )
-                .await?;
+                .await
+                .whatever_context("timed out")?;
             }
             GatherMode::Record => {
                 tracing::info!("Recording resources...");
@@ -419,7 +447,7 @@ impl Config {
         self.finish().await
     }
 
-    async fn finish(&self) -> anyhow::Result<()> {
+    async fn finish(&self) -> Result<(), Whatever> {
         let writer = &self.writer;
         writer.lock().await.finish_oci().await?;
         writer.lock().await.finish_gzip()?;

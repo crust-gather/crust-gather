@@ -6,6 +6,7 @@ use http::Request;
 use k8s_openapi::api::core::v1::Node;
 use kube::core::ApiResource;
 use kube::{Api, core::discovery::v2};
+use snafu::{ResultExt, Whatever};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -53,26 +54,35 @@ impl Collect<Node> for Info {
     }
 
     #[instrument(skip_all, err)]
-    async fn collect(&self) -> anyhow::Result<()> {
+    async fn collect(&self) -> Result<(), Whatever> {
         let c = self.get_api().into_client();
 
-        let version = serde_saphyr::to_string(&c.apiserver_version().await?)?;
+        let version = serde_saphyr::to_string(
+            &c.apiserver_version()
+                .await
+                .whatever_context("failed to get apiserver version")?,
+        )
+        .whatever_context("failed to serialize version")?;
         let api_versions = c
             .request_text(
                 Request::builder()
                     .uri("/api")
                     .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
-                    .body(vec![])?,
+                    .body(vec![])
+                    .whatever_context("failed to build request")?,
             )
-            .await?;
+            .await
+            .whatever_context("failed to get api versions")?;
         let apis_versions = c
             .request_text(
                 Request::builder()
                     .uri("/apis")
                     .header("Accept", v2::ACCEPT_AGGREGATED_DISCOVERY_V2)
-                    .body(vec![])?,
+                    .body(vec![])
+                    .whatever_context("failed to build request")?,
             )
-            .await?;
+            .await
+            .whatever_context("failed to get apis versions")?;
 
         let stamp = Utc::now().to_string();
         let reprs = vec![
@@ -91,7 +101,12 @@ impl Collect<Node> for Info {
         ];
 
         for repr in reprs {
-            self.get_writer().lock().await.store(&repr).await?;
+            self.get_writer()
+                .lock()
+                .await
+                .store(&repr)
+                .await
+                .whatever_context("failed to store representation")?;
         }
 
         Ok(())

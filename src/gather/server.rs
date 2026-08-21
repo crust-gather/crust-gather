@@ -12,7 +12,6 @@ use actix_web::{
     post,
     web::{self, Bytes, Header, Path, Payload, Query},
 };
-use anyhow::Context as _;
 use async_stream::stream;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -28,6 +27,9 @@ use kube::{
 };
 use oci_client::{Client, Reference, manifest::OciImageManifest};
 use serde::{Deserialize, Serialize};
+use snafu::Whatever;
+use snafu::prelude::*;
+use snafu::{FromString, ResultExt};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep};
 
@@ -63,10 +65,14 @@ impl Display for Socket {
 }
 
 impl TryFrom<&str> for Socket {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Ok(Self(value.parse()?))
+        Ok(Self(
+            value
+                .parse()
+                .whatever_context("failed to parse socket address")?,
+        ))
     }
 }
 
@@ -107,7 +113,7 @@ pub struct Server {
     /// Example:
     ///     --socket=192.168.1.100:8088
     #[arg(short, long, value_name = "SOCKET", default_value_t = Default::default(),
-        value_parser = |arg: &str| -> anyhow::Result<Socket> {Socket::try_from(arg)})]
+       value_parser = |arg: &str| -> Result<Socket, Whatever> {Socket::try_from(arg)})]
     #[serde(default)]
     socket: Socket,
 
@@ -119,7 +125,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub async fn get_api(&self) -> anyhow::Result<Api> {
+    pub async fn get_api(&self) -> Result<Api, Whatever> {
         let archives: Vec<_> = self.archive.clone().into();
         if self.oci.reference.is_some() {
             Api::new_oci(
@@ -156,10 +162,10 @@ struct ApiState {
 }
 
 impl ApiState {
-    pub async fn to_reader(&self, archive: ArchiveReader) -> anyhow::Result<Reader> {
+    pub async fn to_reader(&self, archive: ArchiveReader) -> Result<Reader, Whatever> {
         Reader::new(archive, self.serve_time, self.storage.clone())
             .await
-            .context("failed to open storage reader")
+            .whatever_context("failed to open storage reader")
     }
 }
 
@@ -169,16 +175,20 @@ impl Api {
         socket: Socket,
         kubeconfig: Option<PathBuf>,
         served_crs_only: bool,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, Whatever> {
         let Socket(socket) = socket;
 
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
-            std::env::var("KUBECONFIG")
-                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?)),
+            std::env::var("KUBECONFIG").unwrap_or(format!(
+                "{}/.kube/config",
+                std::env::var("HOME").whatever_context("failed to read HOME env var")?
+            )),
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
-            Ok(file) => serde_saphyr::from_reader(file)?,
+            Ok(file) => {
+                serde_saphyr::from_reader(file).whatever_context("failed to read kubeconfig")?
+            }
             _ => Kubeconfig::default(),
         };
 
@@ -189,9 +199,15 @@ impl Api {
             .clone()
             .into_iter()
             .map(|a| Self::prepare_kubeconfig(a.name().to_string_lossy().to_string(), socket))
-            .try_fold(config, Kubeconfig::merge)?;
+            .try_fold(config, Kubeconfig::merge)
+            .whatever_context("failed to merge kubeconfig")?;
 
-        serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(
+            &mut File::create(&kubeconfig_path)
+                .whatever_context("failed to create kubeconfig file")?,
+            &config,
+        )
+        .whatever_context("failed to write kubeconfig")?;
 
         let mut readers = HashMap::new();
         for archive in archives {
@@ -224,9 +240,9 @@ impl Api {
         socket: Socket,
         kubeconfig: Option<PathBuf>,
         served_crs_only: bool,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, Whatever> {
         let Some(reference) = &oci.reference else {
-            anyhow::bail!("missing reference");
+            whatever!("missing reference");
         };
 
         let reference: Reference = reference.clone().into();
@@ -234,30 +250,47 @@ impl Api {
         let Socket(socket) = socket;
 
         let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
-            std::env::var("KUBECONFIG")
-                .unwrap_or(format!("{}/.kube/config", std::env::var("HOME")?)),
+            std::env::var("KUBECONFIG").unwrap_or(format!(
+                "{}/.kube/config",
+                std::env::var("HOME").whatever_context("failed to read HOME env var")?
+            )),
         ));
 
         let mut config = match File::open(&kubeconfig_path) {
-            Result::Ok(file) => serde_saphyr::from_reader(file)?,
+            Result::Ok(file) => {
+                serde_saphyr::from_reader(file).whatever_context("failed to read kubeconfig")?
+            }
             _ => Kubeconfig::default(),
         };
 
         let previous_context = config.current_context;
         config.current_context = None;
 
-        let config = config.merge(Self::prepare_kubeconfig(
-            reference.repository().to_string(),
-            socket,
-        ))?;
+        let config = config
+            .merge(Self::prepare_kubeconfig(
+                reference.repository().to_string(),
+                socket,
+            ))
+            .whatever_context("failed to merge kubeconfig")?;
 
-        serde_saphyr::to_io_writer(&mut File::create(&kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(
+            &mut File::create(&kubeconfig_path)
+                .whatever_context("failed to create kubeconfig file")?,
+            &config,
+        )
+        .whatever_context("failed to write kubeconfig")?;
 
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
-        let (manifest, _) = client.pull_image_manifest(&reference, &auth).await?;
-        let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true).await?;
-        let config: ManifestConfig = serde_json::from_slice(&config)?;
+        let (manifest, _) = client
+            .pull_image_manifest(&reference, &auth)
+            .await
+            .whatever_context("failed to pull image manifest")?;
+        let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true)
+            .await
+            .whatever_context("failed to pull blob cache")?;
+        let config: ManifestConfig = serde_json::from_slice(&config)
+            .whatever_context("failed to deserialize manifest config")?;
         let index =
             Arc::new(Self::collect_index(&client, &reference, &auth, manifest, &config).await?);
 
@@ -300,16 +333,18 @@ impl Api {
         auth: &oci_client::secrets::RegistryAuth,
         manifest: OciImageManifest,
         config: &ManifestConfig,
-    ) -> anyhow::Result<HashMap<PathBuf, Descriptor>> {
+    ) -> Result<HashMap<PathBuf, Descriptor>, Whatever> {
         let mut index = HashMap::new();
 
         for layer in manifest.layers {
             let Some(annotations) = layer.annotations.clone() else {
-                anyhow::bail!("manifest layer contains no org.opencontainers.image.title annoation")
+                whatever!("manifest layer contains no org.opencontainers.image.title annoation")
             };
             let path = annotations
                 .get("org.opencontainers.image.title")
-                .ok_or(anyhow::anyhow!("missing org.opencontainers.image title"))?;
+                .ok_or_else(|| {
+                    Whatever::without_source("missing org.opencontainers.image title".to_string())
+                })?;
             index.insert(PathBuf::from(path), Descriptor::OciDescriptor(layer));
         }
 
@@ -318,20 +353,17 @@ impl Api {
         };
 
         let data = pull_blob_cached(client, reference, auth, index_layer, true).await?;
-        let resource_paths: Vec<JsonPath> = serde_saphyr::from_slice(&data)?;
+        let resource_paths: Vec<JsonPath> = serde_saphyr::from_slice(&data)
+            .whatever_context("failed to deserialize resource paths")?;
         for json_path in resource_paths {
             let resource_path = json_path.path;
             let Some(parent_path) = resource_path.parent() else {
-                anyhow::bail!(format!(
-                    "index layer must reference a parent list object: {resource_path:?}"
-                ))
+                whatever!("index layer must reference a parent list object: {resource_path:?}")
             };
 
             let extension = config.extension();
             let Some(parent) = index.get(&parent_path.with_extension(extension.to_string())) else {
-                anyhow::bail!(format!(
-                    "index layer must reference a {extension} list object: {resource_path:?}",
-                ))
+                whatever!("index layer must reference a {extension} list object: {resource_path:?}")
             };
 
             index.insert(
@@ -376,8 +408,9 @@ impl Api {
         }
     }
 
-    fn clean_kubeconfig(state: ApiState) -> anyhow::Result<()> {
-        let mut config = Kubeconfig::read_from(&state.kubeconfig_path)?;
+    fn clean_kubeconfig(state: ApiState) -> Result<(), Whatever> {
+        let mut config = Kubeconfig::read_from(&state.kubeconfig_path)
+            .whatever_context("failed to read existing kubeconfig")?;
 
         let contexts = state.archives.into_keys().collect::<Vec<_>>();
 
@@ -394,16 +427,24 @@ impl Api {
             None => config.contexts.first().map(|c| c.name.clone()),
         };
 
-        serde_saphyr::to_io_writer(&mut File::create(state.kubeconfig_path)?, &config)?;
+        serde_saphyr::to_io_writer(
+            &mut File::create(state.kubeconfig_path)
+                .whatever_context("failed to create kubeconfig file")?,
+            &config,
+        )
+        .whatever_context("failed to write kubeconfig")?;
 
         Ok(())
     }
 
-    pub async fn serve(self) -> anyhow::Result<()> {
+    pub async fn serve(self) -> Result<(), Whatever> {
         self.serve_with_shutdown(oneshot::channel::<()>().1).await
     }
 
-    pub async fn serve_with_shutdown(self, shutdown: oneshot::Receiver<()>) -> anyhow::Result<()> {
+    pub async fn serve_with_shutdown(
+        self,
+        shutdown: oneshot::Receiver<()>,
+    ) -> Result<(), Whatever> {
         let state = self.state.clone();
 
         let server = HttpServer::new(move || {
@@ -427,7 +468,8 @@ impl Api {
         })
         .keep_alive(KeepAlive::Timeout(Duration::from_secs(30)))
         .client_disconnect_timeout(Duration::from_secs(5))
-        .bind_auto_h2c(self.socket)?
+        .bind_auto_h2c(self.socket)
+        .whatever_context("failed to bind server socket")?
         .run();
 
         let handle = server.handle();
@@ -437,7 +479,9 @@ impl Api {
             handle.stop(true).await;
         });
 
-        server.await?;
+        server
+            .await
+            .whatever_context("failed to wait for server to finish")?;
 
         Self::clean_kubeconfig(state)?;
 
@@ -458,7 +502,9 @@ async fn version(
     let archive = state
         .archives
         .get(server.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+        .ok_or(error::ErrorNotFound(Whatever::without_source(
+            "Server not found".to_string(),
+        )))?;
     let reader = state
         .to_reader(archive.clone())
         .await
@@ -529,7 +575,9 @@ async fn api(
     let archive = state
         .archives
         .get(server.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+        .ok_or(error::ErrorNotFound(Whatever::without_source(
+            "Server not found".to_string(),
+        )))?;
 
     let latest_discovery_version = v2::ACCEPT_AGGREGATED_DISCOVERY_V2
         .split(',')
@@ -560,7 +608,9 @@ async fn apis(
     let archive = state
         .archives
         .get(server.get_server())
-        .ok_or(error::ErrorNotFound(anyhow::anyhow!("Server not found")))?;
+        .ok_or(error::ErrorNotFound(Whatever::without_source(
+            "Server not found".to_string(),
+        )))?;
     let latest_discovery_version = v2::ACCEPT_AGGREGATED_DISCOVERY_V2
         .split(',')
         .next()
@@ -624,8 +674,10 @@ async fn api_namespaced_list(
     }
 }
 
-fn publish(val: impl Serialize) -> Result<Bytes, anyhow::Error> {
-    Ok(Bytes::copy_from_slice(&serde_json::to_vec(&val)?))
+fn publish(val: impl Serialize) -> Result<Bytes, Whatever> {
+    Ok(Bytes::copy_from_slice(
+        &serde_json::to_vec(&val).whatever_context("failed to serialize to vec")?,
+    ))
 }
 
 #[get("{server}/apis/{group}/{version}/namespaces/{namespace}/{kind}")]
@@ -647,11 +699,11 @@ async fn list_items(
     list: Path<List>,
     query: Query<Selector>,
     state: web::Data<ApiState>,
-) -> anyhow::Result<ListResponse> {
+) -> Result<ListResponse, Whatever> {
     let archive = state
         .archives
         .get(list.get_server())
-        .ok_or(anyhow::anyhow!("Server not found"))?;
+        .ok_or_else(|| Whatever::without_source("Server not found".to_string()))?;
     let reader = state.to_reader(archive.clone()).await?;
     let list = archive.named_object_from_list(list.clone())?;
     let selector = query.0;
@@ -668,7 +720,7 @@ async fn watch_events(
     list: NamedObject,
     query: Query<Selector>,
     reader: &Reader,
-) -> anyhow::Result<Vec<WatchResponse>> {
+) -> Result<Vec<WatchResponse>, Whatever> {
     let selector = query.0;
     Ok(match accept.0.as_slice() {
         [QualityItem { item, .. }, ..] if item.to_string().contains("as=Table") => reader
@@ -721,7 +773,7 @@ async fn watch_response(
     let archive = state
         .archives
         .get(list.get_server())
-        .ok_or(anyhow::anyhow!("Server not found"))
+        .ok_or_else(|| Whatever::without_source("Server not found".to_string()))
         .map_err(error::ErrorNotFound)?;
     let reader = state
         .to_reader(archive.clone())
@@ -811,7 +863,7 @@ async fn logs_get(
     let archive = state
         .archives
         .get(get.get_server())
-        .ok_or(anyhow::anyhow!("Server not found"))
+        .ok_or_else(|| Whatever::without_source("Server not found".to_string()))
         .map_err(error::ErrorNotFound)?;
     let reader = state
         .to_reader(archive.clone())
@@ -892,11 +944,11 @@ fn prefix_log_timestamps(logs: &str, serve_time: DateTime<Utc>, timestamped: boo
     logs.split_inclusive('\n').map(convert_timestamp).collect()
 }
 
-async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> anyhow::Result<JsonResource> {
+async fn get_item(get: Path<Get>, state: web::Data<ApiState>) -> Result<JsonResource, Whatever> {
     let archive = state
         .archives
         .get(get.get_server())
-        .ok_or(anyhow::anyhow!("Server not found"))?;
+        .ok_or_else(|| Whatever::without_source("Server not found".to_string()))?;
     let reader = state.to_reader(archive.clone()).await?;
     let get = archive.named_object_from_get(get.clone())?;
     reader.load(get).await
