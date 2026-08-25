@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use anyhow::anyhow;
 use serde::Deserialize;
+use snafu::prelude::*;
 
 #[derive(Clone, Default, Deserialize, Debug)]
 pub struct HostLog {
@@ -10,12 +10,12 @@ pub struct HostLog {
 }
 
 impl TryFrom<&str> for HostLog {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let (name, command) = s.split_once(':').unwrap_or_default();
         if name.is_empty() && command.is_empty() {
-            Err(anyhow!("Custom log should contain : delimiter"))?;
+            whatever!("Custom log should contain : delimiter");
         }
 
         Ok(Self {

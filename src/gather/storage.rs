@@ -1,19 +1,21 @@
-use std::{collections::HashMap, fs::File, io::Read as _, path::PathBuf, pin::pin, sync::Arc};
+use std::{collections::HashMap, io::Read as _, path::PathBuf, pin::pin, sync::Arc};
 
-use anyhow::bail;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use cached::cached;
 use derive_more::Deref;
 use flate2::read::GzDecoder;
 use oci_client::{Client, Reference, manifest::OciDescriptor, secrets::RegistryAuth};
+use snafu::{FromString as _, Whatever, prelude::*};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
+use crate::gather::json_resource::{JsonResource, ReadState};
 use crate::gather::writer::ManifestConfig;
+use crate::scanners::interface::Extension;
 
 #[derive(Clone)]
 pub enum Storage {
     FS,
-    OCI(Box<OCIState>),
+    OCI(Arc<OCIState>),
 }
 
 #[derive(Clone)]
@@ -35,31 +37,31 @@ impl Storage {
     #[must_use]
     pub fn new(oci: Option<OCIState>) -> Self {
         match oci {
-            Some(oci) => Self::OCI(Box::new(oci)),
+            Some(oci) => Self::OCI(Arc::new(oci)),
             None => Self::FS,
         }
     }
 
-    pub async fn read_raw(&self, path: PathBuf) -> anyhow::Result<String> {
+    pub async fn read_raw(&self, path: PathBuf) -> Result<String, Whatever> {
         match self {
-            Self::FS => {
-                let mut file = File::open(path)?;
-                let mut data = String::new();
-                File::read_to_string(&mut file, &mut data)?;
-                Ok(data)
-            }
+            Self::FS => Ok(tokio::fs::read_to_string(&path)
+                .await
+                .whatever_context("failed to read file")?),
             Self::OCI(oci_state) => Ok(oci_state.read_raw(path).await?),
         }
     }
 
-    pub async fn read<W: AsyncWrite>(&self, path: PathBuf, out: W) -> anyhow::Result<usize> {
+    pub async fn read<W: AsyncWrite>(&self, path: &PathBuf, out: W) -> Result<usize, Whatever> {
         match self {
             Self::FS => {
-                let mut file = File::open(path)?;
-                let mut data = String::new();
-                File::read_to_string(&mut file, &mut data)?;
+                let data = tokio::fs::read(path)
+                    .await
+                    .whatever_context("failed to read file")?;
                 let mut out = pin!(out);
-                Ok(out.write(data.as_bytes()).await?)
+                out.write_all(&data)
+                    .await
+                    .whatever_context("failed to write data")?;
+                Ok(data.len())
             }
             Self::OCI(oci_state) => Ok(oci_state.read(path, out).await?),
         }
@@ -73,26 +75,26 @@ impl Storage {
         }
     }
 
-    pub fn matching_paths(&self, path: PathBuf) -> anyhow::Result<Vec<PathBuf>> {
+    pub fn matching_paths(&self, path: PathBuf) -> Result<Vec<PathBuf>, Whatever> {
         let mut paths = vec![];
-        let path = path
-            .to_str()
-            .map_or_else(|| bail!("Unable to convert path to string: {path:?}"), Ok)?;
+        let path = path.to_str().map_or_else(
+            || whatever!("Unable to convert path to string: {path:?}"),
+            Ok,
+        )?;
         match self {
             Self::FS => {
-                for path in glob::glob(path)? {
-                    paths.push(path?);
+                for path in glob::glob(path).whatever_context("failed to create glob iterator")? {
+                    paths.push(path.whatever_context("failed to get glob path")?);
                 }
             }
             Self::OCI(ocistate) => {
-                let pattern = glob::Pattern::new(path)?;
+                let pattern =
+                    glob::Pattern::new(path).whatever_context("failed to create glob pattern")?;
                 for path in ocistate.index.keys() {
-                    if pattern.matches(
-                        path.to_str().map_or_else(
-                            || bail!("Unable to convert path to string: {path:?}"),
-                            Ok,
-                        )?,
-                    ) {
+                    if pattern.matches(path.to_str().map_or_else(
+                        || whatever!("Unable to convert path to string: {path:?}"),
+                        Ok,
+                    )?) {
                         paths.push(path.clone());
                     }
                 }
@@ -100,24 +102,49 @@ impl Storage {
         }
         Ok(paths)
     }
+
+    pub fn extension(&self) -> Extension {
+        match self {
+            Storage::FS => Extension::Yaml,
+            Storage::OCI(ocistate) => ocistate.config.extension,
+        }
+    }
+
+    /// Reads bytes. FS uses YAML. OCI uses JSON when the flag is on.
+    pub fn from_slice<T: serde::de::DeserializeOwned + Send>(
+        &self,
+        data: Vec<u8>,
+    ) -> Result<T, Whatever> {
+        // The Extension is taken from OCI state (when present) or defaults to Yaml (FS),
+        // via `Self::extension()`.
+        self.extension().from_slice(&data)
+    }
+
+    pub fn object(&self, data: Vec<u8>, state: ReadState) -> Result<JsonResource, Whatever> {
+        let ext = self.extension();
+        ext.object(&data, state)
+    }
 }
 
 impl OCIState {
-    async fn read_raw(&self, path: PathBuf) -> anyhow::Result<String> {
-        let layer = self
-            .index
-            .get(&path)
-            .ok_or_else(|| anyhow::anyhow!("missing OCI layer entry for path: {path:?}"))?;
-        let mut data = Vec::with_capacity(layer.size.try_into()?);
+    async fn read_raw(&self, path: PathBuf) -> Result<String, Whatever> {
+        let layer = self.index.get(&path).ok_or_else(|| {
+            Whatever::without_source(format!("missing OCI layer entry for path: {path:?}"))
+        })?;
+        let mut data = Vec::with_capacity(
+            layer
+                .size
+                .try_into()
+                .whatever_context("failed to convert layer size")?,
+        );
         self.pull_blob(layer, &mut data).await?;
-        Ok(String::from_utf8(data)?)
+        String::from_utf8(data).whatever_context("failed to convert bytes to string")
     }
 
-    async fn read<W: AsyncWrite>(&self, path: PathBuf, out: W) -> anyhow::Result<usize> {
-        let layer = self
-            .index
-            .get(&path)
-            .ok_or_else(|| anyhow::anyhow!("missing OCI layer entry for path: {path:?}"))?;
+    async fn read<W: AsyncWrite>(&self, path: &PathBuf, out: W) -> Result<usize, Whatever> {
+        let layer = self.index.get(path).ok_or_else(|| {
+            Whatever::without_source(format!("missing OCI layer entry for path: {path:?}"))
+        })?;
 
         let size = self.pull_blob(layer, out).await?;
         Ok(size)
@@ -127,7 +154,7 @@ impl OCIState {
         &self,
         descriptor: &Descriptor,
         out: W,
-    ) -> anyhow::Result<usize> {
+    ) -> Result<usize, Whatever> {
         let data = pull_blob_cached(
             &self.client,
             &self.reference,
@@ -139,11 +166,15 @@ impl OCIState {
         let mut out = pin!(out);
 
         let Descriptor::ListOciDescriptor(_, from, to) = descriptor else {
-            out.write_all(&data).await?;
+            out.write_all(&data)
+                .await
+                .whatever_context("failed to write blob data")?;
             return Ok(data.len());
         };
 
-        out.write_all(&data[*from..*to]).await?;
+        out.write_all(&data[*from..*to])
+            .await
+            .whatever_context("failed to write blob slice")?;
         Ok(*to - *from)
     }
 }
@@ -151,6 +182,7 @@ impl OCIState {
 #[cached(
     result = true,
     key = "String",
+    sync_writes = "by_key",
     convert = r#"{ format!("{}@{}", reference, descriptor.digest) }"#
 )]
 pub(crate) async fn pull_blob_cached(
@@ -159,21 +191,55 @@ pub(crate) async fn pull_blob_cached(
     auth: &RegistryAuth,
     descriptor: &OciDescriptor,
     encoded: bool,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>, Whatever> {
     client
         .store_auth_if_needed(reference.registry(), auth)
         .await;
-    let mut out = Vec::with_capacity(descriptor.size.try_into()?);
-    client.pull_blob(reference, &descriptor, &mut out).await?;
+    let mut out = Vec::with_capacity(
+        descriptor
+            .size
+            .try_into()
+            .whatever_context("failed to convert descriptor size")?,
+    );
+    client
+        .pull_blob(reference, &descriptor, &mut out)
+        .await
+        .whatever_context("failed to pull blob from registry")?;
 
     if !encoded {
         return Ok(out);
     }
 
-    let data = BASE64_STANDARD.decode(out)?;
+    let data = BASE64_STANDARD
+        .decode(out)
+        .whatever_context("failed to decode base64 blob")?;
     let mut dec = GzDecoder::new(data.as_slice());
 
     let mut objects = vec![];
-    dec.read_to_end(&mut objects)?;
+    dec.read_to_end(&mut objects)
+        .whatever_context("failed to read decompressed blob")?;
     Ok(objects)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::serde_json;
+
+    #[test]
+    fn test_manifest_config_default() {
+        let data: Vec<u8> = b"{\"compressed\": true}".to_vec();
+        let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
+        assert!(config.compressed);
+        assert_eq!(config.extension, Extension::Yaml);
+    }
+
+    #[test]
+    fn test_manifest_config_new() {
+        // New archives set the extension field directly.
+        let data: Vec<u8> = b"{\"compressed\": true, \"extension\": \"json\"}".to_vec();
+        let config: ManifestConfig = serde_json::from_slice(&data).unwrap();
+        assert!(config.compressed);
+        assert_eq!(config.extension, Extension::Json);
+    }
 }

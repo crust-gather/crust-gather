@@ -7,6 +7,7 @@ use kube::core::{GroupVersionKind, Resource};
 use regex::Regex;
 use rmcp::schemars::{self, Schema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use snafu::{ResultExt, Whatever};
 
 use crate::scanners::interface::ResourceThreadSafe;
 
@@ -29,26 +30,6 @@ where
 
     fn filter(&self, gvk: &GroupVersionKind, obj: &R) -> bool {
         self.filter_object(obj, gvk).unwrap_or(true)
-    }
-}
-
-impl<T, R, I> Filter<R> for I
-where
-    R: Resource + Serialize + DeserializeOwned,
-    R: Clone + Sync + Send + Debug,
-    T: Filter<R>,
-    I: IntoIterator<Item = T> + Clone + Sync + Send,
-{
-    fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
-        let mut f = self
-            .clone()
-            .into_iter()
-            .filter_map(|f| f.filter_object(obj, gvk))
-            .peekable();
-
-        f.peek()?;
-
-        Some(f.any(|accepted| accepted))
     }
 }
 
@@ -98,21 +79,20 @@ impl<R: ResourceThreadSafe> Filter<R> for FilterList {
     fn filter_object(&self, obj: &R, gvk: &GroupVersionKind) -> Option<bool> {
         self.0
             .iter()
-            .filter_map(|f| match f {
-                FilterType::NamespaceExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::KindExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::GroupExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::NameExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::LabelSelectorExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::AnnotationSelectorExclude(e) => Some(eval_exclude(e, obj, gvk)),
-                FilterType::NamespaceInclude(i) => i.filter_object(obj, gvk),
-                FilterType::KindInclude(i) => i.filter_object(obj, gvk),
-                FilterType::GroupInclude(i) => i.filter_object(obj, gvk),
-                FilterType::NameInclude(i) => i.filter_object(obj, gvk),
-                FilterType::LabelSelectorInclude(i) => i.filter_object(obj, gvk),
-                FilterType::AnnotationSelectorInclude(i) => i.filter_object(obj, gvk),
+            .all(|f| match f {
+                FilterType::NamespaceExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::KindExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::GroupExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::NameExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::LabelSelectorExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::AnnotationSelectorExclude(e) => eval_exclude(e, obj, gvk),
+                FilterType::NamespaceInclude(i) => eval_include(i, obj, gvk),
+                FilterType::KindInclude(i) => eval_include(i, obj, gvk),
+                FilterType::GroupInclude(i) => eval_include(i, obj, gvk),
+                FilterType::NameInclude(i) => eval_include(i, obj, gvk),
+                FilterType::LabelSelectorInclude(i) => eval_include(i, obj, gvk),
+                FilterType::AnnotationSelectorInclude(i) => eval_include(i, obj, gvk),
             })
-            .all(|allowed| allowed)
             .into()
     }
 }
@@ -126,6 +106,17 @@ where
         .iter()
         .filter_map(|f| f.filter_object(obj, gvk))
         .all(|allowed| allowed)
+}
+
+fn eval_include<R, F>(filters: &[F], obj: &R, gvk: &GroupVersionKind) -> bool
+where
+    F: Filter<R>,
+    R: ResourceThreadSafe,
+{
+    filters
+        .iter()
+        .filter_map(|f| f.filter_object(obj, gvk))
+        .any(|allowed| allowed)
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -171,15 +162,17 @@ impl Display for FilterRegex {
 }
 
 impl TryFrom<&str> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(Regex::new(s)?))
+        Ok(Self(
+            Regex::new(s).whatever_context("Failed to compile regex")?,
+        ))
     }
 }
 
 impl TryFrom<String> for FilterRegex {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

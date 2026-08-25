@@ -1,6 +1,7 @@
 extern crate scopeguard;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[snafu::report]
+async fn main() -> Result<(), snafu::Whatever> {
     Box::pin(crust_gather::run_cli()).await
 }
