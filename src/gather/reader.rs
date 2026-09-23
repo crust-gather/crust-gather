@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derive_more::From;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream};
@@ -19,26 +18,35 @@ use k8s_openapi::{
         CustomResourceColumnDefinition, CustomResourceDefinition, CustomResourceDefinitionSpec,
         CustomResourceDefinitionVersion,
     },
-    serde_json::{self, json},
+    serde_json,
 };
 use kube::{
     ResourceExt,
-    api::{GroupVersionResource, ObjectMeta, PartialObjectMetaExt as _, WatchEvent},
+    api::{
+        GroupVersionResource, ObjectMeta, PartialObjectMeta, PartialObjectMetaExt as _, WatchEvent,
+    },
     client::{APIGroupDiscovery, APIGroupDiscoveryList, APIResourceDiscovery, APIVersionDiscovery},
     core::{DynamicObject, Resource, TypeMeta},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use serde_json_path::JsonPath;
+use snafu::{FromString, ResultExt, Whatever};
 use tokio::sync;
 use tracing::instrument;
 
 use crate::{
-    gather::storage::Storage,
-    scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, UPDATED_ANNOTATION},
+    gather::{
+        json_resource::{JsonResource, ReadState},
+        storage::Storage,
+    },
+    scanners::interface::{ADDED_ANNOTATION, DELETED_ANNOTATION, Extension, UPDATED_ANNOTATION},
 };
 
 use super::{
-    printers::{AGE_CEL, ColumnDefinition, TablePath, has_predefined_table, predefined_table},
+    printers::{
+        AGE_CEL, ColumnDefinition, TablePath, TableRowDefinition, has_predefined_table,
+        predefined_table,
+    },
     representation::{
         ArchivePath, Container, LogGroup, NamespaceName, NamespacedName, TypeMetaGetter,
     },
@@ -119,17 +127,24 @@ pub enum ListResponse {
     Table(ResultTable),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, From)]
+#[serde(untagged)]
+pub enum WatchResponse {
+    Watch(WatchEvent<JsonResource>),
+    Table(WatchEvent<ResultTable>),
+}
+
+#[derive(Serialize)]
 pub struct ObjectValueList {
     #[serde(flatten)]
     type_meta: TypeMeta,
     metadata: ObjectMeta,
-    items: Vec<DynamicObject>,
+    items: Vec<JsonResource>,
 }
 
 impl ObjectValueList {
     #[must_use]
-    pub fn new(list: NamedObject, items: Vec<DynamicObject>) -> Self {
+    pub fn new(list: NamedObject, items: Vec<JsonResource>) -> Self {
         Self {
             type_meta: TypeMeta {
                 kind: list.named_resource.list_kind.clone(),
@@ -147,27 +162,20 @@ impl ObjectValueList {
 #[derive(Clone)]
 pub struct Table {
     pub data: Vec<TablePath>,
-    pub items: Vec<serde_json::Value>,
+    pub items: Vec<JsonResource>,
 }
 
 impl Table {
     #[instrument(skip_all, err)]
-    async fn new(
+    pub(crate) async fn new(
         crd_path: Option<PathBuf>,
         list: NamedObject,
-        items: Vec<impl Serialize>,
+        items: Vec<JsonResource>,
         storage: &Storage,
-    ) -> anyhow::Result<Self> {
-        let mut data = vec![];
-
-        data.extend(Self::table_entries(storage, crd_path, list).await?);
-        let items: anyhow::Result<Vec<serde_json::Value>> = items
-            .into_iter()
-            .map(|i| serde_json::to_value(i).map_err(Into::into))
-            .collect();
+    ) -> Result<Self, Whatever> {
         Ok(Self {
-            data,
-            items: items?,
+            data: Self::table_entries(storage, crd_path, list).await?,
+            items,
         })
     }
 
@@ -175,13 +183,13 @@ impl Table {
         storage: &Storage,
         crd_path: Option<PathBuf>,
         list: NamedObject,
-    ) -> anyhow::Result<Vec<TablePath>> {
+    ) -> Result<Vec<TablePath>, Whatever> {
         let crd: CustomResourceDefinition = if let Some(crd_path) = crd_path
             && storage.exist(&crd_path)
         {
             let mut file = vec![];
-            storage.read(crd_path, &mut file).await?;
-            serde_saphyr::from_slice(&file)?
+            storage.read(&crd_path, &mut file).await?;
+            storage.from_slice(file)?
         } else {
             match predefined_table(&list.named_resource.resource) {
                 Some(columns) => CustomResourceDefinition {
@@ -258,47 +266,46 @@ impl Table {
         })
     }
 
-    fn to_row(&self, obj: impl Serialize) -> anyhow::Result<serde_json::Value> {
+    fn to_row(&self, obj: &JsonResource) -> Result<TableRow, Whatever> {
         let Self { data: rows, .. } = self;
-        let obj = serde_json::to_value(obj)?;
+        let context = TablePath::build_context(&obj.json)
+            .ok_or_else(|| Whatever::without_source("failed to build context".to_string()))?;
         let cells: Vec<serde_json::Value> = rows
             .iter()
-            .map(|r| r.render(&obj).unwrap_or(serde_json::Value::Null))
+            .map(|r| {
+                r.render(&obj.json, &context)
+                    .unwrap_or(serde_json::Value::Null)
+            })
             .collect();
 
-        Ok(json!({
-            "cells": cells,
-            "object": serde_json::from_value::<DynamicObject>(obj)?.metadata.into_response_partial::<DynamicObject>(),
-        }))
+        Ok(TableRow {
+            cells,
+            object: obj.meta().clone().into_response_partial::<DynamicObject>(),
+        })
     }
 
-    fn definitions(&self) -> Vec<serde_json::Value> {
+    fn definitions(&self) -> Vec<TableRowDefinition> {
         self.data
             .iter()
             .map(super::printers::TablePath::to_definition)
             .collect()
     }
 
-    fn rows(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    fn rows(&self) -> Result<Vec<TableRow>, Whatever> {
         let Self { items, .. } = self;
         items.iter().map(|i| self.to_row(i)).collect()
     }
 
-    fn to_value(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(json!({
-            "kind": "Table",
-            "apiVersion": "meta.k8s.io/v1",
-            "metadata": {
-                "resourceVersion": "1"
-            },
-            "columnDefinitions": self.definitions(),
-            "rows": self.rows()?,
-        }))
-    }
-
-    fn to_result_table(&self) -> anyhow::Result<ResultTable> {
+    pub(crate) fn to_result_table(&self) -> Result<ResultTable, Whatever> {
         ResultTable::from_table(self)
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRow {
+    pub cells: Vec<serde_json::Value>,
+    pub object: PartialObjectMeta<DynamicObject>,
 }
 
 #[derive(Serialize)]
@@ -307,12 +314,12 @@ pub struct ResultTable {
     pub kind: String,
     pub api_version: String,
     pub metadata: ObjectMeta,
-    pub column_definitions: Vec<serde_json::Value>,
-    pub rows: Vec<serde_json::Value>,
+    pub column_definitions: Vec<TableRowDefinition>,
+    pub rows: Vec<TableRow>,
 }
 
 impl ResultTable {
-    pub fn from_table(table: &Table) -> anyhow::Result<ResultTable> {
+    pub fn from_table(table: &Table) -> Result<ResultTable, Whatever> {
         Ok(ResultTable {
             kind: "Table".to_string(),
             api_version: "meta.k8s.io/v1".to_string(),
@@ -372,19 +379,6 @@ trait GatherObject: ResourceExt + Sized + Serialize {
     fn deleted(&self) -> bool {
         self.annotations().contains_key(DELETED_ANNOTATION)
     }
-
-    async fn table_watch_event(
-        &self,
-        crd_path: Option<PathBuf>,
-        list: NamedObject,
-        storage: &Storage,
-    ) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(self.event()(
-            Table::new(crd_path, list, vec![&self], storage)
-                .await?
-                .to_value()?,
-        ))?)
-    }
 }
 
 impl<T: Resource + Serialize> GatherObject for T {}
@@ -400,6 +394,7 @@ struct NamedResource {
     resource: String,
     singular: String,
     list_kind: String,
+    extension: Extension,
 }
 
 impl NamedResource {
@@ -408,21 +403,22 @@ impl NamedResource {
             ArchivePath::new_path(
                 NamespaceName::new(Some(format!("{}.{}", self.resource, group)), None),
                 TypeMeta::resource::<CustomResourceDefinition>(),
+                self.extension,
             )
         })
     }
 }
 
-struct NamedResourcesState<'a> {
-    archive: Archive,
-    storage: &'a Storage,
+struct NamedResourcesState {
+    archive: Arc<Archive>,
+    storage: Arc<Storage>,
     served_crs_only: bool,
 }
 
 type DiscoveryResource = (String, String, APIResourceDiscovery);
 
-impl<'a> NamedResourcesState<'a> {
-    const fn new(archive: Archive, storage: &'a Storage, served_crs_only: bool) -> Self {
+impl NamedResourcesState {
+    pub fn new(archive: Arc<Archive>, storage: Arc<Storage>, served_crs_only: bool) -> Self {
         Self {
             archive,
             storage,
@@ -430,13 +426,13 @@ impl<'a> NamedResourcesState<'a> {
         }
     }
 
-    async fn discovery_file(&self, path: ArchivePath) -> anyhow::Result<Vec<DiscoveryResource>> {
+    async fn discovery_file(&self, path: ArchivePath) -> Result<Vec<DiscoveryResource>, Whatever> {
         let mut object = vec![];
         self.storage
-            .read(self.archive.join(path), &mut object)
+            .read(&self.archive.join(path), &mut object)
             .await?;
 
-        let discovery = serde_saphyr::from_slice(&object)?;
+        let discovery = self.storage.from_slice(object)?;
         Ok(self.discovery_groups(discovery))
     }
 
@@ -515,6 +511,7 @@ impl<'a> NamedResourcesState<'a> {
                 .singular_resource
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| kind.clone().to_lowercase()),
+            extension: self.storage.extension(),
         };
 
         if !self.served_crs_only {
@@ -536,8 +533,8 @@ impl<'a> NamedResourcesState<'a> {
 
         let crd: CustomResourceDefinition = {
             let mut file = vec![];
-            self.storage.read(crd_path, &mut file).await.ok()?;
-            serde_saphyr::from_slice(&file).ok()?
+            self.storage.read(&crd_path, &mut file).await.ok()?;
+            self.storage.from_slice(file).ok()?
         };
 
         crd.spec
@@ -561,7 +558,7 @@ impl NamedResources {
 
     async fn insert_resources(
         &mut self,
-        state: &NamedResourcesState<'_>,
+        state: &NamedResourcesState,
         resources: Vec<DiscoveryResource>,
     ) {
         for (group, version, resource) in resources {
@@ -572,7 +569,7 @@ impl NamedResources {
 
     async fn insert_resource(
         &mut self,
-        state: &NamedResourcesState<'_>,
+        state: &NamedResourcesState,
         group: &str,
         version: &str,
         res: APIResourceDiscovery,
@@ -600,7 +597,7 @@ pub struct NamedObject {
 impl NamedObject {
     #[must_use]
     pub fn get_path(&self) -> ArchivePath {
-        ArchivePath::new_path(self, self.to_type_meta())
+        ArchivePath::new_path(self, self.to_type_meta(), self.named_resource.extension)
     }
 
     #[must_use]
@@ -648,15 +645,15 @@ impl NamespacedName for &NamedObject {
 
 #[derive(Clone)]
 pub struct ArchiveReader {
-    archive: Archive,
+    archive: Arc<Archive>,
     named_resources: Arc<NamedResources>,
     buffer_size: usize,
 }
 
 impl ArchiveReader {
     pub async fn new(
-        archive: Archive,
-        storage: &Storage,
+        archive: Arc<Archive>,
+        storage: Arc<Storage>,
         buffer_size: usize,
         served_crs_only: bool,
     ) -> Self {
@@ -701,7 +698,7 @@ impl ArchiveReader {
         self.archive.path()
     }
 
-    pub fn named_object_from_list(&self, list: List) -> anyhow::Result<NamedObject> {
+    pub fn named_object_from_list(&self, list: List) -> Result<NamedObject, Whatever> {
         let gvr = GroupVersionResource::gvr(
             &list.group.clone().unwrap_or_default(),
             &list.version,
@@ -709,17 +706,15 @@ impl ArchiveReader {
         );
 
         Ok(NamedObject {
-            named_resource: self
-                .named_resources
-                .get(&gvr)
-                .cloned()
-                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
+            named_resource: self.named_resources.get(&gvr).cloned().ok_or(
+                Whatever::without_source(format!("Failed to find named resource for {gvr:?}")),
+            )?,
             namespace: list.namespace,
             name: None,
         })
     }
 
-    pub fn named_object_from_get(&self, get: Get) -> anyhow::Result<NamedObject> {
+    pub fn named_object_from_get(&self, get: Get) -> Result<NamedObject, Whatever> {
         let gvr = GroupVersionResource::gvr(
             &get.group.clone().unwrap_or_default(),
             &get.version,
@@ -727,11 +722,9 @@ impl ArchiveReader {
         );
 
         Ok(NamedObject {
-            named_resource: self
-                .named_resources
-                .get(&gvr)
-                .cloned()
-                .ok_or(anyhow::anyhow!("Failed to find named resource for {gvr:?}"))?,
+            named_resource: self.named_resources.get(&gvr).cloned().ok_or(
+                Whatever::without_source(format!("Failed to find named resource for {gvr:?}")),
+            )?,
             namespace: get.namespace,
             name: Some(get.name),
         })
@@ -742,9 +735,9 @@ impl ArchiveReader {
 pub struct Reader {
     pub archive: ArchiveReader,
     diff: Duration,
-    objects_state: Arc<Mutex<HashMap<PathBuf, DynamicObject>>>,
+    objects_state: Arc<Mutex<HashMap<PathBuf, JsonResource>>>,
     next_patch_time: Arc<Mutex<Duration>>,
-    storage: Storage,
+    storage: Arc<Storage>,
 }
 
 impl Hash for Reader {
@@ -772,16 +765,20 @@ impl Reader {
     pub async fn new(
         archive: ArchiveReader,
         beginning: DateTime<Utc>,
-        storage: Storage,
-    ) -> anyhow::Result<Self> {
-        let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp")?);
+        storage: Arc<Storage>,
+    ) -> Result<Self, Whatever> {
+        let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp").unwrap());
         let path = archive.join(path);
         let diff = match storage.exist(&path) {
             true => {
                 let mut file = vec![];
-                storage.read(path, &mut file).await?;
-                let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)?;
-                beginning.signed_duration_since(record_timestamp).to_std()?
+                storage.read(&path, &mut file).await?;
+                let record_timestamp: DateTime<Utc> = serde_json::from_slice(&file)
+                    .whatever_context("failed to parse record timestamp")?;
+                beginning
+                    .signed_duration_since(record_timestamp)
+                    .to_std()
+                    .whatever_context("failed to convert signed duration to std")?
             }
             false => Duration::default(),
         };
@@ -799,7 +796,7 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<ResultTable> {
+    ) -> Result<ResultTable, Whatever> {
         self.table(list, selector).await?.to_result_table()
     }
 
@@ -817,16 +814,19 @@ impl Reader {
     }
 
     #[instrument(skip_all, fields(table = list.get_path().to_string()))]
-    async fn table(&self, list: NamedObject, selector: Selector) -> anyhow::Result<Table> {
+    async fn table(&self, list: NamedObject, selector: Selector) -> Result<Table, Whatever> {
         tracing::trace!("Reading table...");
-
         Table::new(
             list.get_crd_path().map(|crd| self.archive.join(crd)),
             list.clone(),
-            self.items(self.archive.join(list.get_path()), selector)
-                .await?
-                .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
-                .collect(),
+            self.items(
+                self.archive.join(list.get_path()),
+                selector,
+                ReadState::TableView,
+            )
+            .await?
+            .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
+            .collect(),
             &self.storage,
         )
         .await
@@ -838,12 +838,11 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> Result<Vec<WatchEvent<ResultTable>>, Whatever> {
         tracing::trace!("Watching table...");
-
         let mut events = vec![];
         for object in self
-            .objects(list.get_path())
+            .objects(list.get_path(), ReadState::TableView)
             .await?
             .filter(|obj| selector.matches(obj.labels()))
         {
@@ -863,21 +862,22 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> Result<Vec<WatchEvent<JsonResource>>, Whatever> {
         tracing::trace!("Watching list...");
 
-        self.objects(list.get_path())
+        Ok(self
+            .objects(list.get_path(), ReadState::Watch)
             .await?
             .filter(|obj| selector.matches(obj.labels()))
             .map(GatherObject::watch_event)
-            .map(|ev| serde_json::to_value(ev).map_err(Into::into))
-            .collect()
+            .collect())
     }
 
     async fn objects(
         &self,
         path: ArchivePath,
-    ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
+        state: ReadState,
+    ) -> Result<impl Iterator<Item = JsonResource>, Whatever> {
         let mut new_objects = HashMap::new();
         let objects = {
             let mut objects_state = self
@@ -912,10 +912,10 @@ impl Reader {
                 }
                 None => {
                     for version in self
-                        .versions(path.clone())
+                        .versions(path.clone(), state)
                         .await?
                         .into_iter()
-                        .filter(|obj: &DynamicObject| obj.older(self.archive_time()))
+                        .filter(|obj: &JsonResource| obj.older(self.archive_time()))
                     {
                         new_objects.insert(path.clone(), version.clone());
                         items.push(version);
@@ -939,46 +939,45 @@ impl Reader {
         &self,
         path: PathBuf,
         selector: Selector,
-    ) -> anyhow::Result<impl Iterator<Item = DynamicObject>> {
+        state: ReadState,
+    ) -> Result<impl Iterator<Item = JsonResource>, Whatever> {
         let items = Arc::new(sync::Mutex::new(vec![]));
         stream::iter(self.storage.matching_paths(path)?)
             .map(|path| {
                 let selector = &selector;
                 let items = items.clone();
                 async move {
-                    let obj: DynamicObject = self.read(path).await?;
+                    let obj = self.read(path, state).await?;
                     if selector.matches(obj.labels()) {
                         items.lock().await.push(obj);
                     }
 
-                    anyhow::Result::Ok(())
+                    Ok(())
                 }
             })
             .boxed()
             .buffered(self.archive.buffer_size)
-            .try_for_each(future::ok::<(), anyhow::Error>)
+            .try_for_each(future::ok::<(), Whatever>)
             .await?;
 
         Ok(items.lock().await.clone().into_iter())
     }
 
     #[instrument(skip_all, fields(path = path.to_string()))]
-    pub async fn load_raw(&self, path: ArchivePath) -> anyhow::Result<String> {
+    pub async fn load_raw(&self, path: ArchivePath) -> Result<String, Whatever> {
         tracing::debug!("Reading file...");
 
         self.storage.read_raw(self.archive.join(path)).await
     }
 
     #[instrument(skip_all, fields(path = get.get_path().to_string()))]
-    pub async fn load(&self, get: NamedObject) -> anyhow::Result<serde_json::Value> {
+    pub async fn load(&self, get: NamedObject) -> Result<JsonResource, Whatever> {
         tracing::debug!("Reading file...");
-
-        let obj: DynamicObject = self.read(self.archive.join(get.get_path())).await?;
-        if obj.deleted() {
-            bail!("Object was deleted")
-        }
-
-        serde_json::to_value(obj).map_err(Into::into)
+        self.read(
+            self.archive.join(get.get_path()),
+            ReadState::SelectorSet(false),
+        )
+        .await
     }
 
     #[instrument(skip_all, fields(object = list.get_path().to_string()))]
@@ -986,49 +985,48 @@ impl Reader {
         &self,
         list: NamedObject,
         selector: Selector,
-    ) -> anyhow::Result<ObjectValueList> {
+    ) -> Result<ObjectValueList, Whatever> {
         tracing::trace!("Reading list...");
-
+        let read_state = ReadState::SelectorSet(!selector.is_empty());
         let path = self.archive.join(list.get_path());
 
         Ok(ObjectValueList::new(
             list,
-            self.items(path, selector)
+            self.items(path, selector, read_state)
                 .await?
                 .filter(|obj| obj.older(self.archive_time()) && !obj.deleted())
                 .collect(),
         ))
     }
 
-    pub async fn read<R: DeserializeOwned + Clone>(&self, path: PathBuf) -> anyhow::Result<R> {
-        self.versions(path)
+    pub async fn read(&self, path: PathBuf, state: ReadState) -> Result<JsonResource, Whatever> {
+        self.versions(path, state)
             .await?
             .last()
             .cloned()
-            .ok_or(anyhow::anyhow!("failed to find object"))
+            .ok_or(Whatever::without_source(
+                "failed to find object".to_string(),
+            ))
     }
 
     // Collect a sequence of versions for the given object until clusters equivalent of Utc::now()
-    async fn versions<R: DeserializeOwned>(&self, path: PathBuf) -> anyhow::Result<Vec<R>> {
+    async fn versions(
+        &self,
+        path: PathBuf,
+        state: ReadState,
+    ) -> Result<Vec<JsonResource>, Whatever> {
         let mut object = vec![];
-        self.storage.read(path.clone(), &mut object).await?;
+        self.storage.read(&path, &mut object).await?;
         match self.storage.exist(&path.with_extension("patch")) {
-            false => Ok(vec![serde_saphyr::from_slice(&object)?]),
+            false => Ok(vec![self.storage.object(object, state)?]),
             true => {
-                let original: serde_json::Value = serde_saphyr::from_slice(&object)?;
-                Some(original.clone())
-                    .into_iter()
-                    .chain(
-                        self.interpolate(
-                            &original,
-                            path.with_extension("patch"),
-                            DateTime::default(),
-                            self.archive_time(),
-                        )
-                        .await?,
-                    )
-                    .map(|version| serde_json::from_value(version).map_err(Into::into))
-                    .collect()
+                self.interpolate(
+                    &self.storage.object(object, state)?,
+                    path.with_extension("patch"),
+                    DateTime::default(),
+                    self.archive_time(),
+                )
+                .await
             }
         }
     }
@@ -1036,24 +1034,26 @@ impl Reader {
     async fn read_lines(
         &self,
         filename: PathBuf,
-    ) -> anyhow::Result<io::Lines<io::BufReader<impl io::Read>>> {
+    ) -> Result<io::Lines<io::BufReader<impl io::Read>>, Whatever> {
         let mut file = vec![];
-        self.storage.read(filename, &mut file).await?;
+        self.storage.read(&filename, &mut file).await?;
         Ok(io::BufReader::new(io::Cursor::new(file)).lines())
     }
 
     // Goes through all json patches and applies them on the resource in order
-    async fn interpolate<R: Serialize + DeserializeOwned>(
+    async fn interpolate(
         &self,
-        target: &R,
+        target: &JsonResource,
         patches_file: PathBuf,
         from: DateTime<Utc>,
         until: DateTime<Utc>,
-    ) -> anyhow::Result<Vec<R>> {
-        let mut target = serde_json::to_value(target)?;
+    ) -> Result<Vec<JsonResource>, Whatever> {
+        let mut target = target.clone();
         let mut versions = vec![];
         for list in self.read_lines(patches_file).await? {
-            let patches: Vec<PatchOperation> = serde_json::from_str(&list?)?;
+            let list = list.whatever_context("failed to read patch line")?;
+            let patches: Vec<PatchOperation> =
+                serde_json::from_str(&list).whatever_context("failed to parse patches")?;
             let mut do_apply = false;
             for p in patches.clone() {
                 match p {
@@ -1063,9 +1063,12 @@ impl Reader {
                             || path == PointerBuf::from_tokens(ADDED_PATH)
                             || path == PointerBuf::from_tokens(DELETED_PATH) =>
                     {
-                        let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)?;
+                        let last_sync_timestamp: DateTime<Utc> = serde_json::from_value(value)
+                            .whatever_context("failed to parse last sync timestamp")?;
                         if last_sync_timestamp >= until {
-                            let wait_duration = (last_sync_timestamp - until).to_std()?;
+                            let wait_duration = (last_sync_timestamp - until)
+                                .to_std()
+                                .whatever_context("failed to convert duration")?;
                             let mut next_patch_time = self
                                 .next_patch_time
                                 .lock()
@@ -1082,8 +1085,10 @@ impl Reader {
             }
 
             if do_apply && !patches.is_empty() {
-                patch(&mut target, &patches)?;
-                versions.push(serde_json::from_value(target.clone())?);
+                patch(&mut target.json, &patches).whatever_context("failed to apply patches")?;
+                let raw = serde_json::from_value(target.json.clone())
+                    .whatever_context("failed to serialize json resource")?;
+                versions.push(JsonResource::new(target.json.clone(), raw));
             }
         }
 
@@ -1106,11 +1111,12 @@ mod tests {
                 resource: "my-kinds".to_string(),
                 singular: "my-kind".to_string(),
                 list_kind: "my-kindList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
-        let items = vec!["foo", "bar", "baz"];
+        let items = vec![JsonResource::default()];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1158,11 +1164,12 @@ mod tests {
                 resource: "my-kinds".to_string(),
                 singular: "type".to_string(),
                 list_kind: "TypeList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
-        let items = vec!["foo", "bar", "baz"];
+        let items = vec![JsonResource::default()];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1210,34 +1217,38 @@ mod tests {
                 resource: "pods".to_string(),
                 singular: "pod".to_string(),
                 list_kind: "PodList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "pod-a",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "containers": [
-                    {"name": "c1"},
-                    {"name": "c2"}
-                ]
-            },
-            "status": {
-                "phase": "Running",
-                "containerStatuses": [
-                    {"ready": true, "restartCount": 1},
-                    {"ready": false, "restartCount": 2}
-                ],
-                "initContainerStatuses": [
-                    {"restartCount": 3}
-                ]
-            }
-        })];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "pod-a",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "containers": [
+                        {"name": "c1"},
+                        {"name": "c2"}
+                    ]
+                },
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {"ready": true, "restartCount": 1},
+                        {"ready": false, "restartCount": 2}
+                    ],
+                    "initContainerStatuses": [
+                        {"restartCount": 3}
+                    ]
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1255,7 +1266,7 @@ mod tests {
         assert_eq!(columns, vec!["Name", "Ready", "Status", "Restarts", "Age"]);
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("pod-a"));
         assert_eq!(cells[1], json!("1/2"));
         assert_eq!(cells[2], json!("Running"));
@@ -1272,23 +1283,27 @@ mod tests {
                 resource: "pods".to_string(),
                 singular: "pod".to_string(),
                 list_kind: "PodList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(5)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "pod-b",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "containers": [
-                    {"name": "c1"}
-                ]
-            }
-        })];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "pod-b",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "containers": [
+                        {"name": "c1"}
+                    ]
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1299,7 +1314,7 @@ mod tests {
         .unwrap();
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("pod-b"));
         assert_eq!(cells[1], json!("0/1"));
         assert_eq!(cells[2], json!(""));
@@ -1316,21 +1331,25 @@ mod tests {
                 resource: "namespaces".to_string(),
                 singular: "namespace".to_string(),
                 list_kind: "NamespaceList".to_string(),
+                extension: Extension::Json,
             },
             namespace: None,
             name: None,
         };
         let created = (Utc::now() - Duration::hours(2)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "ns-a",
-                "creationTimestamp": created,
-                "deletionTimestamp": Utc::now().to_rfc3339(),
-            },
-            "status": {
-                "phase": "Active"
-            }
-        })];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "ns-a",
+                    "creationTimestamp": created,
+                    "deletionTimestamp": Utc::now().to_rfc3339(),
+                },
+                "status": {
+                    "phase": "Active"
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1348,7 +1367,7 @@ mod tests {
         assert_eq!(columns, vec!["Name", "Status", "Age"]);
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("ns-a"));
         assert_eq!(cells[1], json!("Terminating"));
         assert_eq!(cells[2], json!("2h"));
@@ -1363,26 +1382,30 @@ mod tests {
                 resource: "deployments".to_string(),
                 singular: "deployment".to_string(),
                 list_kind: "DeploymentList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("my-namespace".to_string()),
             name: None,
         };
         let created = (Utc::now() - Duration::days(3)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "deploy-a",
-                "namespace": "my-namespace",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "replicas": 3
-            },
-            "status": {
-                "readyReplicas": 2,
-                "updatedReplicas": 3,
-                "availableReplicas": 2
-            }
-        })];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "deploy-a",
+                    "namespace": "my-namespace",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "replicas": 3
+                },
+                "status": {
+                    "readyReplicas": 2,
+                    "updatedReplicas": 3,
+                    "availableReplicas": 2
+                }
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1403,7 +1426,7 @@ mod tests {
         );
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("deploy-a"));
         assert_eq!(cells[1], json!("2/3"));
         assert_eq!(cells[2], json!(3));
@@ -1420,26 +1443,30 @@ mod tests {
                 resource: "services".to_string(),
                 singular: "service".to_string(),
                 list_kind: "ServiceList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("default".to_string()),
             name: None,
         };
         let created = (Utc::now() - Duration::days(5) - Duration::hours(9)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "kubernetes",
-                "namespace": "default",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "type": "ClusterIP",
-                "clusterIP": "10.96.0.1",
-                "ports": [
-                    {"port": 443, "protocol": "TCP"}
-                ]
-            },
-            "status": {}
-        })];
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "kubernetes",
+                    "namespace": "default",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "type": "ClusterIP",
+                    "clusterIP": "10.96.0.1",
+                    "ports": [
+                        {"port": 443, "protocol": "TCP"}
+                    ]
+                },
+                "status": {}
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1467,7 +1494,7 @@ mod tests {
         );
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("kubernetes"));
         assert_eq!(cells[1], json!("ClusterIP"));
         assert_eq!(cells[2], json!("10.96.0.1"));
@@ -1485,34 +1512,38 @@ mod tests {
                 resource: "daemonsets".to_string(),
                 singular: "daemonset".to_string(),
                 list_kind: "DaemonSetList".to_string(),
+                extension: Extension::Json,
             },
             namespace: Some("kube-system".to_string()),
             name: None,
         };
         let created = (Utc::now() - Duration::days(10)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "node-local-dns",
-                "namespace": "kube-system",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "template": {
-                    "spec": {
-                        "nodeSelector": {
-                            "kubernetes.io/os": "linux"
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "node-local-dns",
+                    "namespace": "kube-system",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "nodeSelector": {
+                                "kubernetes.io/os": "linux"
+                            }
                         }
                     }
+                },
+                "status": {
+                    "desiredNumberScheduled": 3,
+                    "currentNumberScheduled": 3,
+                    "numberReady": 3,
+                    "updatedNumberScheduled": 3,
+                    "numberAvailable": 3
                 }
-            },
-            "status": {
-                "desiredNumberScheduled": 3,
-                "currentNumberScheduled": 3,
-                "numberReady": 3,
-                "updatedNumberScheduled": 3,
-                "numberAvailable": 3
-            }
-        })];
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1542,7 +1573,7 @@ mod tests {
         );
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("node-local-dns"));
         assert_eq!(cells[1], json!(3));
         assert_eq!(cells[2], json!(3));
@@ -1562,24 +1593,28 @@ mod tests {
                 resource: "validatingadmissionpolicybindings".to_string(),
                 singular: "validatingadmissionpolicybinding".to_string(),
                 list_kind: "ValidatingAdmissionPolicyBindingList".to_string(),
+                extension: Extension::Json,
             },
             namespace: None,
             name: None,
         };
         let created = (Utc::now() - Duration::minutes(15)).to_rfc3339();
-        let items = vec![json!({
-            "metadata": {
-                "name": "binding-a",
-                "creationTimestamp": created,
-            },
-            "spec": {
-                "policyName": "require-team-label",
-                "paramRef": {
-                    "namespace": "default",
-                    "name": "team-label-params"
+        let items = vec![
+            serde_json::from_value(json!({
+                "metadata": {
+                    "name": "binding-a",
+                    "creationTimestamp": created,
+                },
+                "spec": {
+                    "policyName": "require-team-label",
+                    "paramRef": {
+                        "namespace": "default",
+                        "name": "team-label-params"
+                    }
                 }
-            }
-        })];
+            }))
+            .unwrap(),
+        ];
         let tbl = Table::new(
             Some(PathBuf::from("hello".to_string())),
             list,
@@ -1597,7 +1632,7 @@ mod tests {
         assert_eq!(columns, vec!["Name", "PolicyName", "ParamRef", "Age"]);
 
         let row = tbl.to_row(&tbl.items[0]).unwrap();
-        let cells = row["cells"].as_array().unwrap();
+        let cells = &row.cells;
         assert_eq!(cells[0], json!("binding-a"));
         assert_eq!(cells[1], json!("require-team-label"));
         assert_eq!(cells[2], json!("default/team-label-params"));

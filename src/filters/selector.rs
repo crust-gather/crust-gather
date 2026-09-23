@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use snafu::{ResultExt, Whatever};
 use tracing::instrument;
 
 use crate::{
@@ -47,11 +48,13 @@ where
     G: SelectorSource + Send + Sync,
     M: Match + Send + Sync,
 {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
-            selector: value.try_into()?,
+            selector: value
+                .try_into()
+                .whatever_context("Failed to parse selector")?,
             group: PhantomData,
             matcher: PhantomData,
         })
@@ -63,7 +66,7 @@ where
     G: SelectorSource + Send + Sync,
     M: Match + Send + Sync,
 {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())

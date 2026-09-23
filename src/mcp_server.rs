@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
-use anyhow::{Context, Result};
+use snafu::{ResultExt, Whatever};
+type Result<T, E = Whatever> = std::result::Result<T, E>;
 use chrono::{DateTime, Utc};
 use oci_client::{Reference, secrets::RegistryAuth};
 use rmcp::{
@@ -339,7 +340,8 @@ impl CrustGatherMcp {
             normalize_optional_string(request.socket)?.unwrap_or_else(|| "0.0.0.0:9095".into());
         let socket_value = parse_socket(&socket)?;
         let archives = resolve_archives(&archive_path);
-        let temp_kubeconfig = NamedTempFile::new()?;
+        let temp_kubeconfig =
+            NamedTempFile::new().whatever_context("failed to create temp kubeconfig")?;
         let client_kubeconfig = temp_kubeconfig.path().display().to_string();
         let api = Api::new(
             archives,
@@ -366,7 +368,7 @@ impl CrustGatherMcp {
 
         let mut runtime = self.runtime.lock().await;
         if runtime.current.is_some() {
-            anyhow::bail!("a serve task is already running");
+            snafu::whatever!("a serve task is already running");
         }
 
         runtime.current = Some(RunningServer {
@@ -396,7 +398,8 @@ impl CrustGatherMcp {
         let mut registry = request.registry_auth.unwrap_or_default();
         registry.reference = Some(image_reference.clone());
         let image_reference_value: Reference = image_reference.clone().into();
-        let temp_kubeconfig = NamedTempFile::new()?;
+        let temp_kubeconfig =
+            NamedTempFile::new().whatever_context("failed to create temp kubeconfig")?;
         let client_kubeconfig = temp_kubeconfig.path().display().to_string();
         let descriptor = ServeDescriptor::Oci {
             image_reference: image_reference_value.to_string(),
@@ -427,7 +430,7 @@ impl CrustGatherMcp {
 
         let mut runtime = self.runtime.lock().await;
         if runtime.current.is_some() {
-            anyhow::bail!("a serve task is already running");
+            snafu::whatever!("a serve task is already running");
         }
         runtime.current = Some(RunningServer {
             source: descriptor,
@@ -543,8 +546,14 @@ impl ServerHandler for CrustGatherMcp {
 
 pub async fn run() -> Result<()> {
     let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let service = CrustGatherMcp::default().serve(transport).await?;
-    service.waiting().await?;
+    let service = CrustGatherMcp::default()
+        .serve(transport)
+        .await
+        .whatever_context("failed to initialize MCP server")?;
+    service
+        .waiting()
+        .await
+        .whatever_context("MCP server exited with error")?;
     Ok(())
 }
 
@@ -589,7 +598,7 @@ fn prepare_redaction(redaction: Option<RedactionOptions>) -> Result<PreparedReda
     let secrets_file = normalize_optional_string(redaction.secrets_file)?;
     if let Some(path) = secrets_file.clone() {
         let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read redaction file: {path}"))?;
+            .whatever_context(format!("failed to read redaction file: {path}"))?;
         secrets.extend(
             content
                 .lines()
@@ -609,10 +618,10 @@ fn prepare_redaction(redaction: Option<RedactionOptions>) -> Result<PreparedReda
         });
     }
 
-    let mut temp = NamedTempFile::new()?;
+    let mut temp = NamedTempFile::new().whatever_context("failed to create temp file")?;
     for secret in &secrets {
         use std::io::Write as _;
-        writeln!(temp, "{secret}")?;
+        writeln!(temp, "{secret}").whatever_context("failed to write secret to temp file")?;
     }
 
     Ok(PreparedRedaction {
@@ -636,7 +645,7 @@ fn normalize_optional_string(value: Option<String>) -> Result<Option<String>> {
 fn normalize_required_string(value: String, field: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        anyhow::bail!("{field} cannot be empty");
+        snafu::whatever!("{field} cannot be empty");
     }
 
     Ok(trimmed.to_string())
@@ -648,12 +657,8 @@ fn resolve_kubeconfig(
 ) -> Result<Option<KubeconfigFile>> {
     match (kubeconfig, context) {
         (None, None) => Ok(None),
-        (Some(path), context) => Ok(Some(
-            KubeconfigFile::try_from(path.as_str())?.with_context(context.as_deref())?,
-        )),
-        (None, Some(context)) => Ok(Some(
-            KubeconfigFile::infer_file()?.with_context(Some(context.as_str()))?,
-        )),
+        (Some(path), _context) => Ok(Some(KubeconfigFile::try_from(path.as_str())?)),
+        (None, Some(_context)) => Ok(Some(KubeconfigFile::infer_file()?)),
     }
 }
 
@@ -669,7 +674,7 @@ fn resolve_archives(path: &str) -> Vec<Archive> {
 
 fn parse_reference(reference: &str) -> Result<OCIReference> {
     OCIReference::try_from(reference)
-        .with_context(|| format!("invalid OCI image reference: {reference}"))
+        .whatever_context(format!("invalid OCI image reference: {reference}"))
 }
 
 fn parse_duration(duration: Option<String>) -> Result<Option<RunDuration>> {
@@ -677,7 +682,7 @@ fn parse_duration(duration: Option<String>) -> Result<Option<RunDuration>> {
         .map(|duration| {
             let duration = normalize_required_string(duration, "duration")?;
             RunDuration::try_from(duration.as_str())
-                .with_context(|| "invalid duration, expected values like '60s' or '2m'")
+                .whatever_context("invalid duration, expected values like '60s' or '2m'")
         })
         .transpose()
 }
@@ -685,7 +690,7 @@ fn parse_duration(duration: Option<String>) -> Result<Option<RunDuration>> {
 fn parse_socket(socket: &str) -> Result<std::net::SocketAddr> {
     socket
         .parse()
-        .with_context(|| format!("invalid socket address: {socket}"))
+        .whatever_context(format!("invalid socket address: {socket}"))
 }
 
 #[derive(Default)]

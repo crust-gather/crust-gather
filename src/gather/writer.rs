@@ -1,7 +1,7 @@
-use anyhow::Context;
 use backon::{ExponentialBuilder, Retryable};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use flate2::{Compression, write::GzEncoder};
+use snafu::{FromString, ResultExt, Whatever};
 
 use chrono::Utc;
 use futures::{
@@ -43,9 +43,11 @@ use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
 use crate::cli::DEFAULT_OCI_BUFFER_SIZE;
 use crate::gather::{
+    json_resource::ReadState,
     reader::{ArchiveReader, Reader},
     storage::Storage,
 };
+use crate::scanners::interface::Extension;
 
 use super::representation::{ArchivePath, Representation};
 
@@ -214,10 +216,10 @@ pub struct OCIState {
     buffer_size: usize,
 }
 
-// YamlPath contains a full path in the yaml file in archive
-// and a range of bytes to extract yaml from a list
+// JsonPath contains a full path in the json file in archive
+// and a range of bytes to extract json from a list
 #[derive(Serialize, Deserialize)]
-pub struct YamlPath {
+pub struct JsonPath {
     pub path: PathBuf,
     pub from: usize,
     pub to: usize,
@@ -227,6 +229,14 @@ pub struct YamlPath {
 pub struct ManifestConfig {
     #[serde(default)]
     pub compressed: bool,
+    #[serde(default)]
+    pub extension: Extension,
+}
+
+impl ManifestConfig {
+    pub fn extension(&self) -> Extension {
+        self.extension
+    }
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -237,26 +247,26 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 
 impl Writer {
     /// Finish zip archive
-    pub fn finish_zip(self) -> anyhow::Result<()> {
+    pub fn finish_zip(self) -> Result<(), Whatever> {
         let Self::Zip(_, builder) = self else {
-            return anyhow::Result::Ok(());
+            return Ok(());
         };
 
-        builder.finish()?;
+        builder.finish().whatever_context("failed to finish zip")?;
         Ok(())
     }
 
     /// Finish gzip archive
-    pub fn finish_gzip(&mut self) -> anyhow::Result<()> {
+    pub fn finish_gzip(&mut self) -> Result<(), Whatever> {
         let Self::Gzip(_, builder) = self else {
-            return anyhow::Result::Ok(());
+            return Ok(());
         };
 
-        Ok(builder.finish()?)
+        builder.finish().whatever_context("failed to finish gzip")
     }
 
     /// Finish writing the archive, finalizing any compression and flushing buffers.
-    pub async fn finish_oci(&self) -> anyhow::Result<()> {
+    pub async fn finish_oci(&self) -> Result<(), Whatever> {
         if let Self::Oci(ocistate) = self {
             return ocistate.publish_image().await;
         }
@@ -266,10 +276,13 @@ impl Writer {
 
     /// Adds a representation data to the archive under the representation path
     #[instrument(skip_all, fields(repr = repr.path().to_string()))]
-    pub async fn store(&mut self, repr: &Representation) -> anyhow::Result<()> {
+    pub async fn store(&mut self, repr: &Representation) -> Result<(), Whatever> {
         tracing::debug!("Writing...");
 
-        let archive_path: String = repr.path().try_into()?;
+        let archive_path: String = repr
+            .path()
+            .try_into()
+            .whatever_context("failed to convert path")?;
         let data = repr.data();
 
         match self {
@@ -282,21 +295,25 @@ impl Writer {
                 if !file.exists() {
                     DirBuilder::new()
                         .recursive(true)
-                        .create(file.parent().unwrap())?;
-                    let mut file = File::create(file)?;
-                    file.write_all(data.as_bytes())?;
+                        .create(file.parent().unwrap())
+                        .whatever_context("failed to create directory")?;
+                    let mut file = File::create(file).whatever_context("failed to create file")?;
+                    file.write_all(data.as_bytes())
+                        .whatever_context("failed to write data")?;
                 }
             }
             Self::Gzip(Archive(archive), builder) => {
                 let mut header = Header::new_gnu();
                 let size = data.len() + 1;
-                header.set_size(size.try_into()?);
+                header.set_size(size.try_into().whatever_context("failed to convert size")?);
                 header.set_cksum();
                 header.set_mode(0o644);
 
                 let root_prefix = archive.file_stem().unwrap();
                 let file = PathBuf::from(root_prefix).join(archive_path);
-                builder.append_data(&mut header, file, data.as_bytes())?;
+                builder
+                    .append_data(&mut header, file, data.as_bytes())
+                    .whatever_context("failed to append data")?;
             }
             Self::Zip(Archive(archive), writer) => {
                 let path = repr.path();
@@ -306,7 +323,8 @@ impl Writer {
                     .or_else(|err| match err {
                         ZipError::InvalidArchive(Cow::Borrowed("Duplicate filename")) => Ok(()),
                         other => Err(other),
-                    })?;
+                    })
+                    .whatever_context("failed to add directory")?;
 
                 let root_prefix = archive.file_stem().unwrap();
                 let file = PathBuf::from(root_prefix).join(archive_path);
@@ -316,8 +334,11 @@ impl Writer {
                     .or_else(|err| match err {
                         ZipError::InvalidArchive(Cow::Borrowed("Duplicate filename")) => Ok(()),
                         other => Err(other),
-                    })?;
-                writer.write_all(data.as_bytes())?;
+                    })
+                    .whatever_context("failed to start file")?;
+                writer
+                    .write_all(data.as_bytes())
+                    .whatever_context("failed to write data")?;
             }
         }
         Ok(())
@@ -325,7 +346,7 @@ impl Writer {
 
     /// Adds a representation data to the archive under the representation path
     #[instrument(skip_all, fields(repr = repr.path().to_string()))]
-    pub async fn sync(&mut self, repr: &Representation) -> anyhow::Result<()> {
+    pub async fn sync(&mut self, repr: &Representation) -> Result<(), Whatever> {
         tracing::debug!("Writing...");
 
         let archive_path: String = repr.path().try_into()?;
@@ -337,27 +358,37 @@ impl Writer {
                 // generate diff and write
                 let original = Reader::new(
                     ArchiveReader::new(
-                        archive.clone(),
-                        &Storage::FS,
+                        Arc::new(archive.clone()),
+                        Arc::new(Storage::FS),
                         DEFAULT_OCI_BUFFER_SIZE,
                         false,
                     )
                     .await,
                     Utc::now(),
-                    Storage::FS,
+                    Arc::new(Storage::FS),
                 )
                 .await?
-                .read(file_path.clone())
+                .read(file_path.clone(), ReadState::TableView)
                 .await?;
-                let updated = serde_saphyr::from_str(repr.data())?;
-                let patch = &diff(&original, &updated);
+                let updated = serde_saphyr::from_str(repr.data())
+                    .whatever_context("failed to deserialize")?;
+                let patch = &diff(&original.json, &updated);
                 if !patch.deref().is_empty() {
                     let mut patches = File::options()
                         .create(true)
                         .append(true)
-                        .open(file_path.with_extension("patch"))?;
-                    serde_json::to_writer(patches.try_clone()?, patch)?;
-                    patches.write_all(b"\n")?;
+                        .open(file_path.with_extension("patch"))
+                        .whatever_context("failed to open patch file")?;
+                    serde_json::to_writer(
+                        patches
+                            .try_clone()
+                            .whatever_context("failed to clone patches")?,
+                        patch,
+                    )
+                    .whatever_context("failed to write patch")?;
+                    patches
+                        .write_all(b"\n")
+                        .whatever_context("failed to write newline")?;
                 }
                 self.store(repr).await?;
             }
@@ -381,11 +412,14 @@ impl Writer {
         client_config: Option<ClientConfig>,
         auth: Option<RegistryAuth>,
         buffer_size: usize,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, Whatever> {
         let buffer_size = buffer_size.max(1);
         match archive.0.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => {
-                DirBuilder::new().recursive(true).create(parent)?;
+                DirBuilder::new()
+                    .recursive(true)
+                    .create(parent)
+                    .whatever_context("failed to create directory")?;
             }
             Some(_) | None => (),
         }
@@ -395,38 +429,52 @@ impl Writer {
             Encoding::Gzip => Self::Gzip(
                 archive.clone(),
                 Box::new(Builder::new(GzEncoder::new(
-                    File::create(archive.0.with_extension("tar.gz"))?,
+                    File::create(archive.0.with_extension("tar.gz"))
+                        .whatever_context("failed to create file")?,
                     Compression::default(),
                 ))),
             ),
             Encoding::Zip => Self::Zip(
                 archive.clone(),
-                Box::new(ZipWriter::new(File::create(
-                    archive.0.with_extension("zip"),
-                )?)),
+                Box::new(ZipWriter::new(
+                    File::create(archive.0.with_extension("zip"))
+                        .whatever_context("failed to create file")?,
+                )),
             ),
             Encoding::Oci(image_ref) => Self::Oci(OCIState {
                 archive: archive.clone(),
-                config: ManifestConfig { compressed: true },
                 client: Client::new(client_config.unwrap_or_default()),
+                config: ManifestConfig {
+                    compressed: true,
+                    extension: Extension::Json,
+                },
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),
                 buffer_size,
             }),
         })
     }
+
+    pub fn extension(&self) -> Extension {
+        match self {
+            Writer::Path(_) => Extension::Yaml,
+            Writer::Gzip(..) => Extension::Yaml,
+            Writer::Zip(..) => Extension::Yaml,
+            Writer::Oci(_) => Extension::Json,
+        }
+    }
 }
 
 impl OCIState {
     #[instrument(skip_all, err)]
-    async fn publish_image(&self) -> anyhow::Result<()> {
+    async fn publish_image(&self) -> Result<(), Whatever> {
         info!("Pushing image: {:?}", self.image_ref);
         self.client
             .store_auth_if_needed(self.image_ref.resolve_registry(), &self.auth)
             .await;
 
         let config = Config::new(
-            serde_json::to_vec(&self.config)?,
+            serde_json::to_vec(&self.config).whatever_context("failed to serialize config")?,
             OCI_IMAGE_MEDIA_TYPE.to_string(),
             None,
         );
@@ -435,12 +483,15 @@ impl OCIState {
             self.archive
                 .path()
                 .to_str()
-                .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
-        ))?;
+                .ok_or(Whatever::without_source(
+                    "archive path is not convertable to string".to_string()
+                ))?,
+        ))
+        .whatever_context("failed to glob paths")?;
 
         let resource_paths = Arc::new(Mutex::new(BTreeMap::default()));
         let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())
-            .filter_map(|path| Self::prepare_resource_layer(path, resource_paths.clone()))
+            .filter_map(|path| self.prepare_resource_layer(path, resource_paths.clone()))
             .collect()
             .await;
 
@@ -449,28 +500,29 @@ impl OCIState {
         let raw_layers = stream::iter(non_resource_paths.into_iter())
             .map(|path| self.push_oci_archive_layer(path, layers.clone()))
             .buffer_unordered(self.buffer_size)
-            .try_for_each(future::ok::<(), anyhow::Error>);
+            .try_for_each(future::ok::<(), Whatever>);
 
         let resource_layer_entries = { resource_paths.lock().await.clone() };
         let resources = stream::iter(resource_layer_entries)
-            .filter_map(|(p, yamls)| {
+            .filter_map(|(p, jsons)| {
                 future::ready(
-                    Self::combined_oci_archive_layer(&yamls)
+                    Self::combined_oci_archive_layer(&jsons)
                         .ok()
-                        .map(|data| (p + ".yaml", data)),
+                        .map(|data| (format!("{p}.{}", self.config.extension()), data)),
                 )
             })
             .map(|(p, data)| self.push_oci_layer(p, data, layers.clone()))
             .buffer_unordered(self.buffer_size)
-            .try_for_each(future::ok::<(), anyhow::Error>);
+            .try_for_each(future::ok::<(), Whatever>);
 
-        let yamls = Self::prepare_index(resource_paths.lock().await.values().cloned().collect())?;
-        let yamls =
-            serde_saphyr::to_string(&yamls).context("unable to collect yamls index file")?;
+        let jsons = Self::prepare_index(resource_paths.lock().await.values().cloned().collect())?;
+        let jsons = serde_saphyr::to_string(&jsons)
+            .whatever_context("unable to collect json index file")?;
 
-        let index_layer = self.push_oci_layer("index.yaml".to_string(), yamls, layers.clone());
+        let index_layer = self.push_oci_layer("index.yaml".to_string(), jsons, layers.clone());
 
-        try_join!(resources, raw_layers, index_layer).context("failed to upload OCI layers")?;
+        try_join!(resources, raw_layers, index_layer)
+            .whatever_context("failed to upload OCI layers")?;
 
         info!("Pushing config: {}", self.image_ref);
         let (digest, size) = self.push_blob(config.data).await?;
@@ -480,14 +532,14 @@ impl OCIState {
         manifest.layers = layers.lock().await.clone();
         manifest.layers.sort_by(|a, b| a.digest.cmp(&b.digest));
         manifest.config.digest = digest;
-        manifest.config.size = size.try_into()?;
+        manifest.config.size = size.try_into().whatever_context("failed to convert size")?;
 
         info!("Pushing manifest: {}", self.image_ref);
         let manifest = manifest.into();
         self.push_manifest(&manifest).await
     }
 
-    async fn push_manifest(&self, manifest: &OciManifest) -> anyhow::Result<()> {
+    async fn push_manifest(&self, manifest: &OciManifest) -> Result<(), Whatever> {
         let push = || self.client.push_manifest(&self.image_ref, manifest);
         push.retry(
             ExponentialBuilder::default()
@@ -496,7 +548,8 @@ impl OCIState {
                 .with_jitter(),
         )
         .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .await?;
+        .await
+        .whatever_context("failed to push manifest")?;
 
         Ok(())
     }
@@ -504,10 +557,14 @@ impl OCIState {
     async fn push_blob(
         &self,
         data: impl Into<bytes::Bytes> + Clone,
-    ) -> anyhow::Result<(String, usize)> {
+    ) -> Result<(String, usize), Whatever> {
         let mut enc = GzEncoder::new(vec![], Compression::best());
-        enc.write_all(&data.into())?;
-        let data = BASE64_STANDARD.encode(enc.finish()?);
+        enc.write_all(&data.into())
+            .whatever_context("failed to write compressed data")?;
+        let data = BASE64_STANDARD.encode(
+            enc.finish()
+                .whatever_context("failed to finish compression")?,
+        );
 
         let digest = format!("sha256:{}", hex::encode(sha2::Sha256::digest(&data)));
         let push = || {
@@ -521,29 +578,32 @@ impl OCIState {
                 .with_jitter(),
         )
         .when(|e| matches!(e, OciDistributionError::ServerError { code, .. } if *code == 429 ))
-        .await?;
+        .await
+        .whatever_context("failed to push blob")?;
 
         Ok((digest, data.len()))
     }
 
-    fn prepare_index(yamls: Vec<Vec<PathBuf>>) -> anyhow::Result<Vec<YamlPath>> {
+    fn prepare_index(jsons: Vec<Vec<PathBuf>>) -> Result<Vec<JsonPath>, Whatever> {
         let mut list = vec![];
-        for yaml_list in yamls {
-            let mut index = 0;
-            for yaml in yaml_list {
-                let path = yaml.to_string_lossy();
-                let mut file = File::open(&yaml).context(format!("failed to open file {path}"))?;
-                list.push(YamlPath {
-                    path: yaml,
+        for json_list in jsons {
+            let mut index = 1;
+            for json in json_list {
+                let path = json.to_string_lossy();
+                let mut file = File::open(&json)
+                    .with_whatever_context(|_| format!("failed to open file {path}"))?;
+                list.push(JsonPath {
+                    path: json,
                     from: index,
                     to: {
                         let mut data = vec![];
-                        file.read_to_end(&mut data)?;
+                        file.read_to_end(&mut data)
+                            .whatever_context("failed to read file")?;
                         index += data.len();
                         index
                     },
                 });
-                index += 4;
+                index += 1;
             }
         }
 
@@ -551,6 +611,7 @@ impl OCIState {
     }
 
     async fn prepare_resource_layer(
+        &self,
         path: glob::GlobResult,
         resource_layers: Arc<Mutex<BTreeMap<String, Vec<PathBuf>>>>,
     ) -> Option<PathBuf> {
@@ -568,7 +629,8 @@ impl OCIState {
             return Some(path);
         };
 
-        if ext != "yaml" || path.to_string_lossy().ends_with("version.yaml") {
+        if (ext != "yaml" && ext != "json") || path.parent() == Some(self.archive.path().as_path())
+        {
             return Some(path);
         }
 
@@ -590,7 +652,7 @@ impl OCIState {
         archive_path: String,
         mut data: String,
         layers: Arc<Mutex<Vec<OciDescriptor>>>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Whatever> {
         if data.is_empty() {
             // That could only happen for empty logs, so we publish an empty json instead
             // as ghcr doesn't allow empty layers
@@ -605,7 +667,7 @@ impl OCIState {
                 urls: None,
                 media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
                 digest,
-                size: size.try_into()?,
+                size: size.try_into().whatever_context("failed to convert size")?,
                 annotations: Some(
                     [(
                         "org.opencontainers.image.title".to_string(),
@@ -620,18 +682,20 @@ impl OCIState {
     }
 
     #[instrument(skip_all, err)]
-    fn combined_oci_archive_layer(yamls: &Vec<PathBuf>) -> anyhow::Result<String> {
+    fn combined_oci_archive_layer(jsons: &Vec<PathBuf>) -> Result<String, Whatever> {
         let mut files: Vec<serde_json::Value> = vec![];
-        for yaml in yamls {
-            let path = yaml.to_string_lossy();
-            let file = File::open(yaml).context(format!("failed to open file {path}"))?;
+        for json in jsons {
+            let path = json.to_string_lossy();
+            let file = File::open(json)
+                .with_whatever_context(|_| format!("failed to open file {path}"))?;
             files.push(
-                serde_saphyr::from_reader(file).context(format!("failed to read file {path}"))?,
+                serde_json::from_reader(file)
+                    .with_whatever_context(|_| format!("failed to read file {path}"))?,
             );
         }
 
-        let data = serde_saphyr::to_string_multiple(&files)
-            .context("failed to serialize a list of yamls")?;
+        let data = serde_json::to_string(&files)
+            .whatever_context("failed to serialize a list of jsons")?;
         Ok(data)
     }
 
@@ -639,18 +703,19 @@ impl OCIState {
         &self,
         path: PathBuf,
         layers: Arc<Mutex<Vec<OciDescriptor>>>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Whatever> {
         if path.is_dir() {
-            return anyhow::Result::Ok(());
+            return Ok(());
         }
         let archive_path = path.clone();
-        let archive_path = archive_path
-            .to_str()
-            .ok_or(anyhow::anyhow!("file path is not convertable to string"))?;
-        let mut file = File::open(path).context(format!("failed to open file {archive_path}"))?;
+        let archive_path = archive_path.to_str().ok_or(Whatever::without_source(
+            "file path is not convertable to string".to_string(),
+        ))?;
+        let mut file = File::open(path)
+            .with_whatever_context(|_| format!("failed to open file {archive_path}"))?;
         let mut data = String::new();
         File::read_to_string(&mut file, &mut data)
-            .context(format!("failed to read file {archive_path}"))?;
+            .with_whatever_context(|_| format!("failed to read file {archive_path}"))?;
 
         self.push_oci_layer(archive_path.to_string(), data, layers)
             .await
