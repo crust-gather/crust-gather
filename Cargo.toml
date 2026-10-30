@@ -13,7 +13,7 @@ anyhow = "1.0.102"
 async-trait = "0.1.89"
 tar = { version = "0.4.46"}
 flate2 = { version = "1.1.9"}
-zip = { version = "8.6.0"}
+zip = { version = "9.0.5"}
 regex = "1.12.4"
 futures = "0.3.32"
 duration-string = { version = "0.5.3", features = ["serde"] }
