@@ -37,7 +37,7 @@ use std::{
 use tar::{Builder, Header};
 use tokio::sync::Mutex;
 use tokio_util::bytes;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use walkdir::WalkDir;
 use zip::{ZipWriter, result::ZipError, write::SimpleFileOptions};
 
@@ -430,13 +430,27 @@ impl OCIState {
             OCI_IMAGE_MEDIA_TYPE.to_string(),
             None,
         );
-        let paths = glob::glob(&format!(
+        let paths: Vec<_> = glob::glob(&format!(
             "{}/**/*",
             self.archive
                 .path()
                 .to_str()
                 .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
-        ))?;
+        ))?
+        .collect();
+
+        // Pushing an empty archive replaces whatever the tag already holds with
+        // nothing. Leave the earlier attempt in place instead.
+        if !paths
+            .iter()
+            .any(|path| path.as_ref().is_ok_and(|p| p.is_file()))
+        {
+            warn!(
+                "Collected nothing, skipping the push to {:?}",
+                self.image_ref
+            );
+            return Ok(());
+        }
 
         let resource_paths = Arc::new(Mutex::new(BTreeMap::default()));
         let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())
