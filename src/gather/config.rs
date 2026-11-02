@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use anyhow::{self, bail};
@@ -398,14 +398,30 @@ impl Config {
             .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
             .flat_map(|group: Group| group.into_collectable(self.clone()));
 
+        let mut deadline = None;
         match self.mode {
             GatherMode::Collect => {
                 tracing::info!("Collecting resources...");
-                timeout(
-                    self.duration.0.into(),
-                    self.iterate_until_completion(collectables),
-                )
-                .await?;
+                let budget: Duration = self.duration.0.into();
+                let started = Instant::now();
+
+                // `crust-gather serve` cannot open an archive without the files the
+                // `Info` scanner writes. Collect it before the timed phase so the
+                // deadline cannot cancel it part way through.
+                if timeout(budget, Info::new(self.clone()).collect_retry())
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Deadline reached while writing archive metadata");
+                }
+
+                let remaining = budget.saturating_sub(started.elapsed());
+                if let Err(error) =
+                    timeout(remaining, self.iterate_until_completion(collectables)).await
+                {
+                    tracing::warn!("Deadline reached. Writing the partial archive.");
+                    deadline = Some(error);
+                }
             }
             GatherMode::Record => {
                 tracing::info!("Recording resources...");
@@ -413,7 +429,13 @@ impl Config {
             }
         }
 
-        self.finish().await
+        self.finish().await?;
+
+        if let Some(error) = deadline {
+            return Err(error.into());
+        }
+
+        Ok(())
     }
 
     async fn finish(&self) -> anyhow::Result<()> {
@@ -473,7 +495,6 @@ impl Group {
         match gather.mode {
             GatherMode::Collect => match self {
                 Self::Nodes(resource) => vec![
-                    Collectable::Info(Info::new(gather.clone())),
                     Collectable::Dynamic(Dynamic::new(gather.clone(), resource)),
                     Collectable::HostLogs(HostLogs::from(gather)),
                 ],
@@ -510,6 +531,7 @@ mod tests {
     };
 
     use crate::filters::namespace::Namespace;
+    use kube::api::PostParams;
 
     use super::*;
 
@@ -684,5 +706,142 @@ mod tests {
 
         let result = config.collect().await;
         assert!(result.is_ok());
+    }
+
+    /// The `Info` scanner writes these four files. `crust-gather serve` needs them
+    /// to rebuild discovery, so an archive without them cannot be opened.
+    const METADATA_FILES: [&str; 4] = [
+        "version.yaml",
+        "api.json",
+        "apis.json",
+        "collected.timestamp",
+    ];
+
+    fn collected_files(archive: &Path) -> usize {
+        glob::glob(&format!("{}/**/*", archive.display()))
+            .expect("glob the archive")
+            .filter_map(Result::ok)
+            .filter(|path| path.is_file())
+            .count()
+    }
+
+    async fn timed_collect_config(
+        client: Client,
+        archive: &Path,
+        duration: &str,
+        additional_logs: Vec<CustomLog>,
+    ) -> Config {
+        Config {
+            client,
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
+            writer: Writer::new(
+                &Archive::new(archive.to_path_buf()),
+                &Encoding::Path,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
+            duration: duration.try_into().unwrap(),
+            mode: GatherMode::Collect,
+            secrets: Secrets::default(),
+            additional_logs,
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod::default(),
+            disable_additional_logs: false,
+            skip_logs_collection: false,
+        }
+    }
+
+    // Cancelling the `HostLogs` scanner runs a `defer!` guard that calls
+    // `block_on`, which needs a second thread to make progress. Production runs a
+    // multi thread runtime, so this test matches it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_collect_timeout_writes_partial_archive() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+
+        // The test control plane runs no kubelet, so the debug pod never turns
+        // ready. The `HostLogs` scanner waits ten seconds for it and then retries
+        // without limit, so the shorter deadline below always fires first.
+        let nodes: Api<Node> = Api::all(client.clone());
+        nodes
+            .create(
+                &PostParams::default(),
+                &Node {
+                    metadata: kube::core::ObjectMeta {
+                        name: Some("stuck-host-logs".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the node");
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config = timed_collect_config(
+            client,
+            &archive,
+            "3s",
+            vec![CustomLog {
+                path: "test.log".into(),
+                command: "cat /test.log".into(),
+            }],
+        )
+        .await;
+
+        let error = config
+            .collect()
+            .await
+            .expect_err("the collection should hit its deadline");
+        assert!(
+            error.is::<tokio::time::error::Elapsed>(),
+            "expected a deadline error, got {error:?}"
+        );
+
+        for name in METADATA_FILES {
+            assert!(
+                archive.join(name).exists(),
+                "{name} is missing from the partial archive"
+            );
+        }
+
+        let collected = collected_files(&archive);
+        assert!(
+            collected > METADATA_FILES.len(),
+            "expected resources alongside the metadata, found {collected} files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_collect_writes_metadata_when_it_completes() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config = timed_collect_config(client, &archive, "1m", Vec::default()).await;
+
+        config
+            .collect()
+            .await
+            .expect("the collection should finish");
+
+        for name in METADATA_FILES {
+            assert!(
+                archive.join(name).exists(),
+                "{name} is missing from the archive"
+            );
+        }
     }
 }
