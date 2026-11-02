@@ -227,6 +227,9 @@ pub struct YamlPath {
 pub struct ManifestConfig {
     #[serde(default)]
     pub compressed: bool,
+    /// True when the collection deadline elapsed before every scanner finished.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -236,6 +239,14 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 }
 
 impl Writer {
+    /// Records that the collection deadline cut this archive short. A reader can
+    /// then tell a partial archive from a complete one.
+    pub fn mark_truncated(&mut self) {
+        if let Self::Oci(state) = self {
+            state.config.truncated = true;
+        }
+    }
+
     /// Finish zip archive
     pub fn finish_zip(self) -> anyhow::Result<()> {
         let Self::Zip(_, builder) = self else {
@@ -407,7 +418,10 @@ impl Writer {
             ),
             Encoding::Oci(image_ref) => Self::Oci(OCIState {
                 archive: archive.clone(),
-                config: ManifestConfig { compressed: true },
+                config: ManifestConfig {
+                    compressed: true,
+                    truncated: false,
+                },
                 client: Client::new(client_config.unwrap_or_default()),
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),

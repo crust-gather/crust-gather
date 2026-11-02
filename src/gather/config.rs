@@ -429,6 +429,10 @@ impl Config {
             }
         }
 
+        if deadline.is_some() {
+            self.writer.lock().await.mark_truncated();
+        }
+
         self.finish().await?;
 
         if let Some(error) = deadline {
