@@ -536,6 +536,7 @@ mod tests {
 
     use crate::filters::namespace::Namespace;
     use kube::api::PostParams;
+    use std::io::Read;
 
     use super::*;
 
@@ -721,17 +722,37 @@ mod tests {
         "collected.timestamp",
     ];
 
-    fn collected_files(archive: &Path) -> usize {
-        glob::glob(&format!("{}/**/*", archive.display()))
-            .expect("glob the archive")
-            .filter_map(Result::ok)
-            .filter(|path| path.is_file())
-            .count()
+    /// The test control plane runs no kubelet, so a debug pod on this node never
+    /// turns ready. The `HostLogs` scanner waits ten seconds for it and then
+    /// retries without limit, which outlasts the deadlines used below.
+    async fn create_stuck_node(client: Client) {
+        Api::<Node>::all(client)
+            .create(
+                &PostParams::default(),
+                &Node {
+                    metadata: kube::core::ObjectMeta {
+                        name: Some("stuck-host-logs".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the node");
+    }
+
+    /// Gives the `HostLogs` scanner an `exec` to run, which is what wedges it.
+    fn wedged_log() -> Vec<CustomLog> {
+        vec![CustomLog {
+            path: "test.log".into(),
+            command: "cat /test.log".into(),
+        }]
     }
 
     async fn timed_collect_config(
         client: Client,
         archive: &Path,
+        encoding: &Encoding,
         duration: &str,
         additional_logs: Vec<CustomLog>,
     ) -> Config {
@@ -740,7 +761,7 @@ mod tests {
             filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
             writer: Writer::new(
                 &Archive::new(archive.to_path_buf()),
-                &Encoding::Path,
+                encoding,
                 None,
                 None,
                 DEFAULT_OCI_BUFFER_SIZE,
@@ -761,7 +782,7 @@ mod tests {
 
     // Cancelling the `HostLogs` scanner runs a `defer!` guard that calls
     // `block_on`, which needs a second thread to make progress. Production runs a
-    // multi thread runtime, so this test matches it.
+    // multi thread runtime, so these tests match it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_collect_timeout_writes_partial_archive() {
         let test_env = envtest::Environment::default()
@@ -769,37 +790,12 @@ mod tests {
             .await
             .expect("cluster");
         let client = test_env.client().expect("client");
-
-        // The test control plane runs no kubelet, so the debug pod never turns
-        // ready. The `HostLogs` scanner waits ten seconds for it and then retries
-        // without limit, so the shorter deadline below always fires first.
-        let nodes: Api<Node> = Api::all(client.clone());
-        nodes
-            .create(
-                &PostParams::default(),
-                &Node {
-                    metadata: kube::core::ObjectMeta {
-                        name: Some("stuck-host-logs".into()),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("create the node");
+        create_stuck_node(client.clone()).await;
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("crust-gather-test");
-        let config = timed_collect_config(
-            client,
-            &archive,
-            "3s",
-            vec![CustomLog {
-                path: "test.log".into(),
-                command: "cat /test.log".into(),
-            }],
-        )
-        .await;
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Path, "3s", wedged_log()).await;
 
         let error = config
             .collect()
@@ -817,11 +813,57 @@ mod tests {
             );
         }
 
-        let collected = collected_files(&archive);
+        let collected = glob::glob(&format!("{}/**/*", archive.display()))
+            .expect("glob the archive")
+            .filter_map(Result::ok)
+            .filter(|path| path.is_file())
+            .count();
         assert!(
             collected > METADATA_FILES.len(),
             "expected resources alongside the metadata, found {collected} files"
         );
+    }
+
+    /// A deadline now runs `finish()`, which calls `finish_gzip()` to write the tar
+    /// trailer. Reading the stream to its end proves the archive was closed rather
+    /// than left mid write.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_gzip_stream_is_complete_after_a_deadline() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+        create_stuck_node(client.clone()).await;
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Gzip, "3s", wedged_log()).await;
+
+        config
+            .collect()
+            .await
+            .expect_err("the collection should hit its deadline");
+
+        // Dropping the writer flushes the gzip trailer, which `finish_gzip()` leaves
+        // to the encoder.
+        drop(config);
+
+        let file = File::open(archive.with_extension("tar.gz")).expect("open the archive");
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(file)
+            .read_to_end(&mut decoded)
+            .expect("the gzip stream should decode to its end");
+
+        for name in METADATA_FILES {
+            assert!(
+                decoded
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes()),
+                "{name} is missing from the archive"
+            );
+        }
     }
 
     #[tokio::test]
@@ -834,7 +876,8 @@ mod tests {
 
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let archive = tmp_dir.path().join("crust-gather-test");
-        let config = timed_collect_config(client, &archive, "1m", Vec::default()).await;
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Path, "1m", Vec::default()).await;
 
         config
             .collect()
