@@ -406,13 +406,11 @@ impl Config {
                 let started = Instant::now();
 
                 // `crust-gather serve` cannot open an archive without the files the
-                // `Info` scanner writes. Collect it before the timed phase so the
-                // deadline cannot cancel it part way through.
-                if timeout(budget, Info::new(self.clone()).collect_retry())
-                    .await
-                    .is_err()
-                {
+                // `Info` scanner writes. Collect them before the timed phase, so a
+                // scanner that never finishes cannot starve them.
+                if let Err(error) = timeout(budget, Info::new(self.clone()).collect_retry()).await {
                     tracing::warn!("Deadline reached while writing archive metadata");
+                    deadline = Some(error);
                 }
 
                 let remaining = budget.saturating_sub(started.elapsed());
@@ -433,13 +431,17 @@ impl Config {
             self.writer.lock().await.mark_truncated();
         }
 
-        self.finish().await?;
+        let finished = self.finish().await;
 
+        // The deadline is the more useful error, so it outranks a failure to write.
         if let Some(error) = deadline {
+            if let Err(error) = finished {
+                tracing::error!(%error, "Failed to write the archive");
+            }
             return Err(error.into());
         }
 
-        Ok(())
+        finished
     }
 
     async fn finish(&self) -> anyhow::Result<()> {
