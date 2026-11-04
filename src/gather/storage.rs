@@ -149,7 +149,6 @@ impl OCIState {
 }
 
 #[cached(
-    result = true,
     key = "String",
     convert = r#"{ format!("{}@{}", reference, descriptor.digest) }"#
 )]
