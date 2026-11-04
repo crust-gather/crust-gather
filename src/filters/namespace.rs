@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use kube::core::GroupVersionKind;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use snafu::Whatever;
 use tracing::instrument;
 
 use crate::{
@@ -26,7 +27,7 @@ pub struct Namespace<M: Match> {
 }
 
 impl<M: Match> TryFrom<&str> for Namespace<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -37,7 +38,7 @@ impl<M: Match> TryFrom<&str> for Namespace<M> {
 }
 
 impl<M: Match> TryFrom<String> for Namespace<M> {
-    type Error = anyhow::Error;
+    type Error = Whatever;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str())
@@ -62,18 +63,14 @@ where
 {
     #[instrument(fields(name = obj.name_any(), namespace = obj.namespace(), namespace_list = self.namespace.to_string()))]
     fn filter_object(&self, obj: &R, _: &GroupVersionKind) -> Option<bool> {
-        let empty = obj.namespace().unwrap_or_default().is_empty();
-        let matches = M::matches(self.namespace.matches(&obj.namespace().unwrap_or_default()));
-        match (empty, matches) {
-            (true, _) => None,
-            (false, true) => Some(true),
-            (false, false) => {
-                tracing::debug!(
-                    "Namespace filter excluded object as it is not present in the expected namespace list"
-                );
-                Some(false)
-            }
+        let matches = M::matches(self.namespace.matches(&obj.namespace()?));
+        if !matches {
+            tracing::debug!(
+                "Namespace filter excluded object as it is not present in the expected namespace list"
+            );
         }
+
+        Some(matches)
     }
 }
 

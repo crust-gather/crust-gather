@@ -22,6 +22,10 @@ impl Selector {
 
         Expressions::try_from(selector).is_ok_and(|expr| expr.matches(labels))
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.label_selector.as_ref().is_none_or(|s| s.is_empty())
+    }
 }
 
 #[derive(Deref, Clone, Default, Serialize, Deserialize, Debug)]

@@ -10,7 +10,7 @@ use kube::{
     api::TypeMeta,
     core::{ApiResource, ResourceExt, subresource::LogParams},
 };
-use thiserror::Error;
+use snafu::{ResultExt, Whatever};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -21,14 +21,9 @@ use crate::gather::{
 };
 
 use super::{
-    interface::{Collect, CollectError},
+    interface::{Collect, CollectError, Extension},
     objects::Objects,
 };
-
-/// Failure to collect logs
-#[derive(Debug, Error)]
-#[error("Failed to collect logs: {0:?}")]
-pub struct LogsError(kube::Error);
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum LogSelection {
@@ -98,14 +93,23 @@ impl Collect<Pod> for Logs {
         self.collectable.filter(obj)
     }
 
+    fn extension(&self) -> Extension {
+        self.collectable.extension
+    }
+
     /// Collects container logs representations.
     #[instrument(skip_all, fields(name = pod.name_any(), namespace = pod.namespace(), group=self.group.to_string()), err)]
-    async fn representations(&self, pod: &Pod) -> anyhow::Result<Vec<Representation>> {
+    async fn representations(&self, pod: &Pod) -> Result<Vec<Representation>, Whatever> {
         tracing::debug!("Collecting logs");
 
         let mut representations = vec![];
 
-        for container in pod.spec.clone().unwrap().containers {
+        let Some(spec) = pod.spec.as_ref() else {
+            return Ok(representations);
+        };
+
+        for container in &spec.containers {
+            let container_name = container.name.clone();
             let logs = match Api::<Pod>::namespaced(
                 self.get_api().into(),
                 pod.namespace().unwrap_or_default().as_ref(),
@@ -113,7 +117,7 @@ impl Collect<Pod> for Logs {
             .logs(
                 pod.name_any().as_str(),
                 &LogParams {
-                    container: Some(container.name.clone()),
+                    container: Some(container_name.clone()),
                     since_time: Some(Timestamp::default()),
                     timestamps: true,
                     ..self.group.clone().into()
@@ -129,7 +133,7 @@ impl Collect<Pod> for Logs {
                 }
                 e => e,
             }
-            .map_err(LogsError)?;
+            .whatever_context("failed to read pod logs")?;
 
             representations.push(
                 Representation::new()
@@ -137,8 +141,8 @@ impl Collect<Pod> for Logs {
                         pod,
                         TypeMeta::resource::<Pod>(),
                         match self.group {
-                            LogSelection::Current => LogGroup::Current(Container(container.name)),
-                            LogSelection::Previous => LogGroup::Previous(Container(container.name)),
+                            LogSelection::Current => LogGroup::Current(Container(container_name)),
+                            LogSelection::Previous => LogGroup::Previous(Container(container_name)),
                         },
                     ))
                     .with_data(logs.as_str()),
@@ -160,6 +164,7 @@ impl Collect<Pod> for Logs {
 
 #[cfg(test)]
 mod test {
+    use crate::scanners::interface::Extension;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -251,6 +256,7 @@ mod test {
                 systemd_units: Vec::default(),
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
+                extension: Extension::Yaml,
             }),
             group: LogSelection::Current,
         }

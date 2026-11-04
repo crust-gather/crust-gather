@@ -12,10 +12,11 @@ use chrono::Utc;
 use k8s_openapi::{
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
     apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector},
-    serde_json::{self, json},
+    serde_json::{self},
 };
 use kube::core::Selector;
 use kube_cel::KubeCelExt as _;
+use serde::Serialize;
 use serde_json_path::JsonPath;
 
 static PREDEFINED_TABLES: OnceLock<BTreeMap<String, Vec<ColumnDefinition>>> = OnceLock::new();
@@ -25,6 +26,16 @@ pub const AGE_CEL: &str = "(now - timestamp(self.metadata.creationTimestamp)).ag
 pub struct TablePath {
     pub column: ColumnDefinition,
     pub json_path: Option<JsonPath>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct TableRowDefinition {
+    pub name: String,
+    pub format: String,
+    pub description: String,
+    pub priority: i32,
+    #[serde(rename = "type", skip_serializing_if = "String::is_empty")]
+    pub type_: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -506,45 +517,17 @@ impl TablePath {
     }
 
     #[must_use]
-    pub fn to_definition(&self) -> serde_json::Value {
-        let mut definition = serde_json::Map::from_iter([
-            ("name".into(), json!(self.column.source.name)),
-            (
-                "format".into(),
-                json!(self.column.source.format.clone().unwrap_or_default()),
-            ),
-            (
-                "description".into(),
-                json!(self.column.source.description.clone().unwrap_or_default()),
-            ),
-            (
-                "priority".into(),
-                json!(self.column.source.priority.unwrap_or_default()),
-            ),
-        ]);
-        if !self.column.source.type_.is_empty() {
-            definition.insert("type".into(), json!(self.column.source.type_));
+    pub fn to_definition(&self) -> TableRowDefinition {
+        TableRowDefinition {
+            name: self.column.source.name.clone(),
+            format: self.column.source.format.clone().unwrap_or_default(),
+            description: self.column.source.description.clone().unwrap_or_default(),
+            priority: self.column.source.priority.unwrap_or_default(),
+            type_: self.column.source.type_.clone(),
         }
-
-        serde_json::Value::Object(definition)
     }
 
-    pub fn render(&self, obj: &serde_json::Value) -> Option<serde_json::Value> {
-        let Some(cel) = &self.column.cel else {
-            return self
-                .json_path
-                .as_ref()
-                .and_then(|json_path| json_path.query(obj).first().cloned());
-        };
-
-        let program = Program::compile(cel)
-            .map_err(|e| {
-                tracing::error!(
-                    "failed to parse CEL for column {}: {cel}: {e}",
-                    self.column.source.name
-                );
-            })
-            .ok()?;
+    pub fn build_context(obj: &serde_json::Value) -> Option<Context<'_>> {
         let mut context = Context::default();
 
         context.register_all();
@@ -561,7 +544,31 @@ impl TablePath {
             .add_variable("now", Value::Timestamp(Utc::now().fixed_offset()))
             .ok()?;
 
-        let value = match program.execute(&context) {
+        Some(context)
+    }
+
+    pub fn render(
+        &self,
+        obj: &serde_json::Value,
+        context: &Context<'_>,
+    ) -> Option<serde_json::Value> {
+        let Some(cel) = &self.column.cel else {
+            return self
+                .json_path
+                .as_ref()
+                .and_then(|json_path| json_path.query(obj).first().cloned());
+        };
+
+        let program = Program::compile(cel)
+            .map_err(|e| {
+                tracing::error!(
+                    "failed to parse CEL for column {}: {cel}: {e}",
+                    self.column.source.name
+                );
+            })
+            .ok()?;
+
+        let value = match program.execute(context) {
             Ok(value) => value,
             Err(error) => {
                 tracing::error!(
@@ -573,39 +580,7 @@ impl TablePath {
             }
         };
 
-        Self::cel_value_to_json(value)
-    }
-
-    fn cel_value_to_json(value: Value) -> Option<serde_json::Value> {
-        match value {
-            Value::Map(map) => {
-                let mut json = serde_json::Map::new();
-                for (key, value) in map.map.iter() {
-                    let Key::String(key) = key else {
-                        return None;
-                    };
-
-                    json.insert(key.to_string(), Self::cel_value_to_json(value.clone())?);
-                }
-
-                Some(serde_json::Value::Object(json))
-            }
-            Value::List(values) => values
-                .iter()
-                .cloned()
-                .map(Self::cel_value_to_json)
-                .collect::<Option<Vec<_>>>()
-                .map(serde_json::Value::Array),
-            Value::Int(value) => Some(json!(value)),
-            Value::UInt(value) => Some(json!(value)),
-            Value::Float(value) => Some(json!(value)),
-            Value::String(value) => Some(json!(value)),
-            Value::Bool(value) => Some(json!(value)),
-            Value::Timestamp(value) => Some(json!(value.to_rfc3339())),
-            Value::Duration(value) => Some(json!(value.num_seconds())),
-            Value::Null => Some(serde_json::Value::Null),
-            _ => None,
-        }
+        value.json().ok()
     }
 
     fn cel_selector_string(
@@ -643,7 +618,7 @@ impl TablePath {
         ftx: &FunctionContext,
         This(this): This<Value>,
     ) -> Result<Value, cel::ExecutionError> {
-        let json = Self::cel_value_to_json(this).ok_or_else(|| {
+        let json = this.json().map_err(|_| {
             ftx.error("cannot convert label selector to json-compatible object".to_string())
         })?;
         let selector: LabelSelector = serde_json::from_value(json)
@@ -669,7 +644,7 @@ impl TablePath {
         type_: Arc<String>,
         status: Arc<String>,
     ) -> Result<Value, cel::ExecutionError> {
-        let json = Self::cel_value_to_json(this).ok_or_else(|| {
+        let json = this.json().map_err(|_| {
             ftx.error("cannot convert list of conditions to json-compatible object".to_string())
         })?;
         let conditions: Vec<Condition> = serde_json::from_value(json)
@@ -765,7 +740,7 @@ mod tests {
         context.add_function("selector", TablePath::cel_selector_string);
         context.add_variable("self", value).unwrap();
         let value = program.execute(&context)?;
-        Ok(TablePath::cel_value_to_json(value))
+        Ok(value.json().ok())
     }
 
     fn render_label_selector(
@@ -776,7 +751,7 @@ mod tests {
         context.add_function("labelSelector", TablePath::cel_label_selector_string);
         context.add_variable("self", value).unwrap();
         let value = program.execute(&context)?;
-        Ok(TablePath::cel_value_to_json(value))
+        Ok(value.json().ok())
     }
 
     fn evaluate(expr: &str, self_value: serde_json::Value, default: serde_json::Value) -> Value {
@@ -867,25 +842,25 @@ mod tests {
                 "type": "Ready",
                 "status": "True",
             })),
-            TablePath::cel_value_to_json(
-                render_condition(
-                    json!([
-                        {
-                            "lastTransitionTime": "2026-04-14T12:00:00Z",
-                            "type": "Ready",
-                            "status": "True",
-                        },
-                        {
-                            "lastTransitionTime": "2026-04-14T12:01:00Z",
-                            "type": "Succeeded",
-                            "status": "False",
-                        }
-                    ]),
-                    "Ready",
-                    "True",
-                )
-                .unwrap(),
+            render_condition(
+                json!([
+                    {
+                        "lastTransitionTime": "2026-04-14T12:00:00Z",
+                        "type": "Ready",
+                        "status": "True",
+                    },
+                    {
+                        "lastTransitionTime": "2026-04-14T12:01:00Z",
+                        "type": "Succeeded",
+                        "status": "False",
+                    }
+                ]),
+                "Ready",
+                "True",
             )
+            .unwrap()
+            .json()
+            .ok()
         );
     }
 
@@ -958,19 +933,23 @@ mod tests {
             .unwrap();
 
         // lastTimestamp is null, eventTime is set
-        let rendered = last_timestamp_column.render(&json!({
+        let obj = json!({
             "lastTimestamp": null,
             "eventTime": "2026-04-15T09:12:53.577768Z",
-        }));
+        });
+        let context = TablePath::build_context(&obj).unwrap();
+        let rendered = last_timestamp_column.render(&obj, &context);
 
         assert!(rendered.is_some());
 
         // lastTimestamp is null, eventTime is null, deprecatedLastTimestamp is set
-        let rendered = last_timestamp_column.render(&json!({
+        let obj = json!({
             "lastTimestamp": null,
             "eventTime": null,
             "deprecatedLastTimestamp": "2026-04-15T09:12:53.577768Z",
-        }));
+        });
+        let context = TablePath::build_context(&obj).unwrap();
+        let rendered = last_timestamp_column.render(&obj, &context);
 
         assert!(rendered.is_some());
     }
@@ -983,11 +962,13 @@ mod tests {
             .find(|column| column.column.source.name == "Duration")
             .unwrap();
 
-        let rendered = duration_column.render(&json!({
+        let obj = json!({
             "status": {
                 "startTime": "2026-04-14T08:00:56Z"
             }
-        }));
+        });
+        let context = TablePath::build_context(&obj).unwrap();
+        let rendered = duration_column.render(&obj, &context);
 
         assert!(rendered.is_some());
     }
@@ -1026,12 +1007,13 @@ mod tests {
                 }
             }
         });
+        let context = TablePath::build_context(&obj).unwrap();
         let render = |name: &str| {
             columns
                 .iter()
                 .find(|column| column.column.source.name == name)
                 .unwrap()
-                .render(&obj)
+                .render(&obj, &context)
         };
 
         assert_eq!(Some(json!("NotReady,SchedulingDisabled")), render("Status"));

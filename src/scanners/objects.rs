@@ -15,13 +15,14 @@ use tracing::instrument;
 
 use std::{fmt::Debug, sync::Arc};
 
-use super::interface::{Collect, CollectError, ResourceThreadSafe};
+use super::interface::{Collect, CollectError, Extension, ResourceThreadSafe};
 
 #[derive(Clone)]
 pub struct Objects<R: Resource> {
     pub api: Api<R>,
     pub filter: Arc<dyn Filter<R>>,
     pub resource: ApiResource,
+    pub extension: Extension,
     secrets: Secrets,
     writer: Arc<Mutex<Writer>>,
 }
@@ -43,6 +44,7 @@ where
         Self {
             api: Api::all_with(config.client, &resource),
             filter: config.filter,
+            extension: config.extension,
             writer: config.writer,
             secrets: config.secrets,
             resource,
@@ -62,6 +64,7 @@ where
             filter: config.filter,
             writer: config.writer,
             secrets: config.secrets,
+            extension: config.extension,
             resource: ApiResource::erase::<R>(&Default::default()),
         }
     }
@@ -78,11 +81,15 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
         self.writer.clone()
     }
 
+    fn extension(&self) -> Extension {
+        self.extension
+    }
+
     #[instrument(skip_all, fields(kind = self.resource().to_type_meta().kind, apiVersion = self.resource().to_type_meta().api_version), err)]
     fn filter(&self, obj: &R) -> Result<bool, CollectError> {
         Ok(self.filter.filter(
             &GroupVersionKind::try_from(self.resource().to_type_meta())
-                .map_err(CollectError::GroupVersion)?,
+                .map_err(|e| CollectError::GroupVersion { source: e })?,
             obj,
         ))
     }
@@ -104,6 +111,7 @@ impl<R: ResourceThreadSafe> Collect<R> for Objects<R> {
 
 #[cfg(test)]
 mod test {
+    use crate::scanners::interface::Extension;
     use backon::{ConstantBuilder, Retryable};
 
     use k8s_openapi::{
@@ -195,6 +203,7 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
+                extension: Extension::Json,
             },
             ApiResource::erase::<Pod>(&()),
         )
@@ -240,11 +249,12 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
+                extension: Extension::Json,
             },
             ApiResource::erase::<v1::Namespace>(&()),
         );
 
-        let expected = ArchivePath::Cluster("cluster/v1/namespace/test.yaml".into());
+        let expected = ArchivePath::Cluster("cluster/v1/namespace/test.json".into());
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);
@@ -282,11 +292,12 @@ mod test {
                 debug_pod: DebugPod::default(),
                 disable_additional_logs: false,
                 skip_logs_collection: false,
+                extension: Extension::Json,
             },
             ApiResource::erase::<Pod>(&()),
         );
 
-        let expected = ArchivePath::Namespaced("namespaces/default/v1/pod/test.yaml".into());
+        let expected = ArchivePath::Namespaced("namespaces/default/v1/pod/test.json".into());
         let actual = collectable.path(&obj);
 
         assert_eq!(expected, actual);
