@@ -227,6 +227,9 @@ pub struct YamlPath {
 pub struct ManifestConfig {
     #[serde(default)]
     pub compressed: bool,
+    /// True when the collection deadline elapsed before every scanner finished.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 impl From<Writer> for Arc<Mutex<Writer>> {
@@ -236,6 +239,14 @@ impl From<Writer> for Arc<Mutex<Writer>> {
 }
 
 impl Writer {
+    /// Records that the collection deadline cut this archive short. A reader can
+    /// then tell a partial archive from a complete one.
+    pub fn mark_truncated(&mut self) {
+        if let Self::Oci(state) = self {
+            state.config.truncated = true;
+        }
+    }
+
     /// Finish zip archive
     pub fn finish_zip(self) -> anyhow::Result<()> {
         let Self::Zip(_, builder) = self else {
@@ -407,7 +418,10 @@ impl Writer {
             ),
             Encoding::Oci(image_ref) => Self::Oci(OCIState {
                 archive: archive.clone(),
-                config: ManifestConfig { compressed: true },
+                config: ManifestConfig {
+                    compressed: true,
+                    ..Default::default()
+                },
                 client: Client::new(client_config.unwrap_or_default()),
                 image_ref: image_ref.clone().into(),
                 auth: auth.unwrap_or(RegistryAuth::Anonymous),
@@ -430,13 +444,24 @@ impl OCIState {
             OCI_IMAGE_MEDIA_TYPE.to_string(),
             None,
         );
-        let paths = glob::glob(&format!(
+        let pattern = format!(
             "{}/**/*",
             self.archive
                 .path()
                 .to_str()
                 .ok_or(anyhow::anyhow!("archive path is not convertable to string"))?,
-        ))?;
+        );
+
+        // Pushing an empty archive replaces whatever the tag already holds with
+        // nothing. This glob short circuits on the first file, so it stays cheap.
+        if !glob::glob(&pattern)?
+            .filter_map(Result::ok)
+            .any(|path| path.is_file())
+        {
+            anyhow::bail!("collected nothing, refusing to push an empty archive");
+        }
+
+        let paths = glob::glob(&pattern)?;
 
         let resource_paths = Arc::new(Mutex::new(BTreeMap::default()));
         let non_resource_paths: Vec<PathBuf> = stream::iter(paths.into_iter())

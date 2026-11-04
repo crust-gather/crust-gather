@@ -71,10 +71,10 @@ impl Collect<Node> for Info {
             .await?;
 
         let stamp = Utc::now().to_string();
+        // `ArchiveSearch` finds an archive by its `version.yaml`, so write that file
+        // last. An interrupted run then leaves no archive rather than one that is
+        // discoverable but missing the discovery data.
         let reprs = vec![
-            Representation::new()
-                .with_path(ArchivePath::Custom("version.yaml".into()))
-                .with_data(version.as_str()),
             Representation::new()
                 .with_path(ArchivePath::Custom("api.json".into()))
                 .with_data(api_versions.as_str()),
@@ -84,6 +84,9 @@ impl Collect<Node> for Info {
             Representation::new()
                 .with_path(ArchivePath::Custom("collected.timestamp".into()))
                 .with_data(&format!("\"{stamp}\"")),
+            Representation::new()
+                .with_path(ArchivePath::Custom("version.yaml".into()))
+                .with_data(version.as_str()),
         ];
 
         for repr in reprs {

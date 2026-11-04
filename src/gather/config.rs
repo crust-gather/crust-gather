@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use anyhow::{self, bail};
@@ -398,14 +398,28 @@ impl Config {
             .filter_map(|r| r.1.supports_operation(mode).then_some(r.0.into()))
             .flat_map(|group: Group| group.into_collectable(self.clone()));
 
+        let mut deadline = None;
         match self.mode {
             GatherMode::Collect => {
                 tracing::info!("Collecting resources...");
-                timeout(
-                    self.duration.0.into(),
-                    self.iterate_until_completion(collectables),
-                )
-                .await?;
+                let budget: Duration = self.duration.0.into();
+                let started = Instant::now();
+
+                // `crust-gather serve` cannot open an archive without the files the
+                // `Info` scanner writes. Collect them before the timed phase, so a
+                // scanner that never finishes cannot starve them.
+                if let Err(error) = timeout(budget, Info::new(self.clone()).collect_retry()).await {
+                    tracing::warn!("Deadline reached while writing archive metadata");
+                    deadline = Some(error);
+                }
+
+                let remaining = budget.saturating_sub(started.elapsed());
+                if let Err(error) =
+                    timeout(remaining, self.iterate_until_completion(collectables)).await
+                {
+                    tracing::warn!("Deadline reached. Writing the partial archive.");
+                    deadline = Some(error);
+                }
             }
             GatherMode::Record => {
                 tracing::info!("Recording resources...");
@@ -413,7 +427,21 @@ impl Config {
             }
         }
 
-        self.finish().await
+        if deadline.is_some() {
+            self.writer.lock().await.mark_truncated();
+        }
+
+        let finished = self.finish().await;
+
+        // The deadline is the more useful error, so it outranks a failure to write.
+        if let Some(error) = deadline {
+            if let Err(error) = finished {
+                tracing::error!(%error, "Failed to write the archive");
+            }
+            return Err(error.into());
+        }
+
+        finished
     }
 
     async fn finish(&self) -> anyhow::Result<()> {
@@ -473,7 +501,6 @@ impl Group {
         match gather.mode {
             GatherMode::Collect => match self {
                 Self::Nodes(resource) => vec![
-                    Collectable::Info(Info::new(gather.clone())),
                     Collectable::Dynamic(Dynamic::new(gather.clone(), resource)),
                     Collectable::HostLogs(HostLogs::from(gather)),
                 ],
@@ -510,6 +537,8 @@ mod tests {
     };
 
     use crate::filters::namespace::Namespace;
+    use kube::api::PostParams;
+    use std::io::Read;
 
     use super::*;
 
@@ -684,5 +713,184 @@ mod tests {
 
         let result = config.collect().await;
         assert!(result.is_ok());
+    }
+
+    /// The `Info` scanner writes these four files. `crust-gather serve` needs them
+    /// to rebuild discovery, so an archive without them cannot be opened.
+    const METADATA_FILES: [&str; 4] = [
+        "version.yaml",
+        "api.json",
+        "apis.json",
+        "collected.timestamp",
+    ];
+
+    /// The test control plane runs no kubelet, so a debug pod on this node never
+    /// turns ready. The `HostLogs` scanner waits ten seconds for it and then
+    /// retries without limit, which outlasts the deadlines used below.
+    async fn create_stuck_node(client: Client) {
+        Api::<Node>::all(client)
+            .create(
+                &PostParams::default(),
+                &Node {
+                    metadata: kube::core::ObjectMeta {
+                        name: Some("stuck-host-logs".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the node");
+    }
+
+    /// Gives the `HostLogs` scanner an `exec` to run, which is what wedges it.
+    fn wedged_log() -> Vec<CustomLog> {
+        vec![CustomLog {
+            path: "test.log".into(),
+            command: "cat /test.log".into(),
+        }]
+    }
+
+    async fn timed_collect_config(
+        client: Client,
+        archive: &Path,
+        encoding: &Encoding,
+        duration: &str,
+        additional_logs: Vec<CustomLog>,
+    ) -> Config {
+        Config {
+            client,
+            filter: Arc::new(FilterGroup(vec![FilterList(vec![])])),
+            writer: Writer::new(
+                &Archive::new(archive.to_path_buf()),
+                encoding,
+                None,
+                None,
+                DEFAULT_OCI_BUFFER_SIZE,
+            )
+            .await
+            .expect("failed to create builder")
+            .into(),
+            duration: duration.try_into().unwrap(),
+            mode: GatherMode::Collect,
+            secrets: Secrets::default(),
+            additional_logs,
+            systemd_units: Vec::default(),
+            debug_pod: DebugPod::default(),
+            disable_additional_logs: false,
+            skip_logs_collection: false,
+        }
+    }
+
+    // Cancelling the `HostLogs` scanner runs a `defer!` guard that calls
+    // `block_on`, which needs a second thread to make progress. Production runs a
+    // multi thread runtime, so these tests match it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_collect_timeout_writes_partial_archive() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+        create_stuck_node(client.clone()).await;
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Path, "3s", wedged_log()).await;
+
+        let error = config
+            .collect()
+            .await
+            .expect_err("the collection should hit its deadline");
+        assert!(
+            error.is::<tokio::time::error::Elapsed>(),
+            "expected a deadline error, got {error:?}"
+        );
+
+        for name in METADATA_FILES {
+            assert!(
+                archive.join(name).exists(),
+                "{name} is missing from the partial archive"
+            );
+        }
+
+        let collected = glob::glob(&format!("{}/**/*", archive.display()))
+            .expect("glob the archive")
+            .filter_map(Result::ok)
+            .filter(|path| path.is_file())
+            .count();
+        assert!(
+            collected > METADATA_FILES.len(),
+            "expected resources alongside the metadata, found {collected} files"
+        );
+    }
+
+    /// A deadline now runs `finish()`, which calls `finish_gzip()` to write the tar
+    /// trailer. Reading the stream to its end proves the archive was closed rather
+    /// than left mid write.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_gzip_stream_is_complete_after_a_deadline() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+        create_stuck_node(client.clone()).await;
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Gzip, "3s", wedged_log()).await;
+
+        config
+            .collect()
+            .await
+            .expect_err("the collection should hit its deadline");
+
+        // Dropping the writer flushes the gzip trailer, which `finish_gzip()` leaves
+        // to the encoder.
+        drop(config);
+
+        let file = File::open(archive.with_extension("tar.gz")).expect("open the archive");
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(file)
+            .read_to_end(&mut decoded)
+            .expect("the gzip stream should decode to its end");
+
+        for name in METADATA_FILES {
+            assert!(
+                decoded
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes()),
+                "{name} is missing from the archive"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_collect_writes_metadata_when_it_completes() {
+        let test_env = envtest::Environment::default()
+            .create()
+            .await
+            .expect("cluster");
+        let client = test_env.client().expect("client");
+
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let archive = tmp_dir.path().join("crust-gather-test");
+        let config =
+            timed_collect_config(client, &archive, &Encoding::Path, "1m", Vec::default()).await;
+
+        config
+            .collect()
+            .await
+            .expect("the collection should finish");
+
+        for name in METADATA_FILES {
+            assert!(
+                archive.join(name).exists(),
+                "{name} is missing from the archive"
+            );
+        }
     }
 }
