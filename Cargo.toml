@@ -42,7 +42,7 @@ tempfile = "3.27.0"
 backon = "1.6.0"
 indicatif = "0.18.6"
 pin-project = "1.1.13"
-cel = { version = "0.13", features = ["json"] }
+cel = { version = "0.15", features = ["json"] }
 kube-cel = { version = "0.8.0", features = ["strings", "lists", "format"] }
 unselector = "0.3.0"
 derive_more = { version = "2.1.1", features = ["deref", "eq", "from_str"] }
