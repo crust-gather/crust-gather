@@ -297,8 +297,8 @@ impl CrustGatherMcp {
         let duration = parse_duration(request.duration)?;
         let redaction = prepare_redaction(request.redaction)?;
         let mut registry = request.registry_auth.unwrap_or_default();
-        registry.reference = Some(image_reference.clone());
-        let image_reference_value: Reference = image_reference.clone().into();
+        registry.references = vec![image_reference.clone()];
+        let image_reference_value: Reference = image_reference.into();
 
         let settings = GatherSettings {
             kubeconfig: resolve_kubeconfig(kubeconfig.clone(), context.clone())?,
@@ -396,8 +396,8 @@ impl CrustGatherMcp {
             normalize_optional_string(request.socket)?.unwrap_or_else(|| "0.0.0.0:9095".into());
         let socket_value = parse_socket(&socket)?;
         let mut registry = request.registry_auth.unwrap_or_default();
-        registry.reference = Some(image_reference.clone());
-        let image_reference_value: Reference = image_reference.clone().into();
+        registry.references = vec![image_reference.clone()];
+        let image_reference_value: Reference = image_reference.into();
         let temp_kubeconfig =
             NamedTempFile::new().whatever_context("failed to create temp kubeconfig")?;
         let client_kubeconfig = temp_kubeconfig.path().display().to_string();

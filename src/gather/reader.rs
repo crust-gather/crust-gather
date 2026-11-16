@@ -647,6 +647,7 @@ impl NamespacedName for &NamedObject {
 pub struct ArchiveReader {
     archive: Arc<Archive>,
     named_resources: Arc<NamedResources>,
+    storage: Arc<Storage>,
     buffer_size: usize,
 }
 
@@ -657,7 +658,7 @@ impl ArchiveReader {
         buffer_size: usize,
         served_crs_only: bool,
     ) -> Self {
-        let state = NamedResourcesState::new(archive.clone(), storage, served_crs_only);
+        let state = NamedResourcesState::new(archive.clone(), storage.clone(), served_crs_only);
         let mut named_resources = NamedResources::default();
 
         match state
@@ -683,8 +684,14 @@ impl ArchiveReader {
         Self {
             archive,
             named_resources: Arc::new(named_resources),
+            storage,
             buffer_size: buffer_size.max(1),
         }
+    }
+
+    #[must_use]
+    pub fn storage(&self) -> Arc<Storage> {
+        self.storage.clone()
     }
 
     #[must_use]
@@ -762,11 +769,8 @@ impl Eq for Reader {}
 
 impl Reader {
     #[instrument(skip_all, err)]
-    pub async fn new(
-        archive: ArchiveReader,
-        beginning: DateTime<Utc>,
-        storage: Arc<Storage>,
-    ) -> Result<Self, Whatever> {
+    pub async fn new(archive: ArchiveReader, beginning: DateTime<Utc>) -> Result<Self, Whatever> {
+        let storage = archive.storage();
         let path = ArchivePath::Custom(PathBuf::from_str("collected.timestamp").unwrap());
         let path = archive.join(path);
         let diff = match storage.exist(&path) {

@@ -49,6 +49,18 @@ jobs:
     needs: test
     # By default, runs on Ubuntu, otherwise, override with the desired os
     runs-on: ${{ matrix.platform.os || 'ubuntu-24.04' }}
+    env:
+      # The Linux targets build with distro toolchains (musl-tools / cross gcc)
+      # instead of cargo-cross, whose prebuilt toolchains come from
+      # zijiren233/cross-make — a deleted repo (404) that breaks those legs;
+      # inert for all other targets
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_AR: aarch64-linux-gnu-ar
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     strategy:
       matrix:
         # Set platforms you want to build your binaries on
@@ -93,7 +105,27 @@ jobs:
           targets: ${{ matrix.platform.target }}
           components: rustfmt, clippy
 
-      - name: Build ${{ matrix.platform.name }} binary
+      - name: Install musl toolchain
+        if: ${{ matrix.platform.target == 'x86_64-unknown-linux-musl' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Install aarch64 cross toolchain
+        if: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Build ${{ matrix.platform.name }} binary (cargo)
+        if: ${{ matrix.platform.target == 'x86_64-unknown-linux-musl' || matrix.platform.target == 'aarch64-unknown-linux-gnu' }}
+        run: cargo build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
+
+      - name: Build ${{ matrix.platform.name }} binary (cargo-cross)
+        if: ${{ matrix.platform.target != 'x86_64-unknown-linux-musl' && matrix.platform.target != 'aarch64-unknown-linux-gnu' }}
         run: |
           cargo install cargo-cross
           cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}

@@ -354,7 +354,7 @@ pub struct GatherSettings {
     ///     --encoding=zip
     #[arg(short, long, value_enum)]
     #[serde(default)]
-    #[arg(conflicts_with = "reference")]
+    #[arg(conflicts_with = "references")]
     pub encoding: Option<Encoding>,
 
     /// OCI destination for crust gather collection. Stores cluster state in the provided image reference
@@ -442,10 +442,16 @@ pub struct OCISettings {
     #[serde(default)]
     pub ca_file: Option<Certificate>,
 
-    /// OCI Image reference
-    #[arg(short, long, value_parser = |arg: &str| -> Result<OCIReference> {Ok(arg.try_into()?)})]
+    /// OCI Image reference.
+    ///
+    /// Can be specified multiple times (serve only) to serve multiple archives at once:
+    ///
+    /// Example:
+    ///     --reference=quay.io/user/cluster-a:latest --reference=quay.io/user/cluster-b:latest
+    #[arg(short, long, action = ArgAction::Append,
+        value_parser = |arg: &str| -> Result<OCIReference> {Ok(arg.try_into()?)})]
     #[serde(default)]
-    pub reference: Option<OCIReference>,
+    pub references: Vec<OCIReference>,
 
     /// Maximum number of OCI layers processed concurrently
     #[arg(short, long, value_parser = |arg: &str| -> Result<usize> {
@@ -554,7 +560,11 @@ impl OCISettings {
             regular: self.regular.clone().or(other.regular),
             insecure: self.insecure || other.insecure,
             ca_file: self.ca_file.clone().or(other.ca_file),
-            reference: self.reference.clone().or(other.reference),
+            references: if self.references.is_empty() {
+                other.references
+            } else {
+                self.references.clone()
+            },
             buffer_size: if self.buffer_size == DEFAULT_OCI_BUFFER_SIZE {
                 other.buffer_size
             } else {
@@ -648,29 +658,27 @@ impl GatherSettings {
     }
 
     pub async fn to_writer(&self) -> Result<Writer> {
-        let encoding = if let Some(reference) = self.oci.reference.as_ref() {
-            &Encoding::Oci(reference.clone().into())
-        } else if let Some(encoding) = self.encoding.as_ref() {
-            encoding
-        } else {
-            &Encoding::Path
-        };
+        snafu::ensure_whatever!(
+            self.oci.references.len() <= 1,
+            "collect/record supports a single OCI reference, found {}",
+            self.oci.references.len()
+        );
 
-        let client_config = if self.oci.reference.as_ref().is_some() {
-            Some(self.oci.to_client_config())
+        let (encoding, client_config, auth) = if let Some(reference) = self.oci.references.first() {
+            (
+                Encoding::Oci(reference.clone().into()),
+                Some(self.oci.to_client_config()),
+                Some(self.oci.to_auth()),
+            )
+        } else if let Some(encoding) = self.encoding.clone() {
+            (encoding, None, None)
         } else {
-            None
-        };
-
-        let auth = if self.oci.reference.as_ref().is_some() {
-            Some(self.oci.to_auth())
-        } else {
-            None
+            (Encoding::Path, None, None)
         };
 
         Writer::new(
-            &self.file.clone().unwrap_or_default(),
-            encoding,
+            self.file.as_ref().unwrap_or(&Default::default()),
+            &encoding,
             client_config,
             auth,
             self.oci.buffer_size,
