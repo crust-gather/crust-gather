@@ -49,6 +49,15 @@ jobs:
     needs: test
     # By default, runs on Ubuntu, otherwise, override with the desired os
     runs-on: ${{ matrix.platform.os || 'ubuntu-24.04' }}
+    env:
+      # The aarch64 GNU target builds with the distro cross toolchain instead of
+      # cargo-cross, whose prebuilt cross-gcc comes from zijiren233/cross-make —
+      # a deleted repo (404) that breaks that one leg; inert for all other targets
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_AR: aarch64-linux-gnu-ar
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     strategy:
       matrix:
         # Set platforms you want to build your binaries on
@@ -93,10 +102,23 @@ jobs:
           targets: ${{ matrix.platform.target }}
           components: rustfmt, clippy
 
+      - name: Install aarch64 cross toolchain
+        if: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
       - name: Build ${{ matrix.platform.name }} binary
         run: |
-          cargo install cargo-cross
-          cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
+          if [ "${{ matrix.platform.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cargo build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
+          else
+            cargo install cargo-cross
+            cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
+          fi
 
       - name: Store artifact
         uses: actions/upload-artifact@v7
