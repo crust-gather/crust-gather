@@ -1,6 +1,7 @@
+use std::collections::{HashMap, HashSet};
 use std::{
-    collections::HashMap, fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf,
-    str::FromStr, sync::Arc, time::Duration,
+    fmt::Display, fs::File, net::SocketAddr, ops::Deref, path::PathBuf, str::FromStr, sync::Arc,
+    time::Duration,
 };
 
 use actix_web::{
@@ -96,7 +97,7 @@ pub struct Server {
     ///     --archive=./artifacts
     #[arg(short, long, value_name = "PATH", default_value_t = Default::default())]
     #[serde(default)]
-    #[arg(conflicts_with = "reference")]
+    #[arg(conflicts_with = "references")]
     archive: ArchiveSearch,
 
     /// OCI source for crust gather archive serving. Reads cluster state directly from the provided image reference
@@ -126,23 +127,13 @@ pub struct Server {
 
 impl Server {
     pub async fn get_api(&self) -> Result<Api, Whatever> {
-        let archives: Vec<_> = self.archive.clone().into();
-        if self.oci.reference.is_some() {
-            Api::new_oci(
-                self.oci.clone(),
-                self.socket.clone(),
-                self.kubeconfig.clone(),
-                self.served_crs_only,
-            )
-            .await
+        let socket = self.socket.clone();
+        let kubeconfig = self.kubeconfig.clone();
+        if self.oci.references.is_empty() {
+            let archives: Vec<_> = self.archive.clone().into();
+            Api::new(archives, socket, kubeconfig, self.served_crs_only).await
         } else {
-            Api::new(
-                archives,
-                self.socket.clone(),
-                self.kubeconfig.clone(),
-                self.served_crs_only,
-            )
-            .await
+            Api::new_oci(self.oci.clone(), socket, kubeconfig, self.served_crs_only).await
         }
     }
 }
@@ -158,12 +149,11 @@ struct ApiState {
     kubeconfig_path: PathBuf,
     previous_context: Option<String>,
     serve_time: DateTime<Utc>,
-    storage: Arc<Storage>,
 }
 
 impl ApiState {
     pub async fn to_reader(&self, archive: ArchiveReader) -> Result<Reader, Whatever> {
-        Reader::new(archive, self.serve_time, self.storage.clone())
+        Reader::new(archive, self.serve_time)
             .await
             .whatever_context("failed to open storage reader")
     }
@@ -178,36 +168,13 @@ impl Api {
     ) -> Result<Self, Whatever> {
         let Socket(socket) = socket;
 
-        let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
-            std::env::var("KUBECONFIG").unwrap_or(format!(
-                "{}/.kube/config",
-                std::env::var("HOME").whatever_context("failed to read HOME env var")?
-            )),
-        ));
-
-        let mut config = match File::open(&kubeconfig_path) {
-            Ok(file) => {
-                serde_saphyr::from_reader(file).whatever_context("failed to read kubeconfig")?
-            }
-            _ => Kubeconfig::default(),
-        };
-
-        let previous_context = config.current_context;
-        config.current_context = None;
-
-        let config = archives
+        let names = archives
             .clone()
             .into_iter()
-            .map(|a| Self::prepare_kubeconfig(a.name().to_string_lossy().to_string(), socket))
-            .try_fold(config, Kubeconfig::merge)
-            .whatever_context("failed to merge kubeconfig")?;
+            .map(|a| a.name().to_string_lossy().to_string());
 
-        serde_saphyr::to_io_writer(
-            &mut File::create(&kubeconfig_path)
-                .whatever_context("failed to create kubeconfig file")?,
-            &config,
-        )
-        .whatever_context("failed to write kubeconfig")?;
+        let (kubeconfig_path, previous_context) =
+            Self::setup_kubeconfig(socket, kubeconfig, names)?;
 
         let mut readers = HashMap::new();
         for archive in archives {
@@ -229,7 +196,6 @@ impl Api {
                 kubeconfig_path,
                 previous_context,
                 serve_time: Utc::now(),
-                storage: Arc::new(Storage::FS),
             },
             socket,
         })
@@ -241,79 +207,68 @@ impl Api {
         kubeconfig: Option<PathBuf>,
         served_crs_only: bool,
     ) -> Result<Self, Whatever> {
-        let Some(reference) = &oci.reference else {
-            whatever!("missing reference");
-        };
+        let references: Vec<Reference> = oci.references.iter().cloned().map(Into::into).collect();
+        ensure_whatever!(!references.is_empty(), "missing reference");
 
-        let reference: Reference = reference.clone().into();
-
+        // A single auth set applies to every reference, so all of them must
+        // resolve to the same registry; fail fast instead of a 401 mid-pull.
+        // Each reference is also served under its own `/{repository}` server,
+        // so the same repository cannot be served twice (e.g. two tags of one repo).
+        let mut registries = HashSet::new();
+        let mut repositories = HashSet::new();
+        for reference in &references {
+            ensure_whatever!(
+                registries.insert(reference.registry().to_string()),
+                "all references must use the same registry: {reference}"
+            );
+            ensure_whatever!(
+                repositories.insert(reference.repository().to_string()),
+                "duplicate repository in references: {reference}"
+            );
+        }
         let Socket(socket) = socket;
 
-        let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
-            std::env::var("KUBECONFIG").unwrap_or(format!(
-                "{}/.kube/config",
-                std::env::var("HOME").whatever_context("failed to read HOME env var")?
-            )),
-        ));
-
-        let mut config = match File::open(&kubeconfig_path) {
-            Result::Ok(file) => {
-                serde_saphyr::from_reader(file).whatever_context("failed to read kubeconfig")?
-            }
-            _ => Kubeconfig::default(),
-        };
-
-        let previous_context = config.current_context;
-        config.current_context = None;
-
-        let config = config
-            .merge(Self::prepare_kubeconfig(
-                reference.repository().to_string(),
-                socket,
-            ))
-            .whatever_context("failed to merge kubeconfig")?;
-
-        serde_saphyr::to_io_writer(
-            &mut File::create(&kubeconfig_path)
-                .whatever_context("failed to create kubeconfig file")?,
-            &config,
-        )
-        .whatever_context("failed to write kubeconfig")?;
+        let (kubeconfig_path, previous_context) = Self::setup_kubeconfig(
+            socket,
+            kubeconfig,
+            references.iter().map(|r| r.repository().to_string()),
+        )?;
 
         let client = Client::new(oci.to_client_config());
         let auth = oci.to_auth();
-        let (manifest, _) = client
-            .pull_image_manifest(&reference, &auth)
-            .await
-            .whatever_context("failed to pull image manifest")?;
-        let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true)
-            .await
-            .whatever_context("failed to pull blob cache")?;
-        let config: ManifestConfig = serde_json::from_slice(&config)
-            .whatever_context("failed to deserialize manifest config")?;
-        let index =
-            Arc::new(Self::collect_index(&client, &reference, &auth, manifest, &config).await?);
+        let archive = Arc::new(Archive::new(ArchiveSearch::default().path()));
 
-        let storage = Arc::new(Storage::new(Some(OCIState {
-            reference: reference.clone(),
-            client,
-            config,
-            index,
-            auth,
-        })));
-
-        let search = ArchiveSearch::default();
         let mut archives = HashMap::new();
-        archives.insert(
-            Self::convert_name(reference.repository().to_string()),
-            ArchiveReader::new(
-                Arc::new(Archive::new(search.path())),
-                storage.clone(),
-                oci.buffer_size,
-                served_crs_only,
-            )
-            .await,
-        );
+        for reference in references {
+            let name = Self::convert_name(reference.repository().to_string());
+            let (manifest, _) = client
+                .pull_image_manifest(&reference, &auth)
+                .await
+                .whatever_context(format!("failed to pull image manifest for {reference}"))?;
+            let config = pull_blob_cached(&client, &reference, &auth, &manifest.config, true)
+                .await
+                .whatever_context("failed to pull blob cache")?;
+            let config: ManifestConfig = serde_json::from_slice(&config)
+                .whatever_context("failed to deserialize manifest config")?;
+            let index =
+                Arc::new(Self::collect_index(&client, &reference, &auth, manifest, &config).await?);
+
+            // Each archive carries its own storage (own reference/config/index),
+            // so readers of different archives never mix up their manifests.
+            let storage = Arc::new(Storage::new(Some(OCIState {
+                reference,
+                client: client.clone(),
+                config,
+                index,
+                auth: auth.clone(),
+            })));
+
+            archives.insert(
+                name,
+                ArchiveReader::new(archive.clone(), storage, oci.buffer_size, served_crs_only)
+                    .await,
+            );
+        }
 
         Ok(Self {
             state: ApiState {
@@ -321,7 +276,6 @@ impl Api {
                 kubeconfig_path,
                 previous_context,
                 serve_time: Utc::now(),
-                storage: storage.clone(),
             },
             socket,
         })
@@ -406,6 +360,47 @@ impl Api {
             }],
             ..Default::default()
         }
+    }
+
+    /// Resolves the kubeconfig file, merges one serving context per name into it
+    /// and writes the result back. Returns the file path and the previous current
+    /// context.
+    fn setup_kubeconfig(
+        socket: SocketAddr,
+        kubeconfig: Option<PathBuf>,
+        names: impl IntoIterator<Item = String>,
+    ) -> Result<(PathBuf, Option<String>), Whatever> {
+        let kubeconfig_path = kubeconfig.unwrap_or(std::path::PathBuf::from(
+            std::env::var("KUBECONFIG").unwrap_or(format!(
+                "{}/.kube/config",
+                std::env::var("HOME").whatever_context("failed to read HOME env var")?
+            )),
+        ));
+
+        let mut config = match File::open(&kubeconfig_path) {
+            Ok(file) => {
+                serde_saphyr::from_reader(file).whatever_context("failed to read kubeconfig")?
+            }
+            _ => Kubeconfig::default(),
+        };
+
+        let previous_context = config.current_context;
+        config.current_context = None;
+
+        let config = names
+            .into_iter()
+            .map(|name| Self::prepare_kubeconfig(name, socket))
+            .try_fold(config, Kubeconfig::merge)
+            .whatever_context("failed to merge kubeconfig")?;
+
+        serde_saphyr::to_io_writer(
+            &mut File::create(&kubeconfig_path)
+                .whatever_context("failed to create kubeconfig file")?,
+            &config,
+        )
+        .whatever_context("failed to write kubeconfig")?;
+
+        Ok((kubeconfig_path, previous_context))
     }
 
     fn clean_kubeconfig(state: ApiState) -> Result<(), Whatever> {

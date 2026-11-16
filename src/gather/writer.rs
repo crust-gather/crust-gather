@@ -376,7 +376,6 @@ impl Writer {
                     )
                     .await,
                     Utc::now(),
-                    Arc::new(Storage::FS),
                 )
                 .await?
                 .read(file_path.clone(), ReadState::TableView)
