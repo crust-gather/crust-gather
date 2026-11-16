@@ -111,14 +111,15 @@ jobs:
             g++-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
 
-      - name: Build ${{ matrix.platform.name }} binary
+      - name: Build ${{ matrix.platform.name }} binary (cargo)
+        if: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' }}
+        run: cargo build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
+
+      - name: Build ${{ matrix.platform.name }} binary (cargo-cross)
+        if: ${{ matrix.platform.target != 'aarch64-unknown-linux-gnu' }}
         run: |
-          if [ "${{ matrix.platform.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cargo build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
-          else
-            cargo install cargo-cross
-            cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
-          fi
+          cargo install cargo-cross
+          cargo cross build ${{ env.BUILD_ARGS }} --target ${{ matrix.platform.target }}
 
       - name: Store artifact
         uses: actions/upload-artifact@v7
