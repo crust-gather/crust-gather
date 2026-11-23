@@ -448,7 +448,7 @@ pub struct OCISettings {
     ///
     /// Example:
     ///     --reference=quay.io/user/cluster-a:latest --reference=quay.io/user/cluster-b:latest
-    #[arg(short, long, action = ArgAction::Append,
+    #[arg(short, long = "reference", action = ArgAction::Append,
         value_parser = |arg: &str| -> Result<OCIReference> {Ok(arg.try_into()?)})]
     #[serde(default)]
     pub references: Vec<OCIReference>,
